@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Ai Lubricant 智能开发平台：一个平台串起 AI 全套生态——模型中转、Agent、编辑器接入、代码 review、内网穿透、浏览器控制、手机控制、邮件与安全把控。">
+  <title>Ai Lubricant 智能开发平台 · 产品文档</title>
+  <link rel="stylesheet" href="assets/docs.css?v=20260831-3"><script src="assets/docs.js?v=20260831-3" defer></script>
+</head>
+<body>
+<button class="nav-toggle" id="nav-toggle" aria-expanded="false">☰ 打开文档导航</button>
+<div class="wrap">
+  <aside class="sidebar">
+  <div class="brand"><span class="dot">A</span> Ai Lubricant</div>
+  <div class="nav-group">产品</div><nav>
+    <a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a>
+  </nav>
+  <div class="nav-group">能力详解</div><nav>
+    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
+  </nav>
+  <div class="nav-group">操作手册</div><nav>
+    <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
+  </nav>
+  <div class="nav-group">部署与接入</div><nav>
+    <a href="users-api.html"><span class="ic">↔</span>API 接入</a><a href="governance.html"><span class="ic">◈</span>安全与治理</a><a href="deploy.html"><span class="ic">⇩</span>生产部署</a><a href="desktop.html"><span class="ic">▭</span>Windows 桌面版</a><a href="architecture.html"><span class="ic">⚖</span>技术白皮书</a><a href="env-vars.html"><span class="ic">⊧</span>环境变量</a><a href="local-debug.html"><span class="ic">⚙</span>本地调试</a>
+  </nav>
+</aside>
+    <main class="main">
+      <div class="topbar"><button id="theme-toggle" type="button">☾ 深色</button><button id="print-page" type="button">⎙ 打印</button></div>
+      <article class="content home-content">
+        <header class="product-hero">
+          <span class="eyebrow">Ai Lubricant 智能开发平台</span>
+          <h1>一个平台，<br>串起 AI 的全套生态</h1>
+          <p class="claim">模型中转、Agent、<strong>编辑器接入</strong>、<strong>代码 review</strong>、远程节点、<strong>内网穿透</strong>、<strong>浏览器控制</strong>、<strong>手机控制</strong>、<strong>手机客户端</strong>、<strong>邮件</strong>与<strong>安全把控</strong>——全部内置、互相咬合、统一治理。不是工具拼盘，是一套能直接跑生产的完整生态。</p>
+          <div class="cta-row">
+            <a class="cta primary" href="deploy.html">开始部署</a>
+            <a class="cta" href="users-api.html">API 接入</a>
+            <a class="cta" href="solutions.html">场景方案</a>
+            <a class="cta" href="cap-llm-server.html">大模型网关</a>
+          </div>
+        </header>
+
+        <h2 id="quickstart">三步跑起来</h2>
+        <p>生产部署一条命令（Docker Compose 自带 PostgreSQL/Redis）。本地源码开发请走 <a href="local-debug.html">本地调试</a>。</p>
+        <div class="chain">
+          <div class="chain-step"><span class="num">1</span><div class="body"><h4>拉代码 + 子模块</h4><p><code>git clone --recurse-submodules https://gitee.com/xiongrun/ai-lubricant.git</code><br>五个子模块随克隆一并拉取。</p></div></div>
+          <div class="chain-step"><span class="num">2</span><div class="body"><h4>配 .env</h4><p><code>cp .env.example .env</code>，必改：<code>POSTGRES_PASSWORD</code>、<code>AI_LUBRICANT_COMPAT_ENABLED=true</code>、<code>AI_LUBRICANT_BOOTSTRAP_ADMIN_EMAIL</code> / <code>_PASSWORD</code>。</p></div></div>
+          <div class="chain-step"><span class="num">3</span><div class="body"><h4>docker compose up</h4><p><code>docker compose up -d --build</code>，访问 <code>http://127.0.0.1:3006</code>，管理端 <code>/manager</code>，用户门户 <code>/console</code>。</p></div></div>
+        </div>
+        <p><a href="deploy.html">完整部署步骤 →</a> · <a href="local-debug.html">本地源码调试 →</a> · <a href="env-vars.html">环境变量清单 →</a></p>
+
+        <h2 id="capabilities">能力中心：九大集成，一页看清</h2>
+        <div class="table-wrap"><table>
+        <thead><tr><th>能力</th><th>核心功能</th><th>解决的问题</th><th>详解</th></tr></thead>
+        <tbody>
+        <tr><td><strong>大模型网关</strong></td><td>免费模型监控与模型列表自动更新；多协议链路；渠道标签；多种冻结；六种选路策略；8 种速率限制；灵活测试配置与上游拒绝判断；自定义代码渠道</td><td>免费模型变动难跟踪、渠道难分组、冻结和限流不耐用、非标上游接不进来、测试无法模拟真实场景</td><td><a href="cap-llm-server.html">查看 →</a></td></tr>
+        <tr><td><strong>Agent</strong></td><td>主/子 Agent 派发；定时任务；终端、浏览器、网页内、邮箱四种载体；记忆增强；资源显式授权</td><td>Agent 只能被动对话，无法定时跑批；工具散落、上下文不持续、跨任务从零开始</td><td><a href="cap-agent.html">查看 →</a></td></tr>
+        <tr><td><strong>连接编辑器</strong></td><td>Claude Code / Codex / OpenCode / Cursor CLI / Gemini CLI 接入；多环境选择（分支模式）；<strong>代码 review</strong>（PR 自动审查）；多 task 隔离；Git identity</td><td>Agent 在零散片段上工作、执行环境不持续、PR 没人审</td><td><a href="cap-editor.html">查看 →</a></td></tr>
+        <tr><td><strong>节点</strong></td><td>一键脚本连接 Agent：一个指令装好节点 + agent 运行时；三角色；无需 SSH 主动连接；PTY 终端、host exec、文件、HTTP 代理出口；<strong>Agent 安全控制</strong>；TOTP 封存 + 审批</td><td>接一台机器要手动装依赖、配环境；远程执行要开 SSH、NAT 后够不着</td><td><a href="cap-node.html">查看 →</a></td></tr>
+        <tr><td><strong>手机客户端</strong></td><td>任务/项目跟踪；手机发起任务；语音转写；图片与 zip 附件；APK 下载升级</td><td>出门在外只能把需求记下来等回电脑</td><td><a href="cap-mobile.html">查看 →</a></td></tr>
+        <tr><td><strong>浏览器控制</strong></td><td>把你正在用的真实 Chrome 交给 Agent 与编辑器：MV3 扩展接入；12 个 CDP 工具；网页内 Agent 对话；两类 token 隔离</td><td>无头脚本每次新起临时实例：没登录态、跑完即丢、脚本写死；浏览器和编辑器两套割裂</td><td><a href="cap-browser.html">查看 →</a></td></tr>
+        <tr><td><strong>Android/iOS 控制</strong></td><td>装平台 <strong>APK</strong> 即可控制手机（<strong>不依赖 ADB</strong>）：读屏、点击、输入、滚动、打开应用；iOS 走 node-ios + WDA</td><td>要操作手机 App 就得自接 ADB/WDA、处理保活和凭据</td><td><a href="cap-device-control.html">查看 →</a></td></tr>
+        <tr><td><strong>邮箱</strong></td><td>邮件读取 MCP；按实例隔离只读；真实邮箱与别名标注；正文长度控制；附件默认元数据</td><td>自接 IMAP、维护登录态、大正文撑爆上下文</td><td><a href="cap-mail.html">查看 →</a></td></tr>
+        <tr><td><strong>安全防护</strong></td><td><strong>API Key 保护</strong>（真正失效/子 Key 归并/常量时间比较）；<strong>MCP 保护</strong>（token 绑实例/审批/吊销）；凭据只存哈希；节点 TOTP 与审批；请求级观测</td><td>Token 交出去收不回、子 Key 绕过总额度、工具凭据泄库、节点连上就执行</td><td><a href="cap-security.html">查看 →</a></td></tr>
+        <tr><td><strong>资源中心</strong></td><td>平台已接入 GitHub 著名资源榜单：Skill / MCP / 提示词 / 插件 / 框架集中展示、直接搜索，勾选即用于 Agent、任务、编辑器和代码 Review——告别翻榜单、抄配置、装依赖</td><td>找资源要翻各种 awesome 榜，安装和配置全靠手动，每个项目重复一遍</td><td><a href="cap-resource-center.html">查看 →</a></td></tr>
+        <tr><td><strong>内网穿透</strong></td><td>frp / cloudflared / nps 三类方案；隧道方案管理页统一配置；任务预览端口一键对外</td><td>NAT 后的服务发不出去、临时暴露端口靠手动开防火墙</td><td><a href="guide-node.html">查看 →</a></td></tr>
+        </tbody>
+        </table></div>
+
+        <h2 id="everything">能力图谱</h2>
+          <div class="cap-visual-grid">
+          <div class="cap-graph-column">
+            <div class="cap-orbit" aria-label="Ai Lubricant 能力图：中心连接十大系统集成枢纽，每个枢纽连接它的特色能力">
+              <div class="orbit-stage">
+                <svg class="orbit-links" aria-hidden="true"></svg>
+
+                  <div class="orbit-hub" data-hub="0" data-angle="-90" tabindex="0"><strong>大模型网关</strong></div>
+                  <div class="orbit-hub" data-hub="1" data-angle="-50" tabindex="0"><strong>Agent</strong></div>
+                  <div class="orbit-hub" data-hub="2" data-angle="-10" tabindex="0"><strong>连接编辑器</strong></div>
+                  <div class="orbit-hub" data-hub="3" data-angle="30" tabindex="0"><strong>节点</strong></div>
+                  <div class="orbit-hub" data-hub="4" data-angle="70" tabindex="0"><strong>手机客户端</strong></div>
+                  <div class="orbit-hub" data-hub="5" data-angle="110" tabindex="0"><strong>浏览器控制</strong></div>
+                  <div class="orbit-hub" data-hub="6" data-angle="150" tabindex="0"><strong>Android/iOS 控制</strong></div>
+                  <div class="orbit-hub" data-hub="7" data-angle="190" tabindex="0"><strong>邮箱</strong></div>
+                  <div class="orbit-hub" data-hub="8" data-angle="230" tabindex="0"><strong>安全防护</strong></div>
+                  <div class="orbit-hub" data-hub="9" data-angle="270" tabindex="0"><strong>资源中心</strong></div>
+
+                  <div class="orbit-spoke" data-hub="0" data-i="0"><div class="orbit-node" tabindex="0"><span class="cap-ic">⇄</span><span class="orbit-name">同协议直通不丢字段</span></div></div>
+                  <div class="orbit-spoke" data-hub="0" data-i="1"><div class="orbit-node" tabindex="0"><span class="cap-ic">🎯</span><span class="orbit-name">六种选路策略</span></div></div>
+                  <div class="orbit-spoke" data-hub="0" data-i="2"><div class="orbit-node" tabindex="0"><span class="cap-ic">⌨</span><span class="orbit-name">自定义代码渠道</span></div></div>
+                  <div class="orbit-spoke" data-hub="0" data-i="3"><div class="orbit-node" tabindex="0"><span class="cap-ic">🛡</span><span class="orbit-name">九种冻结模式</span></div></div>
+                  <div class="orbit-spoke" data-hub="0" data-i="4"><div class="orbit-node" tabindex="0"><span class="cap-ic">↻</span><span class="orbit-name">双层限流重试</span></div></div>
+                  <div class="orbit-spoke" data-hub="0" data-i="5"><div class="orbit-node" tabindex="0"><span class="cap-ic">🌐</span><span class="orbit-name">四模式代理含节点出口</span></div></div>
+                  <div class="orbit-spoke" data-hub="0" data-i="6"><div class="orbit-node" tabindex="0"><span class="cap-ic">🆓</span><span class="orbit-name">免费模型监控</span></div></div>
+                  <div class="orbit-spoke" data-hub="0" data-i="7"><div class="orbit-node" tabindex="0"><span class="cap-ic">🔄</span><span class="orbit-name">模型列表自动更新</span></div></div>
+                  <div class="orbit-spoke" data-hub="0" data-i="8"><div class="orbit-node" tabindex="0"><span class="cap-ic">🏷</span><span class="orbit-name">渠道标签管理</span></div></div>
+                  <div class="orbit-spoke" data-hub="0" data-i="9"><div class="orbit-node" tabindex="0"><span class="cap-ic">🧪</span><span class="orbit-name">灵活测试与上游拒绝</span></div></div>
+
+                  <div class="orbit-spoke" data-hub="1" data-i="0"><div class="orbit-node" tabindex="0"><span class="cap-ic">⌘</span><span class="orbit-name">Sub-agent 派发</span></div></div>
+                  <div class="orbit-spoke" data-hub="1" data-i="1"><div class="orbit-node" tabindex="0"><span class="cap-ic">⎙</span><span class="orbit-name">终端 Agent</span></div></div>
+                  <div class="orbit-spoke" data-hub="1" data-i="2"><div class="orbit-node" tabindex="0"><span class="cap-ic">🌐</span><span class="orbit-name">浏览器与网页内 Agent</span></div></div>
+                  <div class="orbit-spoke" data-hub="1" data-i="3"><div class="orbit-node" tabindex="0"><span class="cap-ic">✉</span><span class="orbit-name">邮箱服务 Agent</span></div></div>
+                  <div class="orbit-spoke" data-hub="1" data-i="4"><div class="orbit-node" tabindex="0"><span class="cap-ic">🧠</span><span class="orbit-name">记忆增强</span></div></div>
+                  <div class="orbit-spoke" data-hub="1" data-i="5"><div class="orbit-node" tabindex="0"><span class="cap-ic">⏰</span><span class="orbit-name">定时任务</span></div></div>
+
+                  <div class="orbit-spoke" data-hub="2" data-i="0"><div class="orbit-node" tabindex="0"><span class="cap-ic">▣</span><span class="orbit-name">Claude Code / Codex / Cursor</span></div></div>
+                  <div class="orbit-spoke" data-hub="2" data-i="1"><div class="orbit-node" tabindex="0"><span class="cap-ic">✨</span><span class="orbit-name">多环境选择（分支模式）</span></div></div>
+                  <div class="orbit-spoke" data-hub="2" data-i="2"><div class="orbit-node" tabindex="0"><span class="cap-ic">🔍</span><span class="orbit-name">代码 review（PR 审查）</span></div></div>
+                  <div class="orbit-spoke" data-hub="2" data-i="3"><div class="orbit-node" tabindex="0"><span class="cap-ic">⎙</span><span class="orbit-name">多 task 隔离环境</span></div></div>
+                  <div class="orbit-spoke" data-hub="2" data-i="4"><div class="orbit-node" tabindex="0"><span class="cap-ic">◎</span><span class="orbit-name">项目/任务/Git identity</span></div></div>
+
+                  <div class="orbit-spoke" data-hub="3" data-i="0"><div class="orbit-node" tabindex="0"><span class="cap-ic">◇</span><span class="orbit-name">三种角色</span></div></div>
+                  <div class="orbit-spoke" data-hub="3" data-i="1"><div class="orbit-node" tabindex="0"><span class="cap-ic">🔒</span><span class="orbit-name">无需 SSH 主动连接</span></div></div>
+                  <div class="orbit-spoke" data-hub="3" data-i="2"><div class="orbit-node" tabindex="0"><span class="cap-ic">🛡</span><span class="orbit-name">Agent 安全控制操作</span></div></div>
+                  <div class="orbit-spoke" data-hub="3" data-i="3"><div class="orbit-node" tabindex="0"><span class="cap-ic">⎙</span><span class="orbit-name">PTY / host exec / 文件</span></div></div>
+                  <div class="orbit-spoke" data-hub="3" data-i="4"><div class="orbit-node" tabindex="0"><span class="cap-ic">🌐</span><span class="orbit-name">HTTP 代理出口</span></div></div>
+                  <div class="orbit-spoke" data-hub="3" data-i="5"><div class="orbit-node" tabindex="0"><span class="cap-ic">⚡</span><span class="orbit-name">一键连接 Agent</span></div></div>
+
+                  <div class="orbit-spoke" data-hub="4" data-i="0"><div class="orbit-node" tabindex="0"><span class="cap-ic">✓</span><span class="orbit-name">任务与项目跟踪</span></div></div>
+                  <div class="orbit-spoke" data-hub="4" data-i="1"><div class="orbit-node" tabindex="0"><span class="cap-ic">🎙</span><span class="orbit-name">语音转写</span></div></div>
+                  <div class="orbit-spoke" data-hub="4" data-i="2"><div class="orbit-node" tabindex="0"><span class="cap-ic">📎</span><span class="orbit-name">附件预签名直传</span></div></div>
+                  <div class="orbit-spoke" data-hub="4" data-i="3"><div class="orbit-node" tabindex="0"><span class="cap-ic">⇩</span><span class="orbit-name">下载升级 / EAS 发布</span></div></div>
+
+                  <div class="orbit-spoke" data-hub="5" data-i="0"><div class="orbit-node" tabindex="0"><span class="cap-ic">🧩</span><span class="orbit-name">MV3 扩展接真实 Chrome</span></div></div>
+                  <div class="orbit-spoke" data-hub="5" data-i="1"><div class="orbit-node" tabindex="0"><span class="cap-ic">🛠</span><span class="orbit-name">12 个 CDP 工具</span></div></div>
+                  <div class="orbit-spoke" data-hub="5" data-i="2"><div class="orbit-node" tabindex="0"><span class="cap-ic">💬</span><span class="orbit-name">网页内 Agent 对话</span></div></div>
+                  <div class="orbit-spoke" data-hub="5" data-i="3"><div class="orbit-node" tabindex="0"><span class="cap-ic">🔑</span><span class="orbit-name">两类 token 隔离</span></div></div>
+                  <div class="orbit-spoke" data-hub="5" data-i="4"><div class="orbit-node" tabindex="0"><span class="cap-ic">▭</span><span class="orbit-name">编辑器共用你的 Chrome</span></div></div>
+
+                  <div class="orbit-spoke" data-hub="6" data-i="0"><div class="orbit-node" tabindex="0"><span class="cap-ic">📱</span><span class="orbit-name">装 APK 即控，不依赖 ADB</span></div></div>
+                  <div class="orbit-spoke" data-hub="6" data-i="1"><div class="orbit-node" tabindex="0"><span class="cap-ic">👆</span><span class="orbit-name">15 个操控命令</span></div></div>
+                  <div class="orbit-spoke" data-hub="6" data-i="2"><div class="orbit-node" tabindex="0"><span class="cap-ic">🔌</span><span class="orbit-name">WebSocket v0 协议</span></div></div>
+                  <div class="orbit-spoke" data-hub="6" data-i="3"><div class="orbit-node" tabindex="0"><span class="cap-ic">🍎</span><span class="orbit-name">iOS 走 node-ios + WDA</span></div></div>
+
+                  <div class="orbit-spoke" data-hub="7" data-i="0"><div class="orbit-node" tabindex="0"><span class="cap-ic">📥</span><span class="orbit-name">按实例隔离只读</span></div></div>
+                  <div class="orbit-spoke" data-hub="7" data-i="1"><div class="orbit-node" tabindex="0"><span class="cap-ic">🏷</span><span class="orbit-name">真实邮箱与别名标注</span></div></div>
+                  <div class="orbit-spoke" data-hub="7" data-i="2"><div class="orbit-node" tabindex="0"><span class="cap-ic">📎</span><span class="orbit-name">附件默认元数据</span></div></div>
+
+                  <div class="orbit-spoke" data-hub="8" data-i="0"><div class="orbit-node" tabindex="0"><span class="cap-ic">🔑</span><span class="orbit-name">API Key 保护</span></div></div>
+                  <div class="orbit-spoke" data-hub="8" data-i="1"><div class="orbit-node" tabindex="0"><span class="cap-ic">🧩</span><span class="orbit-name">MCP 保护（token 绑实例）</span></div></div>
+                  <div class="orbit-spoke" data-hub="8" data-i="2"><div class="orbit-node" tabindex="0"><span class="cap-ic">🧬</span><span class="orbit-name">子 Key 归并不越权</span></div></div>
+                  <div class="orbit-spoke" data-hub="8" data-i="3"><div class="orbit-node" tabindex="0"><span class="cap-ic">🔐</span><span class="orbit-name">凭据只存哈希</span></div></div>
+                  <div class="orbit-spoke" data-hub="8" data-i="4"><div class="orbit-node" tabindex="0"><span class="cap-ic">✓</span><span class="orbit-name">节点 TOTP 与审批</span></div></div>
+
+                  <div class="orbit-spoke" data-hub="9" data-i="0"><div class="orbit-node" tabindex="0"><span class="cap-ic">🐙</span><span class="orbit-name">GitHub 著名榜单接入</span></div></div>
+                  <div class="orbit-spoke" data-hub="9" data-i="1"><div class="orbit-node" tabindex="0"><span class="cap-ic">🧩</span><span class="orbit-name">Skill / MCP / 提示词 / 插件</span></div></div>
+                  <div class="orbit-spoke" data-hub="9" data-i="2"><div class="orbit-node" tabindex="0"><span class="cap-ic">↗</span><span class="orbit-name">勾选即用于 Agent / 编辑器</span></div></div>
+                  <div class="orbit-spoke" data-hub="9" data-i="3"><div class="orbit-node" tabindex="0"><span class="cap-ic">🔍</span><span class="orbit-name">集中搜索与说明</span></div></div>
+
+                  <div class="orbit-core"><strong>Ai Lubricant</strong><span>智能开发平台</span></div>
+                </div>
+              </div>
+              <div class="orbit-controls">
+                <span>默认展开各集成的特色能力；点击枢纽可收起</span>
+                <div class="orbit-zoom" role="group" aria-label="能力图缩放">
+                  <button class="orbit-zoom-out" type="button" aria-label="缩小能力图">−</button>
+                  <output class="orbit-scale" aria-live="polite">100%</output>
+                  <button class="orbit-zoom-in" type="button" aria-label="放大能力图">＋</button>
+                </div>
+                <button class="orbit-reset" type="button">复位布局</button>
+              </div>
+              <p class="orbit-legend"><span class="lg lg-core"></span>平台中心 · <span class="lg lg-hub"></span>系统集成枢纽 · <span class="lg lg-leaf"></span>特色能力</p>
+          </div>
+        </div>
+
+        <footer class="footer"><span><a href="local-debug.html">← 上一篇：本地调试</a></span><span><a href="solutions.html">下一篇：场景方案 →</a></span></footer>
+      </article>
+    </main>
+  </div>
+</body>
+</html>

@@ -1,0 +1,259 @@
+# docker-compose.yml — Ai Lubricant 私有化部署编排
+#
+# 五个服务：postgres / redis（数据依赖，持久化到命名卷）、ai-lubricant（数据服务，
+# 含 Agent 运行时）、node-server（节点控制面）、tunnel-server（内网穿透运行时）。
+# ClickHouse 可选（profile: clickhouse）。主服务的 Agent 记忆、附件、SOP、资源镜像、
+# 日志等运行时状态均落在命名卷中，`docker compose down` 保留数据；`down -v` 才删除。
+
+# ---- 复用锚点 ----
+# 日志轮转：默认 json-file 无上限，长跑会撑满磁盘；统一限制单文件 10m、保留 3 个。
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+# 三个 app 服务共享同一镜像（build 一次，image 复用），以及 restart/init/日志/网络。
+x-app-base: &app-base
+  build: .
+  image: ai-lubricant:${TAG:-local}
+  restart: unless-stopped
+  init: true
+  env_file:
+    - .env
+  logging: *logging
+  networks:
+    - ai-lubricant-net
+
+# app 服务共用的 DB/Redis 内网连接（指向 compose 内服务名，覆盖 env.ini/.env 里的默认）。
+x-db-env: &db-env
+  TZ: Asia/Shanghai
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_USER: "${POSTGRES_USER:-ai_lubricant}"
+  POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-ai_lubricant}"
+  POSTGRES_DATABASE: "${POSTGRES_DATABASE:-ai-lubricant}"
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ai-lubricant-postgres
+    restart: unless-stopped
+    logging: *logging
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-ai_lubricant}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-ai_lubricant}
+      - POSTGRES_DB=${POSTGRES_DATABASE:-ai-lubricant}
+      - TZ=Asia/Shanghai
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    ports:
+      # 左侧为 host 端口（仅本机调试用；生产建议从对外映射里去掉）。
+      - "${POSTGRES_PORT:-15432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ai_lubricant} -d ${POSTGRES_DATABASE:-ai-lubricant}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - ai-lubricant-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: ai-lubricant-redis
+    restart: unless-stopped
+    logging: *logging
+    security_opt:
+      - no-new-privileges:true
+    command: ["redis-server", "--maxmemory-policy", "noeviction", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    ports:
+      # 左侧为 host 端口（仅本机调试用；生产建议从对外映射里去掉）。
+      - "${REDIS_PORT:-6479}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - ai-lubricant-net
+
+  # 可选：ClickHouse — ai-lubricant 主链路请求日志改造用（PG 存元数据、大字段 payload 双写到此）。
+  # 与 MonkeyCode 兼容层无关：mc_* 表全在 postgres 里。默认不启动。
+  # 启用：设置 CLICKHOUSE_REQUEST_PAYLOAD_ENABLED=true 后 docker compose --profile clickhouse up -d
+  clickhouse:
+    image: clickhouse/clickhouse-server:24-alpine
+    container_name: ai-lubricant-clickhouse
+    restart: unless-stopped
+    logging: *logging
+    security_opt:
+      - no-new-privileges:true
+    profiles: ["clickhouse"]
+    environment:
+      - CLICKHOUSE_DB=${CLICKHOUSE_DATABASE:-ai_lubricant_logs}
+      - CLICKHOUSE_USER=${CLICKHOUSE_USERNAME:-default}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-}
+      - TZ=Asia/Shanghai
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - ai-lubricant-net
+
+  # 数据服务（含 Agent 运行时）：对外 API、管理接口、Agent 与 MCP runtime。
+  ai-lubricant:
+    <<: *app-base
+    container_name: ai-lubricant
+    ports:
+      - "${AI_LUBRICANT_HOST_PORT:-3006}:8001"
+    environment:
+      <<: *db-env
+      DEBUG: "false"
+      # 主服务调用节点控制面（编辑器工作区、终端、任务下发等 monkeycode_compat 路由都走它）。
+      AGENT_COMPOSE_BASE_URL: http://node-server:8003
+      NODE_CONTROL_TOKEN: "${NODE_CONTROL_TOKEN:-}"
+      # ClickHouse 数据源（可选；未启用时主链路照常运行，仅跳过 payload 双写）。
+      CLICKHOUSE_ADDR: clickhouse:8123
+      CLICKHOUSE_DATABASE: "${CLICKHOUSE_DATABASE:-ai_lubricant_logs}"
+      CLICKHOUSE_USERNAME: "${CLICKHOUSE_USERNAME:-default}"
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-}"
+      CLICKHOUSE_REQUEST_PAYLOAD_ENABLED: "${CLICKHOUSE_REQUEST_PAYLOAD_ENABLED:-false}"
+    volumes:
+      # ---- 运行时持久化（Agent / 附件 / 备份 / 镜像 / 日志）----
+      # Agent 记忆与工作区：data/agents/<id>/{memory,workspace,temp}，以及
+      # data/agent-resources（Skill/插件归档）、data/agent-sops（SOP 正文，管理端可编辑）、
+      # data/generic-agent-memory（legacy 迁移源）。
+      - ai_data:/app/data
+      # 上传附件对象存储（server/attachment_store.py，30 天 TTL + 90 天宽限）。
+      - ai_attachments:/app/agent/attachments
+      # 删除渠道/账号前自动写入的 JSON 备份（server/admin.py）。
+      - ai_deleted_backups:/app/deleted_backups
+      # 管理端触发的资源镜像 tar.gz（节点拉取源，server/resources_api.py）。
+      - ai_resource_mirrors:/app/static/resource_mirrors
+      # 主服务文件日志（loguru 按天轮转、保留 30 天）。
+      - ai_logs:/app/logs
+      # 服务会回写 /app/.env（如自动生成的 AGENT_ATTACHMENT_SIGNING_KEY）；
+      # 挂载宿主文件使其跨容器重建存续。需先 `cp .env.example .env`。
+      - ./.env:/app/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      # 主服务的编辑器/终端/任务路由依赖 node-server，排在它之后启动。
+      node-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8001/mcp/health',timeout=3).status==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      - ai-lubricant-net
+
+  # 独立节点控制面：接收 execution/management 节点的 h2c NodeConnect，并提供
+  # tunnel-server 使用的 Start/Stop/ListActiveToolRuns 控制接口。
+  node-server:
+    <<: *app-base
+    container_name: ai-lubricant-node-server
+    command: ["python", "-m", "node_server"]
+    environment:
+      <<: *db-env
+      NODE_CONTROL_HOST: 0.0.0.0
+      NODE_CONTROL_PORT: "8003"
+      NODE_CONTROL_TOKEN: "${NODE_CONTROL_TOKEN:-}"
+    ports:
+      - "${NODE_CONTROL_PUBLIC_PORT:-8003}:8003"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8003/health',timeout=3).status==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      - ai-lubricant-net
+
+  # 独立 Tunnel Runtime 服务：唯一负责 __main__ 本机穿透子进程 + 数据库 runtime
+  # 对账的进程。主服务只写 desired state + NOTIFY，不启动子进程。与主服务共享
+  # mc_tunnel_* 表与 node_server，但生命周期完全独立。默认只部署一个实例（多副本
+  # 依赖 TunnelRuntime 的 DB 租约避免重复 stop/start）。
+  tunnel-server:
+    <<: *app-base
+    container_name: ai-lubricant-tunnel-server
+    command: ["python", "-m", "tunnel_server"]
+    stop_grace_period: 30s
+    environment:
+      <<: *db-env
+      # 节点穿透经独立 node-server 控制面下发。
+      AGENT_COMPOSE_BASE_URL: http://node-server:8003
+      NODE_CONTROL_TOKEN: "${NODE_CONTROL_TOKEN:-}"
+      TUNNEL_RUNTIME_HOST: 0.0.0.0
+      TUNNEL_RUNTIME_PORT: "8004"
+      TUNNEL_RUNTIME_ENABLED: "${TUNNEL_RUNTIME_ENABLED:-true}"
+      TUNNEL_RUNTIME_NOTIFY_CHANNEL: "${TUNNEL_RUNTIME_NOTIFY_CHANNEL:-tunnel_runtime_changed}"
+      TUNNEL_RUNTIME_RECONCILE_POLL_SECONDS: "${TUNNEL_RUNTIME_RECONCILE_POLL_SECONDS:-30}"
+      TUNNEL_RUNTIME_LEASE_TTL_SECONDS: "${TUNNEL_RUNTIME_LEASE_TTL_SECONDS:-60}"
+      TUNNEL_RUNTIME_INSTANCE_ID: "${TUNNEL_RUNTIME_INSTANCE_ID:-}"
+      # frpc/cloudflared/npc 二进制下载缓存，跨重建复用（monkeycode_compat/tunnel_binaries.py）。
+      MC_TUNNEL_BIN_DIR: /data/mc-tunnel-bins
+    volumes:
+      - ai_tunnel_bins:/data/mc-tunnel-bins
+    expose:
+      - "8004"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      # 隧道的启停都经 AGENT_COMPOSE_BASE_URL 调 node-server，排在它之后启动。
+      node-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8004/ready',timeout=3).status==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      - ai-lubricant-net
+
+networks:
+  ai-lubricant-net:
+    driver: bridge
+
+volumes:
+  pg_data:
+  redis_data:
+  clickhouse_data:
+  # Agent 运行时数据（记忆/工作区/SOP/技能归档）。
+  ai_data:
+  # 附件对象存储。
+  ai_attachments:
+  # 删除前备份。
+  ai_deleted_backups:
+  # 资源镜像 tar.gz。
+  ai_resource_mirrors:
+  # 主服务文件日志。
+  ai_logs:
+  # 隧道客户端二进制缓存（tunnel-server）。
+  ai_tunnel_bins:

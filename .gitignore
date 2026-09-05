@@ -1,0 +1,65 @@
+__pycache__/
+*.pyc
+config.json
+deleted_backups/
+.env
+# Legacy local configuration; runtime configuration uses .env.
+env.ini
+.superpowers/
+.worktrees/
+.omo/
+# node binaries built by nodes/build.sh (commit the source, not the builds)
+nodes/dist/
+# local `go build` outputs at the nodes/ root (build.sh ships from dist/)
+nodes/*.exe
+nodes/node-execution
+nodes/agent-compose-node-management
+nodes/node-ios
+
+# node runtime (moved from agent-compose): commit the source, not the ~2GB of
+# rebuildable artifacts. pack-release.sh runs `npm ci` to reinstall deps.
+nodes/runtime/**/node_modules/
+nodes/runtime/javascript/release/
+nodes/runtime/javascript/coverage/
+nodes/runtime/javascript/dist/
+
+# local scratch / runtime artifacts
+.chrome-tmp/
+.chrome-footer-check/
+_cr_profile/
+logs/
+_real_shot.png
+
+# PyInstaller desktop build output (desktop/build.ps1)
+/build/
+/dist/AiLubricant/
+
+# 代码渠道 spec 源料：粘贴进管理端「源码」Tab 的 CLI 逆向渠道实现。
+# 刻意不进 git、不进镜像——产品只发框架能力，spec 由使用者自行持有与分发。
+specs/
+.claude/
+node_modules/
+archive/
+plans/
+dist/
+
+# 本地 AI 工具 / IDE / 索引产物（可重建，不入库）
+.sisyphus/
+.playwright-mcp/
+.idea/
+.baseline_check/
+.codegraph/
+.opencode/
+
+# 本地脚本工具（个人临时脚本，不入库）；publish_github.sh 是标准发布工具，例外入库
+script/*
+!script/publish_github.sh
+scripts/
+# data/ 全部为本地使用的数据（运行时记忆/技能归档/内置 SOP/市场转换缓存），不入库不上传
+data/
+# 本地虚拟环境与 Cloudflare Pages 本地状态（可重建，不入库）
+.venv/
+.wrangler/
+.claude_ch9.md
+.claude_chapter4.md
+.claude_async_call_scan.py

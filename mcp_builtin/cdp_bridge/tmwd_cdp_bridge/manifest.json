@@ -1,0 +1,67 @@
+{
+  "manifest_version": 3,
+  "name": "Ai Lubricant 浏览器助手",
+  "version": "0.5.0",
+  "description": "Ai Lubricant 智能开发平台的浏览器端：让 Agent 帮你打开网页、点击按钮、填写表单、提取信息，并在任意网页内直接与 Agent 对话。",
+  "permissions": [
+    "tabs",
+    "activeTab",
+    "debugger",
+    "scripting",
+    "alarms",
+    "declarativeNetRequest",
+    "management",
+    "contentSettings",
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png",
+    "256": "icons/icon-256.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "disable_dialogs.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "config.js",
+        "vendor/marked.min.js",
+        "vendor/purify.min.js",
+        "content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "action": {
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png",
+      "256": "icons/icon-256.png"
+    },
+    "default_popup": "popup.html",
+    "default_title": "Ai Lubricant 浏览器助手"
+  }
+}

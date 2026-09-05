@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Windows 桌面版 · Ai Lubricant</title>
+  <link rel="stylesheet" href="assets/docs.css?v=20260831-3"><script src="assets/docs.js?v=20260831-3" defer></script>
+</head>
+<body>
+<button class="nav-toggle" id="nav-toggle" aria-expanded="false">☰ 打开文档导航</button>
+<div class="wrap">
+<aside class="sidebar">
+  <div class="brand"><span class="dot">A</span> Ai Lubricant</div>
+  <div class="nav-group">产品</div><nav>
+    <a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a>
+  </nav>
+  <div class="nav-group">能力详解</div><nav>
+    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
+  </nav>
+  <div class="nav-group">操作手册</div><nav>
+    <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
+  </nav>
+  <div class="nav-group">部署与接入</div><nav>
+    <a href="users-api.html"><span class="ic">↔</span>API 接入</a><a href="governance.html"><span class="ic">◈</span>安全与治理</a><a href="deploy.html"><span class="ic">⇩</span>生产部署</a><a href="desktop.html"><span class="ic">▭</span>Windows 桌面版</a><a href="architecture.html"><span class="ic">⚖</span>技术白皮书</a><a href="env-vars.html"><span class="ic">⊧</span>环境变量</a><a href="local-debug.html"><span class="ic">⚙</span>本地调试</a>
+  </nav>
+</aside>
+<main class="main"><div class="topbar"><button id="theme-toggle" type="button">☾ 深色</button><button id="print-page" type="button">⎙ 打印</button></div>
+<article class="content">
+<header class="hero"><h1>Windows 桌面版</h1><p class="desc">把整套服务端打包成一个 Windows 可执行程序：双击启动，弹出原生窗口直接进管理界面，不需要装 Python、不需要 Docker、不需要 nginx。数据库仍由你自备。</p></header>
+
+<div class="ok"><strong>桌面版不自带数据库</strong>它自带 Python 运行时、全部依赖、前端产物和三个服务进程，但 <strong>PostgreSQL 与 Redis 需要你事先准备好</strong>（本机安装、局域网或远程均可）。首次启动会弹出图形配置向导，填写连接信息并当场测试连通性。ClickHouse 可以不装。</div>
+
+<div class="toc"><strong>本页目录</strong><a href="#what">这是什么</a><a href="#prereq">先准备数据库</a><a href="#install">安装与首次启动</a><a href="#wizard">配置向导</a><a href="#paths">文件与数据位置</a><a href="#processes">内部结构</a><a href="#limits">能力边界</a><a href="#build">自行构建</a><a href="#troubleshoot">故障排查</a></div>
+
+<h2 id="what">1. 这是什么</h2>
+<p>桌面版和 Docker 部署跑的是<strong>同一套服务端代码</strong>，没有裁剪功能、没有分支版本。区别只在外壳：</p>
+<table>
+<thead><tr><th>　</th><th>Docker 部署</th><th>Windows 桌面版</th></tr></thead>
+<tbody>
+<tr><td>启动方式</td><td><code>docker compose up -d</code></td><td>双击 <code>AiLubricant.exe</code></td></tr>
+<tr><td>访问方式</td><td>浏览器打开 <code>:3006</code></td><td>程序自带原生窗口，自动打开管理端</td></tr>
+<tr><td>Python 环境</td><td>容器内</td><td><strong>已内置</strong>，目标机无需安装</td></tr>
+<tr><td>前端静态资源</td><td>nginx 或容器内</td><td><strong>程序内置</strong>，无需 nginx</td></tr>
+<tr><td>PostgreSQL / Redis</td><td>Compose 自动创建</td><td><strong>需自备</strong>，向导中填写连接</td></tr>
+<tr><td>ClickHouse</td><td>可选 profile</td><td>可选，留空即关闭</td></tr>
+</tbody>
+</table>
+<p>适合的场景是<strong>单机自用与本地评估</strong>：想在自己的 Windows 上跑一套模型网关，管理渠道、账号池、API Key 和请求日志，不想碰 Docker 和命令行。生产多用户部署仍推荐 <a href="deploy.html">Docker Compose</a>。</p>
+
+<h2 id="prereq">2. 先准备数据库</h2>
+<p>桌面版启动前必须有可连接的 PostgreSQL 和 Redis。二者都<strong>不是可选项</strong>：PostgreSQL 存放渠道、账号、API Key、模型路由和平台配置，Redis 存放限流计数、并发租约、冻结状态与会话。</p>
+
+<h3 id="prereq-pg">PostgreSQL</h3>
+<p>用官方 Windows 安装包即可（<a href="https://www.postgresql.org/download/windows/">postgresql.org</a>），版本 14 以上。安装时记住端口、用户名和密码，并创建一个空库（例如 <code>ai-lubricant</code>）。</p>
+
+<h3 id="prereq-redis">Redis（注意版本下限）</h3>
+<div class="warn"><strong>Redis 必须 6.0 或更高</strong>平台使用的 Redis 客户端在建立连接时强制发送 <code>HELLO 3</code> 握手，而 <code>HELLO</code> 命令是 Redis 6.0 才引入的，<strong>没有向下兼容路径</strong>。早年的 Windows 移植版停留在 3.x，无法使用。</div>
+<p>Windows 上的三种可行做法：</p>
+<ul>
+  <li><strong>Memurai</strong>——原生 Windows 服务，兼容 Redis 7，Redis 官方文档推荐的 Windows 方案。安装后默认监听 <code>6379</code>，开箱可用。</li>
+  <li><strong>Docker</strong>——已经装了 Docker Desktop 的话最省事：<code>docker run -d -p 6379:6379 redis:7-alpine</code>。也可以直接用仓库里的 <code>docker-compose.yml</code> 同时起 PostgreSQL 和 Redis，桌面版只连它们。</li>
+  <li><strong>WSL2</strong>——在 WSL 里 <code>apt install redis-server</code>，Windows 侧连 <code>127.0.0.1:6379</code>。</li>
+</ul>
+
+<h3 id="prereq-ch">ClickHouse（可选，可以不装）</h3>
+<p>不配置时主链路完全正常，只有两项功能不可用：请求日志详情里的<strong>完整请求/响应原文</strong>，以及 <strong>Agent 与网页聊天的对话历史</strong>。渠道管理、API Key、用量计费、请求日志列表都不依赖它。</p>
+
+<h2 id="install">3. 安装与首次启动</h2>
+<p>桌面版是 <strong>onedir 形态</strong>：一个目录，里面是 <code>AiLubricant.exe</code> 和 <code>_internal\</code> 依赖目录。整个目录一起复制才能运行，单独拷 exe 不行。</p>
+<pre><code>AiLubricant\
+  AiLubricant.exe          &lt;- 双击这个
+  _internal\            &lt;- Python 运行时、依赖、前端产物、服务端源码</code></pre>
+<p>把目录放到任意位置（例如 <code>C:\Program Files\AiLubricant\</code> 或 <code>D:\AiLubricant\</code>），双击 <code>AiLubricant.exe</code>。</p>
+<div class="info"><strong>首次启动会慢几秒</strong>程序要初始化数据库表结构（约 50 张表，全部幂等），并按顺序拉起三个服务进程。窗口出现前请耐心等待，不要重复双击。</div>
+
+<h2 id="wizard">4. 配置向导</h2>
+<p>首次启动，或检测到数据库连不上时，窗口里会显示配置向导，而不是直接报错退出。向导包含三块：</p>
+<ul>
+  <li><strong>PostgreSQL</strong>——主机、端口、用户、密码、库名。点「测试连接」会真实建连并返回服务端版本号。</li>
+  <li><strong>Redis</strong>——主机、端口、库号。测试成功会显示 <code>redis_version</code>，便于确认版本是否满足 6.0 下限。</li>
+  <li><strong>ClickHouse</strong>——留空即关闭。填了会测试连通性。</li>
+</ul>
+<p>两项必需测试都通过后，「保存并启动」按钮才可用。保存会写入用户配置文件（见下一节），随后自动拉起服务并跳转到管理界面。以后启动如果连接仍然有效，就直接进管理界面，不再显示向导。</p>
+<div class="info"><strong>之后想改配置</strong>删除或编辑 <code>%LOCALAPPDATA%\AiLubricant\.env</code>，下次启动会重新走向导。也可以直接改这个文件里的连接字段。</div>
+
+<h2 id="paths">5. 文件与数据位置</h2>
+<p>程序<strong>不往安装目录写任何东西</strong>——安装到 <code>Program Files</code> 时不会遇到权限问题。所有运行期数据都在用户目录下：</p>
+<table>
+<thead><tr><th>路径</th><th>内容</th></tr></thead>
+<tbody>
+<tr><td><code>%LOCALAPPDATA%\AiLubricant\.env</code></td><td>数据库连接、自动生成的节点密钥与控制令牌</td></tr>
+<tr><td><code>%LOCALAPPDATA%\AiLubricant\logs\</code></td><td>三个服务进程各自的日志：<code>main.log</code>、<code>node_server.log</code>、<code>tunnel_server.log</code></td></tr>
+<tr><td><code>%LOCALAPPDATA%\AiLubricant\mc-tunnel-bins\</code></td><td>穿透客户端二进制缓存（frpc / cloudflared / npc，首次使用时联网下载）</td></tr>
+<tr><td><code>%LOCALAPPDATA%\AiLubricant\node-bin\</code></td><td>节点二进制缓存</td></tr>
+</tbody>
+</table>
+<div class="danger"><strong>.env 含凭据</strong>这个文件保存数据库密码、节点凭据主密钥和内部控制令牌。备份或反馈问题时不要整份外发；重装保留它可以避免重新配置，但主密钥丢失会导致已封存的节点凭据无法解密。</div>
+
+<h2 id="processes">6. 内部结构</h2>
+<p>双击 exe 后，程序按<strong>固定顺序</strong>拉起三个服务进程，并用一个原生窗口显示前端：</p>
+<ol>
+  <li><strong>主服务</strong>（<code>127.0.0.1:8001</code>）——对外 API、管理端、用户门户、MCP 运行时。窗口加载的就是它。</li>
+  <li><strong>节点控制服务</strong>（<code>127.0.0.1:8003</code>）——接收节点主动连接。等主服务就绪后才启动。</li>
+  <li><strong>穿透运行时服务</strong>（<code>127.0.0.1:8004</code>）——管理穿透客户端子进程。最后启动。</li>
+</ol>
+<div class="info"><strong>为什么必须串行启动</strong>主服务与穿透服务会各自对同一批穿透表做增量列对账，并发执行有小概率撞车。串行启动彻底规避，代价只是启动多等一两秒。Docker 部署里靠 <code>depends_on</code> + 健康检查达到同样效果。</div>
+<p>三个服务默认<strong>只绑 127.0.0.1</strong>，不监听外网地址，因此不会触发 Windows 防火墙弹窗。关闭窗口时会先请求各进程优雅退出，并由作业对象（Job Object）确保连带回收穿透客户端等孙进程——即使主程序被强制结束也不会留下孤儿进程。</p>
+
+<h2 id="limits">7. 能力边界</h2>
+<p>桌面版功能不打折，但单机运行有几个天然限制，事先知道能省掉排查时间：</p>
+<div class="warn"><strong>远程节点连不进来</strong>节点是<strong>主动连接</strong>控制服务的。桌面机通常在 NAT 后面、没有公网地址，因此<strong>本机与局域网节点可用，公网远程节点无法接入</strong>，除非你自行做端口映射或先配好穿透。这是网络位置决定的，不是功能缺失。</div>
+<ul>
+  <li><strong>穿透客户端需要联网</strong>——frpc / cloudflared / npc 不随程序打包，首次使用时从 GitHub 下载并缓存。离线环境需手动放入缓存目录。</li>
+  <li><strong>单实例</strong>——桌面版按单机单实例设计。同一个数据库不要同时连多个桌面实例，穿透运行时的单写者租约会互相抢占。</li>
+  <li><strong>端口占用</strong>——8001 / 8003 / 8004 被占会启动失败，日志里能看到绑定错误。</li>
+</ul>
+
+<h2 id="build">8. 自行构建</h2>
+<p>在装好开发环境的机器上（Python 3.12 + pnpm）：</p>
+<pre><code>powershell -ExecutionPolicy Bypass -File desktop\build.ps1</code></pre>
+<p>脚本依次做四件事：构建前端产物、选择 Python 解释器、安装打包依赖、执行 PyInstaller。产物在 <code>dist\AiLubricant\</code>。</p>
+<div class="info"><strong>打包配置里有两处必须留意</strong>其一，服务端用字符串路径动态注册数据模型，静态分析发现不了，全部在 <code>AiLubricant.spec</code> 的 <code>hiddenimports</code> 里显式声明；其二，protobuf 运行时会校验版本与生成代码是否匹配，<strong>不匹配直接硬失败</strong>，因此 <code>requirements-desktop.txt</code> 精确锁定了 protobuf 版本，不要放宽成范围。</div>
+
+<h2 id="troubleshoot">9. 故障排查</h2>
+<p>第一件事永远是看日志：<code>%LOCALAPPDATA%\AiLubricant\logs\</code> 下三个文件分别对应三个服务。</p>
+<table>
+<thead><tr><th>现象</th><th>原因与处理</th></tr></thead>
+<tbody>
+<tr><td>双击后窗口一闪而过</td><td>看 <code>logs\main.log</code> 末尾。多为数据库连不上或端口被占。</td></tr>
+<tr><td>向导里 Redis 测试报连接被拒</td><td>Redis 没启动，或端口不对。Memurai 装完确认服务已运行。</td></tr>
+<tr><td>Redis 测试报协议/握手相关错误</td><td>Redis 版本低于 6.0。换 Memurai 或 Docker 版 Redis 7。</td></tr>
+<tr><td>界面空白、样式全丢</td><td>安装目录不完整——<code>_internal\</code> 必须和 exe 同级完整存在。重新解压整个目录。</td></tr>
+<tr><td>节点页面报服务不可用</td><td>节点控制服务没起来，看 <code>logs\node_server.log</code>；主服务本身不受影响。</td></tr>
+<tr><td>穿透状态一直是 pending</td><td>穿透运行时没起来，看 <code>logs\tunnel_server.log</code>；或首次下载客户端二进制失败（需联网）。</td></tr>
+<tr><td>请求日志详情看不到原文 / Agent 对话不可用</td><td>正常现象，未配置 ClickHouse。需要的话在 <code>.env</code> 里补上连接。</td></tr>
+</tbody>
+</table>
+
+<footer class="footer"><span><a href="deploy.html">← 上一篇：生产部署</a></span><span><a href="architecture.html">下一篇：技术白皮书 →</a></span></footer>
+</article></main></div>
+</body></html>

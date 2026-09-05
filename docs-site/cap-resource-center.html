@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Ai Lubricant 资源中心：平台已接入 GitHub 著名资源榜单，Skill、MCP、提示词、插件与框架开箱即用，直接用于 Agent、任务和编辑器。">
+  <title>资源中心 · 能力详解 · Ai Lubricant</title>
+  <link rel="stylesheet" href="assets/docs.css?v=20260831-3"><script src="assets/docs.js?v=20260831-3" defer></script>
+</head>
+<body>
+<button class="nav-toggle" id="nav-toggle" aria-expanded="false">☰ 打开文档导航</button>
+<div class="wrap">
+<aside class="sidebar">
+  <div class="brand"><span class="dot">A</span> Ai Lubricant</div>
+  <div class="nav-group">产品</div><nav><a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a></nav>
+  <div class="nav-group">能力详解</div><nav><a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a></nav>
+  <div class="nav-group">操作手册</div><nav><a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a></nav>
+  <div class="nav-group">部署与接入</div><nav><a href="users-api.html"><span class="ic">↔</span>API 接入</a><a href="governance.html"><span class="ic">◈</span>安全与治理</a><a href="deploy.html"><span class="ic">⇩</span>生产部署</a><a href="desktop.html"><span class="ic">▭</span>Windows 桌面版</a><a href="architecture.html"><span class="ic">⚖</span>技术白皮书</a><a href="env-vars.html"><span class="ic">⊧</span>环境变量</a><a href="local-debug.html"><span class="ic">⚙</span>本地调试</a></nav>
+</aside>
+<main class="main"><div class="topbar"><button id="theme-toggle" type="button">☾ 深色</button><button id="print-page" type="button">⎙ 打印</button></div>
+<article class="content">
+<header class="hero"><h1>资源中心</h1><p class="desc">不用再翻 GitHub 各种 awesome 榜、复制 README、改 JSON、装依赖。平台已经把常用资源接好，你直接搜索、选择并用于 Agent、任务和编辑器。</p></header>
+
+<div class="table-wrap"><table><thead><tr><th>问题</th><th>以前</th><th>使用资源中心</th></tr></thead><tbody>
+<tr><td>发现资源</td><td>在 GitHub、各种 awesome 榜和社群里到处搜</td><td>平台已接入 GitHub 著名资源榜单，常用资源集中展示、直接搜索</td></tr>
+<tr><td>理解用途</td><td>逐个打开仓库读 README</td><td>资源带类型、来源、用途和说明，先看清再选择</td></tr>
+<tr><td>安装配置</td><td>复制配置、改 JSON、手动装依赖</td><td>在资源选择器里勾选，随 Agent、任务或编辑器配置直接使用</td></tr>
+<tr><td>跨场景复用</td><td>每个项目重复找、重复装</td><td>同一个资源可复用到多个 Agent、任务、编辑器和代码 Review</td></tr>
+</tbody></table></div>
+
+<h2 id="types">资源类型</h2>
+<figure class="shot" data-shot="cap-resource-center/types.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">资源类型</span></div><button class="shot-open" type="button" aria-label="放大截图：资源类型"><img src="assets/screenshots/cap-resource-center/types.png" alt="资源类型" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-resource-center/types.png</code></div></div></figure>
+<div class="table-wrap"><table><thead><tr><th>资源</th><th>能做什么</th><th>可用于</th></tr></thead><tbody>
+<tr><td>Skill</td><td>为 Agent / 编辑器增加可复用的操作方法、流程和 SOP</td><td>Agent、任务、编辑器、Review</td></tr>
+<tr><td>MCP</td><td>接入外部工具、数据源和业务系统</td><td>Agent、任务、编辑器</td></tr>
+<tr><td>项目提示词</td><td>统一项目角色、规则、约束、验收和交付格式</td><td>项目、任务、编辑器、Review</td></tr>
+<tr><td>插件</td><td>扩展 Agent 与编辑器运行时能力</td><td>Agent、任务、编辑器</td></tr>
+<tr><td>框架 / 研究资源</td><td>提供代码 Review、分析和交付的方法论参考</td><td>Review、Agent、项目</td></tr>
+<tr><td>渠道模板</td><td>提供现成的 Provider 协议、字段和渠道配置模板</td><td>大模型网关渠道接入</td></tr>
+</tbody></table></div>
+
+<h2 id="usage">怎么用</h2>
+<figure class="shot" data-shot="cap-resource-center/usage.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">怎么用</span></div><button class="shot-open" type="button" aria-label="放大截图：怎么用"><img src="assets/screenshots/cap-resource-center/usage.png" alt="怎么用" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-resource-center/usage.png</code></div></div></figure>
+<ol>
+<li>在创建 Agent、任务、编辑器或代码 Review 时打开资源选择器。</li>
+<li>按资源类型、名称或用途搜索。</li>
+<li>查看资源说明，勾选当前场景需要的 Skill、MCP、提示词或插件。</li>
+<li>保存后资源随当前配置生效；不需要手动编辑 JSON 或启动文件。</li>
+</ol>
+<div class="note"><strong>告别资源焦虑</strong>你不需要研究资源怎么进入平台，也不需要关心后台如何维护。资源中心只负责把已经接好的能力摆在你面前：找到、选中、使用。</div>
+
+<footer class="footer"><span><a href="cap-security.html">← 上一篇：安全防护</a></span><span><a href="guide-developer.html">下一篇：开发者手册 →</a></span></footer>
+</article></main></div>
+</body></html>

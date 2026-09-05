@@ -1,0 +1,13 @@
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: SAMEORIGIN
+
+/assets/docs.css
+  Cache-Control: no-cache, must-revalidate
+
+/assets/docs.js
+  Cache-Control: no-cache, must-revalidate
+
+/assets/screenshots/*
+  Cache-Control: public, max-age=86400

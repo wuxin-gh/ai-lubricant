@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="大模型网关能力详解：同协议直通、客户端模板、多因子选路、九种冻结、双层重试、用量归一与四模式代理。">
+  <title>大模型网关 · 能力详解 · Ai Lubricant</title>
+  <link rel="stylesheet" href="assets/docs.css?v=20260831-3"><script src="assets/docs.js?v=20260831-3" defer></script>
+</head>
+<body>
+<button class="nav-toggle" id="nav-toggle" aria-expanded="false">☰ 打开文档导航</button>
+<div class="wrap">
+<aside class="sidebar">
+  <div class="brand"><span class="dot">A</span> Ai Lubricant</div>
+  <div class="nav-group">产品</div><nav>
+    <a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a>
+  </nav>
+  <div class="nav-group">能力详解</div><nav>
+    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
+  </nav>
+  <div class="nav-group">操作手册</div><nav>
+    <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
+  </nav>
+  <div class="nav-group">部署与接入</div><nav>
+    <a href="users-api.html"><span class="ic">↔</span>API 接入</a><a href="governance.html"><span class="ic">◈</span>安全与治理</a><a href="deploy.html"><span class="ic">⇩</span>生产部署</a><a href="desktop.html"><span class="ic">▭</span>Windows 桌面版</a><a href="architecture.html"><span class="ic">⚖</span>技术白皮书</a><a href="env-vars.html"><span class="ic">⊧</span>环境变量</a><a href="local-debug.html"><span class="ic">⚙</span>本地调试</a>
+  </nav>
+</aside>
+<main class="main"><div class="topbar"><button id="theme-toggle" type="button">☾ 深色</button><button id="print-page" type="button">⎙ 打印</button></div>
+<article class="content">
+<header class="hero"><h1>大模型网关</h1><p class="desc">业务面对的是平台模型名和统一接口，而不是某一个供应商账号。协议适配、渠道选路、账号调度与异常切换由平台完成。</p></header>
+
+<div class="table-wrap"><table>
+<thead><tr><th>问题</th><th>普通中转</th><th>Ai Lubricant 大模型网关</th></tr></thead>
+<tbody>
+<tr><td>协议转换丢字段</td><td>全部归一成内部格式再转出，thinking 签名、缓存标记被丢弃</td><td>同协议直接原样转发（直通），只有跨协议才做字段映射</td></tr>
+<tr><td>故障账号反复试</td><td>轮询/权重随机，故障账号被反复命中</td><td>多因子评分 + 冻结 + 熔断，评分全零直接回退或 429</td></tr>
+<tr><td>限流与重试自己写</td><td>客户端自己处理 429 和退避</td><td>双层限流（Key 级 + 账号级）+ 失败分类重试 + 模型组回退</td></tr>
+<tr><td>usage 口径不一</td><td>直接透传上游自报 total，各家字段名不同</td><td>出口层统一归一：total = prompt + completion 重算，不采信上游</td></tr>
+<tr><td>特定出口/地区 IP</td><td>另购代理服务</td><td>四种代理模式，含用自己节点当出口的 <code>node</code> 模式</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="entry">统一入口</h2>
+<figure class="shot" data-shot="cap-llm-server/entry.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">统一入口</span></div><button class="shot-open" type="button" aria-label="放大截图：统一入口"><img src="assets/screenshots/cap-llm-server/entry.png" alt="统一入口" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-llm-server/entry.png</code></div></div></figure>
+<div class="table-wrap"><table><thead><tr><th>入口</th><th>协议</th><th>处理</th></tr></thead><tbody>
+<tr><td><code>/v1/chat/completions</code></td><td>OpenAI Chat</td><td>标准链路</td></tr>
+<tr><td><code>/v1/responses</code></td><td>OpenAI Responses</td><td>同协议直通 / 跨协议转换</td></tr>
+<tr><td><code>/v1/messages</code></td><td>Anthropic Messages</td><td>同协议直通 / 跨协议转换</td></tr>
+<tr><td><code>/v1/images/generations</code> · <code>/v1/videos/generations</code> · <code>/v1/audio/speech</code></td><td>媒体</td><td>按输出模态路由</td></tr>
+</tbody></table></div>
+<p>每类都注册带 <code>/v1</code> 前缀和不带前缀两个路径。调用方式见 <a href="users-api.html">API 接入指南</a>。</p>
+
+<h2 id="passthrough">功能：同协议直通，不丢字段</h2>
+<figure class="shot" data-shot="cap-llm-server/passthrough.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">同协议直通，不丢字段</span></div><button class="shot-open" type="button" aria-label="放大截图：同协议直通，不丢字段"><img src="assets/screenshots/cap-llm-server/passthrough.png" alt="同协议直通，不丢字段" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-llm-server/passthrough.png</code></div></div></figure>
+<div class="table-wrap"><table><thead><tr><th>客户端请求</th><th>上游渠道协议</th><th>平台行为</th></tr></thead><tbody>
+<tr><td>Anthropic Messages</td><td>Anthropic</td><td>原样直通，保留 thinking 签名与 cache_control</td></tr>
+<tr><td>Anthropic Messages</td><td>OpenAI</td><td>转为 OpenAI 请求，响应再转回 Anthropic 语义</td></tr>
+<tr><td>OpenAI Responses</td><td>Responses</td><td>原样直通，保留 reasoning 与加密推理内容</td></tr>
+<tr><td>OpenAI Chat</td><td>Anthropic / Responses</td><td>按目标协议构造，响应与流式帧转回 OpenAI 形态</td></tr>
+</tbody></table></div>
+<div class="note"><strong>为什么这点值钱</strong>推理签名、缓存标记这类字段一旦在中转层被丢弃，上游的缓存命中和思考连续性就失效——账单和效果同时变差。</div>
+
+<h2 id="preset">功能：客户端模板</h2>
+<figure class="shot" data-shot="cap-llm-server/preset.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">客户端模板</span></div><button class="shot-open" type="button" aria-label="放大截图：客户端模板"><img src="assets/screenshots/cap-llm-server/preset.png" alt="客户端模板" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-llm-server/preset.png</code></div></div></figure>
+<p>Claude Code、Codex、Cursor、Cline 等编码工具对上游有各自的请求约定。渠道可指定<strong>客户端模板</strong>，平台按目标客户端补齐协议、headers 和默认字段：</p>
+<div class="table-wrap"><table><thead><tr><th>预设</th><th>目标协议</th><th>补齐的默认字段（节选）</th></tr></thead><tbody>
+<tr><td><code>claude-code</code></td><td>Anthropic Messages</td><td>缓存标记、thinking 语义</td></tr>
+<tr><td><code>codex-cli</code> / <code>codex-tui</code></td><td>OpenAI Responses</td><td>instructions、<code>text.verbosity</code>、<code>store=false</code>、<code>reasoning.effort</code>、<code>prompt_cache_key</code>、每请求会话身份（<code>client_metadata</code> 与 header 同源）</td></tr>
+<tr><td><code>gemini-cli</code></td><td>Gemini</td><td>path 模板占位符</td></tr>
+<tr><td><code>cursor</code> / <code>cline</code> / <code>roo-code</code> / <code>opencode</code> / <code>workbuddy</code></td><td>OpenAI Chat</td><td>按对应客户端形态构造</td></tr>
+</tbody></table></div>
+<ul>
+<li><strong>只补不覆盖：</strong>仅当客户端未显式提供时才填入默认值，不污染调用方意图。</li>
+<li><strong>思考参数按协议表达：</strong>关闭推理时省略参数而非传空值。</li>
+<li><strong>客户端识别：</strong>依次从 header（User-Agent）、body 的 <code>client_type</code>/<code>client_preset</code>、system 首条消息特征判定。</li>
+</ul>
+<div class="note"><strong>这是渠道侧配置，不是调用方负担</strong>客户端模板由管理员在渠道上配置。作为 API 调用方，你按标准协议请求即可。</div>
+
+<h2 id="monitor">功能：模型监控与模型列表自动更新</h2>
+<figure class="shot" data-shot="cap-llm-server/monitor.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">模型监控与模型列表自动更新</span></div><button class="shot-open" type="button" aria-label="放大截图：模型监控与模型列表自动更新"><img src="assets/screenshots/cap-llm-server/monitor.png" alt="模型监控与模型列表自动更新" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-llm-server/monitor.png</code></div></div></figure>
+<div class="table-wrap"><table><thead><tr><th>能力</th><th>行为</th></tr></thead><tbody>
+<tr><td>免费模型监控</td><td>对免费模型/免费账号做可用性与失败状态观察；免费模型不靠价格字段猜测，按真实上游返回判断</td></tr>
+<tr><td>模型列表刷新</td><td>渠道账号初始化、配置变更或手动刷新时同步上游模型列表；后台按 <code>model_refresh.interval_minutes</code> 周期自动刷新</td></tr>
+<tr><td>模型元数据</td><td>同步模型 ID、能力与输出模态；图片/视频/语音按模型元数据判定，不靠渠道开关硬猜</td></tr>
+<tr><td>异常处理</td><td>上游模型列表失败不影响已有路由；管理员可在渠道页手动刷新并查看结果</td></tr>
+</tbody></table></div>
+
+<h2 id="selection">功能：多因子实时评分选路</h2>
+<figure class="shot" data-shot="cap-llm-server/selection.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">多因子实时评分选路</span></div><button class="shot-open" type="button" aria-label="放大截图：多因子实时评分选路"><img src="assets/screenshots/cap-llm-server/selection.png" alt="多因子实时评分选路" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-llm-server/selection.png</code></div></div></figure>
+<div class="table-wrap"><table><thead><tr><th>评分维度</th><th>解决的实际问题</th></tr></thead><tbody>
+<tr><td>额度余量与限流余量</td><td>RPM/TPM/并发用尽的账号直接零分，不浪费一次尝试</td></tr>
+<tr><td>连续失败指数降权</td><td>失败越多权重越低（intelligent 0.8ⁿ、fast 0.7ⁿ），一次成功立即清零</td></tr>
+<tr><td>窗口失败熔断</td><td>5 分钟内阈值 2 次触发冷却，基数/步长 15s、上限 120s</td></tr>
+<tr><td>会话亲和 / 反亲和</td><td>同会话优先回上次成功账号命中缓存；失败过的降权</td></tr>
+<tr><td>上游模型亲和</td><td>复用同一上游模型保住 prompt cache</td></tr>
+<tr><td>计费模式滑动偏好</td><td>按次计费账号按 prompt token 量线性偏好（约 2000 token 交叉）</td></tr>
+<tr><td>连续成功让权</td><td>避免单账号被打爆，成功若干次后让位给池中其他账号</td></tr>
+<tr><td>短期成功率与延迟</td><td>把最近真实表现纳入评分，快且稳的账号自然胜出</td></tr>
+</tbody></table></div>
+<h3>六种渠道选路策略，按 API Key 分别指定</h3>
+<p>顺序 / 成员随机 / 按模型随机 / 全局随机 / <strong>智能</strong>（默认，多因子评分）/ <strong>快速智能</strong>（速度主导并保留少量探索）。同一套渠道池可同时服务"要最稳"和"要最快"两类业务。</p>
+<div class="info"><strong>评分全零就不再试探</strong>所有候选被冻结、熔断或额度耗尽时不做恢复性探测，直接交给模型组回退或返回 429。</div>
+
+<h2 id="freeze">功能：多种冻结 + 双层限流重试</h2>
+<figure class="shot" data-shot="cap-llm-server/freeze.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">多种冻结 + 双层限流重试</span></div><button class="shot-open" type="button" aria-label="放大截图：多种冻结 + 双层限流重试"><img src="assets/screenshots/cap-llm-server/freeze.png" alt="多种冻结 + 双层限流重试" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-llm-server/freeze.png</code></div></div></figure>
+<ul>
+<li><strong>四种冻结对象 × 多种周期：</strong>账号 / 账号+模型 / 渠道 / 渠道+模型四个对象维度，固定时长（含秒级 TTL）/ 当天 / 按周 / 按月 / 永久多种周期组合，可由状态码、响应头、错误码或模型匹配触发。</li>
+<li><strong>可配冻结策略（freeze_policy）：</strong>渠道级规则表，按状态码/响应头/错误码/模型自由组合匹配，还支持「失败时刷新冻结窗口」等开关——冻结方式不止九种预设，规则可自由扩展。</li>
+<li><strong>非重试 4xx 也走冻结：</strong>403 命中规则当天冻结该账号，而不是每次请求都撞一次。</li>
+<li><strong>双层限流 + 8 种速率限制：</strong>Key 级 RPM / 每 5 小时请求数 / RPD / TPM / 每日 Token / 每周请求 / 每周 Token / 并发请求，外加 IP 个数上限与刷新窗口——维度比常见 RPM/TPM 两项多得多，能贴合各家上游的真实配额形态。</li>
+<li><strong>失败分类而非一律重试：</strong>参数错误原样透传不浪费候选；限流与 5xx 才切账号；已输出内容的流式不重推；账号级重试 + 模型组回退管线（visited 防环）。</li>
+<li><strong>上下文超限归一：</strong>prompt_too_long / context_length_exceeded 统一成 400，不当作可重试错误反复消耗候选。</li>
+</ul>
+
+<h2 id="custom">功能：自定义代码渠道 + 多协议链路</h2>
+<figure class="shot" data-shot="cap-llm-server/custom.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">自定义代码渠道 + 多协议链路</span></div><button class="shot-open" type="button" aria-label="放大截图：自定义代码渠道 + 多协议链路"><img src="assets/screenshots/cap-llm-server/custom.png" alt="自定义代码渠道 + 多协议链路" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-llm-server/custom.png</code></div></div></figure>
+<p>不标准的上游不用等平台发版：在渠道「源码」Tab 贴一个 spec 类即可接入，保存即热更新。只写要改变的部分，其余沿用配置驱动实现。</p>
+<div class="table-wrap"><table><thead><tr><th>可配置项</th><th>用途</th></tr></thead><tbody>
+<tr><td><a href="cap-code-channel.html"><strong>代码渠道（spec 类）</strong></a></td><td>贴 Python 类接任意上游：兼容接口、设备码、账密登录、非标 SSE、动态地址；13 类场景各有单钩子写法</td></tr>
+<tr><td>base URL、对话/模型列表路径</td><td>接入任何路径约定不同的兼容服务</td></tr>
+<tr><td>认证头风格</td><td>Bearer、x-api-key、自定义头三种风格</td></tr>
+<tr><td>多协议链路（chat_protocols）</td><td><strong>同一渠道配多条协议行</strong>，各自协议/路径/流式形态/客户端模板；按请求协议同协议优先选行——同一渠道同时服务 OpenAI / Anthropic / Responses / Gemini 客户端成为可能</td></tr>
+<tr><td><strong>渠道标签管理</strong></td><td>渠道与账号打彩色标签，管理端按标签筛选（含「未设置」过滤）；API Key 按渠道标签白/黑名单收窄可用范围，子 Key 自动继承父 Key 约束</td></tr>
+<tr><td>客户端模板（可按模型覆盖）</td><td>整体模拟某客户端，个别模型还能单独覆盖</td></tr>
+<tr><td>图片/视频/语音路径与开关</td><td>媒体能力按上游实际情况分别启用</td></tr>
+<tr><td>模型别名与白名单</td><td>把上游模型名映射成对外暴露名并限制范围</td></tr>
+</tbody></table></div>
+
+<h2 id="proxy">功能：四种代理模式</h2>
+<figure class="shot" data-shot="cap-llm-server/proxy.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">四种代理模式</span></div><button class="shot-open" type="button" aria-label="放大截图：四种代理模式"><img src="assets/screenshots/cap-llm-server/proxy.png" alt="四种代理模式" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-llm-server/proxy.png</code></div></div></figure>
+<div class="table-wrap"><table><thead><tr><th>模式</th><th>行为</th><th>典型场景</th></tr></thead><tbody>
+<tr><td><code>network</code></td><td>标准 HTTP/HTTPS 代理，支持账密注入</td><td>常规代理服务器</td></tr>
+<tr><td><code>url_prefix</code></td><td>把上游完整 URL 拼到前缀之后转发</td><td>Cloudflare Workers 类反代</td></tr>
+<tr><td><code>direct</code></td><td>显式强制直连，不走任何代理</td><td>明确要求本机出网</td></tr>
+<tr><td><code>node</code></td><td><strong>通过你自己的执行节点出网</strong>，用那台机器的 IP</td><td>需特定地区/内网出口，又不想另买代理</td></tr>
+</tbody></table></div>
+<ul>
+<li><strong>按账号绑定：</strong>每个渠道账号引用代理池条目，不同账号走不同出口。</li>
+<li><strong>热更新不丢运行态：</strong>修改后原地刷新运行中的账号，限流计数、认证状态与冷却记录保留。</li>
+</ul>
+
+<h3 id="proxy-cloudflare">搭建方式：Cloudflare Workers（url_prefix 模式）</h3>
+<ol>
+<li>在 Cloudflare Dashboard 打开 <strong>Workers &amp; Pages → Create application → Create Worker</strong>，创建一个新的 Worker。</li>
+<li>下载本页附带的 <a href="assets/cloudflare-url-proxy-worker.js" download><code>cloudflare-url-proxy-worker.js</code></a>，把其中的 Worker 代码粘贴到编辑器并部署。</li>
+<li>为 Worker 绑定一个专用域名或 routes，确认 HTTPS 地址，例如 <code>https://proxy.example.com</code>。不要把带真实上游密钥的 URL 写进公开代码或日志。</li>
+<li>在管理端进入<strong>代理池</strong>，新增代理条目：模式选 <code>url_prefix</code>，URL 填 Worker 地址（不要在末尾加 <code>/</code>），用户名和密码留空；再把条目绑定到需要经过该出口的渠道账号。</li>
+<li>先用低风险渠道发起一次模型列表或测试请求，检查 Worker 日志、上游响应状态和流式响应是否完整，再投入生产流量。</li>
+</ol>
+<pre><code>代理池条目
+模式：url_prefix
+URL： https://proxy.example.com
+用户名：留空
+密码：留空</code></pre>
+<div class="warn"><strong>安全与兼容性</strong>Worker 必须限制可用来源、目标域名和请求方法，并妥善处理超时、响应头、SSE 流和错误状态；否则可能变成开放代理或泄露上游凭据。Cloudflare Worker 的出口 IP、配额、请求体/响应体限制和上游服务条款也需要单独确认。管理端「添加代理」弹框选中 URL 前缀模式时，会链接回本小节获取 Worker 源码与部署步骤。</div>
+
+<h2 id="usage">功能：用量口径归一</h2>
+<figure class="shot" data-shot="cap-llm-server/usage.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">用量口径归一</span></div><button class="shot-open" type="button" aria-label="放大截图：用量口径归一"><img src="assets/screenshots/cap-llm-server/usage.png" alt="用量口径归一" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-llm-server/usage.png</code></div></div></figure>
+<ul>
+<li><strong>total = 输入 + 输出。</strong>缓存读、缓存写是输入 token 明细子集，不额外计入 total；不采信上游自报 total，一律用 prompt + completion 重算。</li>
+<li><strong>零 completion 兜底（协议无关）：</strong>usage 里 completion 为 0 但响应确有内容时，删除该 usage 让后续估算兜底。</li>
+<li><strong>口径一致：</strong>管理端面板与主链路使用同一套 usage 归一逻辑。</li>
+</ul>
+
+<h2 id="testing">功能：灵活测试配置与上游拒绝</h2>
+<figure class="shot" data-shot="cap-llm-server/testing.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">灵活测试配置与上游拒绝</span></div><button class="shot-open" type="button" aria-label="放大截图：灵活测试配置与上游拒绝"><img src="assets/screenshots/cap-llm-server/testing.png" alt="灵活测试配置与上游拒绝" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-llm-server/testing.png</code></div></div></figure>
+<p>测活不是只发一句 "hi"。测试场景<strong>类型可自定义</strong>（默认八类：聊天/流式/工具/思考/多轮/图片/视频/语音，管理员可在「渠道配置 → 测试类型」增改），还能：</p>
+<ul>
+<li><strong>模拟真实客户端：</strong>测试时指定按哪种客户端形态发请求（claude-code / codex-cli / opencode 等），与真实流量同源，不是裸 curl。</li>
+<li><strong>指定协议链路：</strong>走渠道配置的哪条协议行，测试 body/header/parser 按该协议构造。</li>
+<li><strong>上游拒绝判断：</strong>请求发送前先过 <code>check_message</code> 放行判定（模型、消息数、内容限制等），上游不支持的组合提前拒绝、不浪费一次计费请求；免费账号 403 等不可用状态也会被探测并剔除。</li>
+<li><strong>自动解冻：</strong>测试通过自动解除该账号运行时冻结；另有定时巡检、模型列表刷新与余额探测。</li>
+</ul>
+
+<h2 id="record">功能：请求级实时记录</h2>
+<figure class="shot" data-shot="cap-llm-server/record.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">请求级实时记录</span></div><button class="shot-open" type="button" aria-label="放大截图：请求级实时记录"><img src="assets/screenshots/cap-llm-server/record.png" alt="请求级实时记录" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-llm-server/record.png</code></div></div></figure>
+<p>一次客户端调用对应一个 request_id，其下<strong>每次渠道尝试单独成行</strong>并按序编号：哪个账号试过、走什么路径、成功还是失败、首 Token 多久、各类 Token 各多少，都能按 request_id 追到完整序列。PostgreSQL 是权威存储；ClickHouse 只做大字段 payload 旁路双写，失败只丢批、不影响主链路。</p>
+
+<p><a href="architecture.html#gateway">技术白皮书：协议直通与选路熔断实现 →</a> · <a href="users-api.html">API 接入方式 →</a> · <a href="users-admin.html#channel-workflow">管理员渠道配置 →</a></p>
+
+<footer class="footer"><span><a href="solutions.html">← 上一篇：场景方案</a></span><span><a href="cap-code-channel.html">下一篇：自定义代码渠道 →</a></span></footer>
+</article></main></div>
+</body></html>

@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Ai Lubricant 开发者操作手册：项目、任务、聊天、Agent、编辑器、终端与文件。">
+  <title>开发者手册 · Ai Lubricant</title>
+  <link rel="stylesheet" href="assets/docs.css?v=20260831-3"><script src="assets/docs.js?v=20260831-3" defer></script>
+</head>
+<body>
+<button class="nav-toggle" id="nav-toggle" aria-expanded="false">☰ 打开文档导航</button>
+<div class="wrap">
+<aside class="sidebar">
+  <div class="brand"><span class="dot">A</span> Ai Lubricant</div>
+  <div class="nav-group">产品</div><nav>
+    <a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a>
+  </nav>
+  <div class="nav-group">能力详解</div><nav>
+    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
+  </nav>
+  <div class="nav-group">操作手册</div><nav>
+    <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
+  </nav>
+  <div class="nav-group">部署与接入</div><nav>
+    <a href="users-api.html"><span class="ic">↔</span>API 接入</a><a href="governance.html"><span class="ic">◈</span>安全与治理</a><a href="deploy.html"><span class="ic">⇩</span>生产部署</a><a href="desktop.html"><span class="ic">▭</span>Windows 桌面版</a><a href="architecture.html"><span class="ic">⚖</span>技术白皮书</a><a href="env-vars.html"><span class="ic">⊧</span>环境变量</a><a href="local-debug.html"><span class="ic">⚙</span>本地调试</a>
+  </nav>
+</aside>
+<main class="main"><div class="topbar"><button id="theme-toggle" type="button">☾ 深色</button><button id="print-page" type="button">⎙ 打印</button></div>
+<article class="content">
+<header class="hero"><h1>开发者手册</h1><p class="desc">面向使用 Ai Lubricant 完成开发工作的用户：从登录、项目与任务开始，到 Agent、编辑器、终端和文件。</p></header>
+<div class="toc"><strong>本页目录</strong><a href="#start">首次使用</a><a href="#project">项目</a><a href="#task">任务</a><a href="#chat">模型聊天</a><a href="#agent">Agent</a><a href="#editor">编辑器</a><a href="#terminal">终端与文件</a><a href="#resources">资源/MCP</a><a href="#safety">安全</a></div>
+
+<h2 id="start">1. 首次使用</h2>
+<p><strong>适用角色：</strong>平台普通用户、项目开发者。</p>
+<p><strong>前置条件：</strong>已有可登录的平台账号，并且已经拿到可用的 API Key、模型和（如需远程执行的）节点——自己部署时由你在管理端配置，多人使用时由管理员分配。</p>
+<ol>
+<li>访问 <code>/login</code>，输入平台账号与密码。</li>
+<li>登录成功后进入 <code>/console/tasks</code>；确认页面右上角显示正确用户和团队。</li>
+<li>进入“我的”或相关设置，检查 Git identity；Agent 提交代码前应使用明确身份。</li>
+<li>在“聊天”中选择被授权的 API Key 和模型，发送一条无敏感数据的测试消息。</li>
+<li>在“项目”中选择已有项目，或按管理员授权创建新项目。</li>
+</ol>
+<div class="warn"><strong>不要在提示词中粘贴凭据</strong>API Key、Cookie、SSH 私钥、数据库密码、TOTP secret 与客户数据应使用平台提供的专用凭据/资源配置，而不是写入聊天、任务描述或项目文件。</div>
+
+<h2 id="project">2. 项目：持续工作上下文</h2>
+<p>项目统一承载任务、编辑器、仓库、提示词与成员协作；Agent 工作前先选项目，避免从空白上下文开始。</p>
+<h3>操作路径</h3>
+<ol>
+<li>从用户侧项目入口进入项目列表，选择项目。</li>
+<li>在项目详情确认仓库/工作目录、任务、编辑器与项目提示词。</li>
+<li>如果需要 Git 操作，确认自己的 Git identity 已配置且属于当前用户。</li>
+<li>进入“编辑器”Tab 创建或打开项目编辑器；旧 <code>/console/editors</code> 路径已下线，编辑器必须归属项目。</li>
+</ol>
+<h3>预期结果</h3>
+<p>项目详情能看到任务与编辑器；后续任务、聊天或 Agent 会话能够引用项目上下文。</p>
+
+<h2 id="task">3. 任务：让 Agent 持续推进目标</h2>
+<h3>创建任务</h3>
+<ol>
+<li>进入 <code>/console/tasks</code>，点击“新建任务”。</li>
+<li>选择项目；填写清晰目标、验收标准和已知约束。</li>
+<li>选择被授权的模型/API Key；如需自有机器执行，选择在线且获授权的 execution 节点。</li>
+<li>仅显式选择任务需要的资源、技能与工具，遵循最小权限。</li>
+<li>提交后进入任务详情，观察状态和 Agent 事件。</li>
+</ol>
+<h3>写好任务描述</h3>
+<div class="table-wrap"><table><thead><tr><th>应包含</th><th>示例</th></tr></thead><tbody>
+<tr><td>目标</td><td>“为订单 API 增加幂等键校验”</td></tr>
+<tr><td>范围</td><td>“只改后端订单模块与相应测试，不改前端”</td></tr>
+<tr><td>验收</td><td>“重复请求返回同一订单；新增单元测试；现有测试通过”</td></tr>
+<tr><td>约束</td><td>“复用现有 Redis client；不得记录完整请求体”</td></tr>
+</tbody></table></div>
+<p>避免只写“优化一下”“修好它”等无法验证的目标；不要在任务描述中写密码、Token 或真实客户数据。</p>
+<h3>查看执行</h3>
+<ul>
+<li>任务详情显示 Agent 消息、工具调用、终端输出、执行事件与最终结果。</li>
+<li>节点断开或 Provider 不可用时，任务会显示明确失败/等待状态；不要重复提交多个相同任务。</li>
+<li>完成后先审查代码 diff、终端输出和测试结果，再决定合并或发布。</li>
+</ul>
+
+<h2 id="chat">4. 模型聊天：统一使用被授权模型</h2>
+<ol>
+<li>进入 <code>/console/chat</code>。</li>
+<li>选择属于自己或团队授权的 API Key，以及该 Key 允许的模型。</li>
+<li>输入消息；文件/媒体能力取决于模型 <code>input_modalities</code> 与渠道支持。</li>
+<li>流式响应由后端统一网关提供；前端不会直接持有上游 Provider Token。</li>
+</ol>
+<div class="note"><strong>聊天也走生产主链路</strong>前端只提交 <code>api_key_id</code>，后端按当前用户权限解析真实 Key；路由、限流、日志和用量与 API 调用使用同一口径。</div>
+
+<h2 id="agent">5. Agent：组合模型、提示词与工具</h2>
+<h3>使用已有 Agent</h3>
+<ol>
+<li>进入 <code>/console/agent-chat</code>。</li>
+<li>选择管理员提供的平台 Agent，或自己创建的 Agent。</li>
+<li>确认 Agent 绑定的主模型、Sub-agent 模型与资源符合任务需要。</li>
+<li>发起对话；Agent 的 MCP/工具调用会以当前运行用户身份校验权限。</li>
+</ol>
+<h3>创建/编辑 Agent</h3>
+<ul>
+<li><strong>主模型：</strong>必须选择自己有权限的网关 API Key 和模型。</li>
+<li><strong>Sub-agent：</strong>可绑定独立 Key/模型；只配模型时可复用主 Key。</li>
+<li><strong>系统提示词：</strong>描述角色、目标、约束和交付格式，避免写入真实凭据。</li>
+<li><strong>技能/插件/MCP：</strong>只选择需要的资源；平台提供的资源不会自动全部注入。</li>
+<li><strong>工作区：</strong>限制 allowed roots 和 denied patterns，避免 Agent 访问无关目录。</li>
+</ul>
+
+<h2 id="editor">6. 项目编辑器与会话</h2>
+<ol>
+<li>从项目详情的“编辑器”Tab 创建编辑器；选择工作节点与必要的环境配置。</li>
+<li>进入 <code>/console/editor/:editorId</code> 查看编辑器详情。</li>
+<li>新建/恢复编辑器会话；会话可关联终端与工作区。</li>
+<li>完成工作后停止不再使用的会话，释放节点容量。</li>
+</ol>
+<p>编辑器与项目一对一关联；历史 <code>/console/project/:projectId/editor/:editorId</code> 链接会重定向到新的顶层编辑器路由。</p>
+
+<h2 id="terminal">7. 终端与文件：无需自行准备 SSH/SFTP</h2>
+<h3>终端</h3>
+<ol>
+<li>进入 <code>/console/terminal</code> 或项目/编辑器内终端入口。</li>
+<li>选择获授权且在线的节点或会话。</li>
+<li>平台通过浏览器 WebSocket 和 NodeConnect 帧桥接到节点 PTY；输入、输出和窗口缩放实时传递。</li>
+<li>关闭页面或显式关闭终端后，平台通知节点释放 PTY；连接中断时节点会关闭残留终端。</li>
+</ol>
+<h3>文件</h3>
+<ol>
+<li>进入 <code>/console/files</code>，选择环境/节点与路径。</li>
+<li>浏览目录、读取/编辑文件，或执行获授权的上传、创建、移动操作。</li>
+<li>路径与文件内容遵循后端权限和工作区边界；不要访问项目之外的敏感目录。</li>
+</ol>
+<div class="info"><strong>“无需 SSH”的准确含义</strong>日常平台链路不需要用户开放 22 端口、准备 SSH Key 或自行安装 SFTP 工具；节点管理员仍需预先安装节点程序，并正确配置操作系统权限与出站网络。</div>
+
+<h2 id="resources">8. 内置资源与 MCP</h2>
+<ul>
+<li><code>/console/resources</code>：创建/查看自己的 CDP 浏览器 client、Mail 实例和对外 MCP token。</li>
+<li><code>/console/mcp</code>：配置用户级外部 SSE MCP；服务与工具按用户 scope 隔离。</li>
+<li>CDP 浏览器扩展的 connection token 与外部 MCP access token 是不同凭据；前者连接扩展，后者调用 MCP，并且必须绑定具体 client。</li>
+<li>Mail 工具只读查询被授权实例，无法跨实例读取其他用户邮箱。</li>
+<li>把资源加入 Agent 前先测试工具清单与作用域；任务结束后撤销临时 token。</li>
+</ul>
+
+<h2 id="safety">9. 开发者安全与验收清单</h2>
+<ul>
+<li>不给 Agent 无关的模型、工具、目录与节点权限。</li>
+<li>不在提示词、任务、聊天、代码或截图中放 API Key、Cookie、密码、私钥与客户数据。</li>
+<li>浏览器自动化使用隔离 Chrome profile；不要连接个人日常 profile。</li>
+<li>Agent 修改代码后审查 diff、测试输出与依赖变更；不要只信最终总结。</li>
+<li>高风险命令、删除、发布与外部发送应由人工确认。</li>
+<li>任务完成后停止闲置会话、撤销临时 token 并检查异常节点/请求日志。</li>
+</ul>
+
+<footer class="footer"><span><a href="cap-resource-center.html">← 上一篇：资源中心</a></span><span><a href="users-admin.html">下一篇：平台管理员手册 →</a></span></footer>
+</article></main></div>
+</body></html>

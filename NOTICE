@@ -1,0 +1,33 @@
+# Ai Lubricant — NOTICE
+
+本文件记录本仓库（主仓）与各独立子仓库的来源与许可边界。
+
+## 主仓库（本仓库）
+
+主仓库中的自研部分 —— 数据服务与渠道聚合（`server/`、`providers/`、
+`limits/`、`integrations/` 等）、Agent 运行时（`agent/`、`mcp/`、
+`mcp_runtime/`、`mcp_builtin/`）、桌面壳（`desktop/`）、`monkeycode_compat/`
+（除下文特别注明外）与文档站（`docs-site/`）—— 为本项目原创代码，采用
+Business Source License 1.1 授权（见 LICENSE）。
+
+`monkeycode_compat/git_clients.py` 为对既有公开文档的净室重写（clean-room
+reimplementation），未复制任何上游项目代码，不承载上游许可证义务。
+
+## 独立子仓库（submodule）
+
+以下目录为独立仓库，携带各自的 LICENSE 与 NOTICE，许可与归属以其自身文件为准：
+
+| 目录 | 许可 | 来源说明 |
+| --- | --- | --- |
+| `node_server/` | AGPL-3.0 | 含派生自 chaitin/agent-compose 的节点控制面移植 |
+| `nodes/` | AGPL-3.0 | 含派生自 chaitin/agent-compose 的节点客户端与运行时 |
+| `user-frontend/` | AGPL-3.0 | 基于 chaitin/MonkeyCode 前端改造的门户 |
+| `mobile/` | BSL 1.1 | 自研移动端（Expo / React Native） |
+| `device-control/` | MIT | 自研，含 MIT 许可的第三方组件（android-remote-control-mcp 等） |
+
+再分发或网络服务部署上述 AGPL 组件时，必须遵守 AGPL-3.0 的源码提供义务，具体要求见各子仓库的 LICENSE/NOTICE。
+
+## 商标
+
+"Ai Lubricant" 为本项目的项目名。本仓库及其子仓库不授予任何第三方商标权；
+各上游项目的名称与商标归其各自权利人所有。

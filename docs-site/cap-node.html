@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="节点能力详解：execution / management / passive_management 三角色、无需 SSH 主动连接、PTY/host exec/文件/HTTP 代理出口、TOTP 封存。">
+  <title>节点 · 能力详解 · Ai Lubricant</title>
+  <link rel="stylesheet" href="assets/docs.css?v=20260831-3"><script src="assets/docs.js?v=20260831-3" defer></script>
+</head>
+<body>
+<button class="nav-toggle" id="nav-toggle" aria-expanded="false">☰ 打开文档导航</button>
+<div class="wrap">
+<aside class="sidebar">
+  <div class="brand"><span class="dot">A</span> Ai Lubricant</div>
+  <div class="nav-group">产品</div><nav>
+    <a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a>
+  </nav>
+  <div class="nav-group">能力详解</div><nav>
+    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
+  </nav>
+  <div class="nav-group">操作手册</div><nav>
+    <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
+  </nav>
+  <div class="nav-group">部署与接入</div><nav>
+    <a href="users-api.html"><span class="ic">↔</span>API 接入</a><a href="governance.html"><span class="ic">◈</span>安全与治理</a><a href="deploy.html"><span class="ic">⇩</span>生产部署</a><a href="desktop.html"><span class="ic">▭</span>Windows 桌面版</a><a href="architecture.html"><span class="ic">⚖</span>技术白皮书</a><a href="env-vars.html"><span class="ic">⊧</span>环境变量</a><a href="local-debug.html"><span class="ic">⚙</span>本地调试</a>
+  </nav>
+</aside>
+<main class="main"><div class="topbar"><button id="theme-toggle" type="button">☾ 深色</button><button id="print-page" type="button">⎙ 打印</button></div>
+<article class="content">
+<header class="hero"><h1>节点</h1><p class="desc">把执行能力延伸到你自己的机器，无需开放 SSH、无需分发 SSH Key。节点主动拨向平台，终端、exec、文件与代理都复用这条受控连接。</p></header>
+
+<div class="table-wrap"><table>
+<thead><tr><th>问题</th><th>传统 SSH 方案</th><th>Ai Lubricant 节点</th></tr></thead>
+<tbody>
+<tr><td>入网方向</td><td>平台主动拨入机器，需要公网 IP / 端口映射</td><td>节点主动出站连接，NAT 后可用</td></tr>
+<tr><td>凭据管理</td><td>分发 SSH Key，手动轮换撤销</td><td>onboard 发 TOTP secret，AES-256-GCM 封存，一键 Revoke</td></tr>
+<tr><td>端口暴露</td><td>开放 22 端口，暴露攻击面</td><td>不开任何入站端口</td></tr>
+<tr><td>执行方式</td><td>SSH 命令行，无统一审批</td><td>审批后才调度，容量/角色可控</td></tr>
+<tr><td>附加能力</td><td>仅 shell</td><td>同一连接复用：PTY 终端、host exec、文件、HTTP 代理出口</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="roles">功能：三种角色</h2>
+<figure class="shot" data-shot="cap-node/roles.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">三种角色</span></div><button class="shot-open" type="button" aria-label="放大截图：三种角色"><img src="assets/screenshots/cap-node/roles.png" alt="三种角色" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-node/roles.png</code></div></div></figure>
+<div class="table-wrap"><table><thead><tr><th>角色</th><th>是否运行客户端</th><th>职责</th></tr></thead><tbody>
+<tr><td><code>execution</code></td><td>是（独立 Go 二进制）</td><td>执行 provider CLI 会话、任务、工作区、终端、文件与节点代理；只有它参与会话调度</td></tr>
+<tr><td><code>management</code></td><td>是（独立 Go 二进制）</td><td>管理 execution 节点并在宿主机创建/删除它们；自身也支持 host terminal 与 exec</td></tr>
+<tr><td><code>passive_management</code></td><td>否</td><td>纯分组与授权容器，创建后直接 approved，不连接、不执行、不提供终端</td></tr>
+</tbody></table></div>
+<p>一台接进来的机器可同时是五类用途：<strong>浏览器 PTY 终端</strong>、<strong>跑 provider CLI 的编程子端</strong>、<strong>host exec 单条命令</strong>、<strong>工作区与文件读写</strong>、<strong>HTTP 代理出口</strong>。</p>
+
+<h2 id="connect">功能：无需 SSH 的四步链路</h2>
+<figure class="shot" data-shot="cap-node/connect.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">无需 SSH 的四步链路</span></div><button class="shot-open" type="button" aria-label="放大截图：无需 SSH 的四步链路"><img src="assets/screenshots/cap-node/connect.png" alt="无需 SSH 的四步链路" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-node/connect.png</code></div></div></figure>
+<div class="chain">
+<div class="chain-step"><span class="num">1</span><div class="body"><h4>节点主动拨号</h4><p>节点使用自身 ID 与 TOTP 凭据连接控制服务；断线后指数退避重连。</p></div></div>
+<div class="chain-step"><span class="num">2</span><div class="body"><h4>平台批准与调度</h4><p>只有 approved、在线、具备能力且满足容量的 execution 节点参与会话调度。</p></div></div>
+<div class="chain-step"><span class="num">3</span><div class="body"><h4>帧式命令通道</h4><p>终端 open/input/resize、host exec、工作区配置与 HTTP 代理通过 NodeConnect 帧下发。</p></div></div>
+<div class="chain-step"><span class="num">4</span><div class="body"><h4>输出与状态回传</h4><p>PTY 输出、命令结果、会话事件与隧道响应通过同一连接流式返回。</p></div></div>
+</div>
+<div class="note"><strong>准确边界</strong>平台日常链路不依赖 SSH 端口与 SSH Key；你仍需在目标机器安装节点、赋予合适的操作系统权限，并允许节点主动访问控制服务。</div>
+
+<h2 id="abilities">功能：终端、exec、文件与代理出口</h2>
+<figure class="shot" data-shot="cap-node/abilities.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">终端、exec、文件与代理出口</span></div><button class="shot-open" type="button" aria-label="放大截图：终端、exec、文件与代理出口"><img src="assets/screenshots/cap-node/abilities.png" alt="终端、exec、文件与代理出口" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-node/abilities.png</code></div></div></figure>
+<div class="table-wrap"><table><thead><tr><th>能力</th><th>行为</th></tr></thead><tbody>
+<tr><td>浏览器 PTY 终端</td><td>浏览器 WebSocket → 数据服务 → 控制服务 → 节点本机 PTY（Unix pty / Windows ConPTY）；断开时节点关闭残留 shell</td></tr>
+<tr><td>host exec</td><td>宿主机执行单条命令，返回 stdout/stderr/exit_code；超时默认 2 分钟（上限 10 分钟）、输出默认 1 MiB（上限 16 MiB）；需节点声明 <code>host_exec=true</code></td></tr>
+<tr><td>execution 跑 provider CLI</td><td>在工作区内运行 claude/codex/gemini/opencode 等 CLI 会话，输出/结果/事件流式回传</td></tr>
+<tr><td>工作区与文件</td><td>浏览、创建、编辑、移动和获取节点上的工作区文件，无需 SCP/SFTP</td></tr>
+<tr><td>节点 HTTP 代理</td><td>请求经节点自身网络出口发起（节点 IP、NAT 后网络或内网资源），响应以隧道帧回传——即代理池的 <code>node</code> 模式</td></tr>
+</tbody></table></div>
+
+<h2 id="security">功能：身份加密封存与审批</h2>
+<figure class="shot" data-shot="cap-node/security.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">身份加密封存与审批</span></div><button class="shot-open" type="button" aria-label="放大截图：身份加密封存与审批"><img src="assets/screenshots/cap-node/security.png" alt="身份加密封存与审批" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-node/security.png</code></div></div></figure>
+<div class="table-wrap"><table><thead><tr><th>措施</th><th>行为</th></tr></thead><tbody>
+<tr><td>TOTP AES-256-GCM 封存</td><td>onboard 发唯一 node_id 与 TOTP secret，服务端封存；认证带重放缓存，同一验证码不能复用</td></tr>
+<tr><td>统一 permission_denied</td><td>未知/撤销/错误/重放统一返回，避免身份枚举</td></tr>
+<tr><td>必须审批</td><td>未 approved 的节点即使连上也不参与调度，可随时撤销</td></tr>
+<tr><td>主密钥不可随意轮换</td><td><code>NODE_CREDENTIAL_ENCRYPTION_KEY</code> 加密既有 TOTP 凭据，丢失即无法解密；迁移控制面先停旧实例再启新实例，禁止双 Registry</td></tr>
+</tbody></table></div>
+
+<h2 id="agent-safety">功能：Agent 安全控制操作</h2>
+<figure class="shot" data-shot="cap-node/agent-safety.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">Agent 安全控制操作</span></div><button class="shot-open" type="button" aria-label="放大截图：Agent 安全控制操作"><img src="assets/screenshots/cap-node/agent-safety.png" alt="Agent 安全控制操作" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-node/agent-safety.png</code></div></div></figure>
+<p>节点上跑 Agent CLI 时，平台从配置、执行到结果全程设防，不让 Agent 拿到不该有的权限：</p>
+<div class="table-wrap"><table><thead><tr><th>控制点</th><th>行为</th></tr></thead><tbody>
+<tr><td>目录边界</td><td>Agent 配置 <code>allowed_roots</code> 与 <code>denied_patterns</code>；默认拒绝 <code>/etc/</code>、<code>/var/</code>、<code>.env</code> 等敏感路径</td></tr>
+<tr><td>资源显式授权</td><td>技能、插件、MCP 与规则由用户/管理员授权后才注入；Agent 拿到的始终是被明确选择过的资源</td></tr>
+<tr><td>身份隔离</td><td>Agent 绑定用户后按当前发起用户校验 API Key 与 MCP token，跨用户 401；不从 token 集合任取</td></tr>
+<tr><td>子 Key 收窄</td><td>任务级派生收窄的子 Key：模型、编辑器、策略与速率限制不越权</td></tr>
+<tr><td>Git 凭据托管</td><td>节点 clone 用服务端签名 proxy URL，真实 PAT 只在服务端内存；token 绑任务、只读、任务结束即失效</td></tr>
+<tr><td>高危操作人工确认</td><td>高风险命令、删除、外部发布与对外发送保持人工确认</td></tr>
+<tr><td>能力声明门槛</td><td>节点按 editor CLI 上报能力标签；review 等高权限任务要求对应标签齐全才参与调度</td></tr>
+</tbody></table></div>
+
+<h2 id="install-agent">功能：一个指令连接 Agent</h2>
+<figure class="shot" data-shot="cap-node/install-agent.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">一个指令连接 Agent</span></div><button class="shot-open" type="button" aria-label="放大截图：一个指令连接 Agent"><img src="assets/screenshots/cap-node/install-agent.png" alt="一个指令连接 Agent" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-node/install-agent.png</code></div></div></figure>
+<p>Onboard 后直接复制一条命令到目标机器：</p>
+<pre><code>curl &lt;平台地址&gt;/api/v1/public/nodes/&lt;node_id&gt;/install.sh | bash</code></pre>
+<div class="table-wrap"><table><thead><tr><th>脚本自动完成</th><th>行为</th></tr></thead><tbody>
+<tr><td>识别平台</td><td>运行时自动识别 Linux / macOS 与 amd64 / arm64，选择匹配版本；不支持的平台明确报错，不偷偷回退</td></tr>
+<tr><td>下载节点</td><td>从发布目录下载 execution / management 对应二进制，校验 sha256 后安装为整机唯一 daemon</td></tr>
+<tr><td>安装 Agent 运行时</td><td>同时下载并解压匹配平台的 <code>agent-compose-runtime</code>，节点第一次注册就上报 runtime_version——不用先手工装 Agent 依赖</td></tr>
+<tr><td>注入连接参数</td><td>server / node_id / secret / role / proxy 配置都写进一次性脚本；secret 在响应 body，不放 URL/日志；凭据 30 分钟过期</td></tr>
+<tr><td>自动启动与重连</td><td>安装后作为 daemon 启动并主动拨平台，断线指数退避重连；管理员核对身份后 Approve 即可接 Agent 任务</td></tr>
+</tbody></table></div>
+
+<h2 id="usage">怎么接入</h2>
+<ol>
+<li>管理员在 <code>/manager/nodes</code> 点 Onboard，选角色（execution 必须挂 management/passive_management 父节点）。</li>
+<li>在目标机器执行安装命令（含 node_id 与 secret，30 分钟内有效；等价于节点身份凭据，不可外传）。</li>
+<li>回管理端核对身份后 Approve。</li>
+<li>开发者建任务时选该节点，或进浏览器终端直接操作。完整步骤见 <a href="guide-node.html">节点管理员手册</a>。</li>
+</ol>
+
+<figure class="shot" data-shot="nodes/nodes-list.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">/manager/nodes</span></div><button class="shot-open" type="button" aria-label="放大节点列表与拓扑截图"><img src="assets/screenshots/nodes/nodes-list.png" alt="Ai Lubricant 节点列表与拓扑" loading="lazy"></button><div class="pending"><span class="tag">截图加载失败</span><br>请检查静态资源路径<br><code>nodes/nodes-list.png</code></div></div><figcaption><b>节点治理：</b>execution、management 与 passive_management 角色分工清晰，连接和容量可见。</figcaption></figure>
+
+<p><a href="guide-node.html">节点管理员操作手册 →</a> · <a href="architecture.html#terminal-agent">TOTP 认证、帧协议与代理实现 →</a></p>
+
+<footer class="footer"><span><a href="cap-editor.html">← 上一篇：连接编辑器</a></span><span><a href="cap-mobile.html">下一篇：手机客户端 →</a></span></footer>
+</article></main></div>
+</body></html>

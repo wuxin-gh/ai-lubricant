@@ -1,0 +1,3 @@
+name = "ai-lubricant-docs"
+pages_build_output_dir = "docs-site"
+compatibility_date = "2026-08-01"

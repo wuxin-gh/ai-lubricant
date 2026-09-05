@@ -1,0 +1,69 @@
+# Python 产物
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+
+# 根目录构建产物（PyInstaller 输出，仅桌面版用）。注意只匹配根目录：
+# user-frontend/dist 是运行时 SPA，必须随镜像发布，不能被排除。
+/dist
+/build
+dist/AiLubricant/
+build/AiLubricant/
+
+# 版本控制 / IDE
+.git
+.gitignore
+.idea
+.vscode
+
+# 本地工具目录（不进镜像）
+.venv/
+.worktrees/
+.pytest_cache/
+.codegraph/
+.claude/
+.omo/
+.opencode/
+.sisyphus/
+.wrangler/
+.baseline_check/
+.chrome-footer-check/
+.chrome-tmp/
+.playwright-mcp/
+.tmp-guard-test/
+
+# 运行时产物（无 git 跟踪内容，由 docker-compose 命名卷持久化，不烘焙进镜像）。
+# 注意 data/ 不排除：本地构建时 data/agent-resources 技能归档与 data/agents
+# 示例数据仍在构建上下文里随镜像拷入（data/ 已不入 git，仅本地使用）。
+logs/
+deleted_backups/
+agent/attachments/
+static/resource_mirrors/
+*.log
+
+# 文档 / 脚本 / 说明 / 本地归档
+README.md
+AGENTS.md
+docs-site/
+script/
+archive/
+# 代码渠道 spec 源料：只作为「贴进管理端源码 Tab」的素材，不随镜像发布。
+specs/
+
+# 与服务器镜像无关的 submodule（仅 node_server/ 与 user-frontend/ 随镜像发布）
+mobile/
+nodes/
+device-control/
+desktop/
+
+# 前端依赖（user-frontend 源码进镜像，依赖不进）
+node_modules/
+
+# 本地密钥 / 环境文件
+.env
+

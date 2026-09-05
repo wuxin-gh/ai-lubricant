@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="自定义代码渠道：贴一个 spec 类即可接入任意上游——兼容接口、设备码、账密登录、非标 SSE。钩子速查、场景索引与可用样例。">
+  <title>自定义代码渠道 · 能力详解 · Ai Lubricant</title>
+  <link rel="stylesheet" href="assets/docs.css?v=20260831-3"><script src="assets/docs.js?v=20260831-3" defer></script>
+</head>
+<body>
+<button class="nav-toggle" id="nav-toggle" aria-expanded="false">☰ 打开文档导航</button>
+<div class="wrap">
+<aside class="sidebar">
+  <div class="brand"><span class="dot">A</span> Ai Lubricant</div>
+  <div class="nav-group">产品</div><nav>
+    <a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a>
+  </nav>
+  <div class="nav-group">能力详解</div><nav>
+    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
+  </nav>
+  <div class="nav-group">操作手册</div><nav>
+    <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
+  </nav>
+  <div class="nav-group">部署与接入</div><nav>
+    <a href="users-api.html"><span class="ic">↔</span>API 接入</a><a href="governance.html"><span class="ic">◈</span>安全与治理</a><a href="deploy.html"><span class="ic">⇩</span>生产部署</a><a href="desktop.html"><span class="ic">▭</span>Windows 桌面版</a><a href="architecture.html"><span class="ic">⚖</span>技术白皮书</a><a href="env-vars.html"><span class="ic">⊧</span>环境变量</a><a href="local-debug.html"><span class="ic">⚙</span>本地调试</a>
+  </nav>
+</aside>
+<main class="main"><div class="topbar"><button id="theme-toggle" type="button">☾ 深色</button><button id="print-page" type="button">⎙ 打印</button></div>
+<article class="content">
+<header class="hero"><h1>自定义代码渠道</h1><p class="desc">在管理端贴一个普通 spec 类，就能接入任何形态的上游：兼容接口、OAuth 设备码、账密登录、非标 SSE、动态接入地址。只写你要改变的部分，其余沿用平台的配置驱动实现。</p></header>
+
+<div class="table-wrap"><table>
+<thead><tr><th>问题</th><th>改中转源码 / 放弃接入</th><th>代码渠道</th></tr></thead>
+<tbody>
+<tr><td>上游接口不标准</td><td>等平台发版支持</td><td>贴一个 spec 类当场接入，保存即热更新</td></tr>
+<tr><td>登录方式特殊</td><td>自己维护一套登录脚本</td><td>声明字段 + 授权钩子，轮询/刷新由框架调度</td></tr>
+<tr><td>SSE 格式非标</td><td>整段重写聊天逻辑</td><td>只写 <code>parse_chunk</code> 一帧解析</td></tr>
+<tr><td>只想加一个头/一个字段</td><td>大动干戈</td><td><code>headers</code> / <code>payload</code> 单钩子搞定</td></tr>
+<tr><td>usage 统计缺失</td><td>自己算 token</td><td>框架按实际内容自动估算，不用管</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="rules">先记住 7 条规则</h2>
+<figure class="shot" data-shot="cap-code-channel/rules.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">先记住 7 条规则</span></div><button class="shot-open" type="button" aria-label="放大截图：先记住 7 条规则"><img src="assets/screenshots/cap-code-channel/rules.png" alt="先记住 7 条规则" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-code-channel/rules.png</code></div></div></figure>
+<ol>
+<li>写 <code>class MyChannel:</code>，<strong>不要继承</strong> <code>BaseProvider</code> / <code>CustomProvider</code>。</li>
+<li>方法推荐写 <code>@staticmethod</code>，第一个参数 <code>p</code> 是渠道实例。</li>
+<li><strong>渠道地址在管理端「渠道配置」里填</strong>（必填）；spec 用 <code>p.base_url</code> 读，不要写死域名。不打外网的 spec 写 <code>REQUIRES_BASE_URL = False</code> 可豁免。</li>
+<li><strong>usage 不用你算</strong>：上游没回 token 统计时框架自动估算；只有拿到真实 usage 才需要覆盖。</li>
+<li><strong>不要自己 <code>import aiohttp</code></strong>：用 <code>p.send_sse_request(...)</code> / <code>p._make_session()</code>，出站代理、连接复用、请求留痕才生效。</li>
+<li>不要写 <code>PROVIDER_NAME</code>，加载器会用渠道 id 覆盖。贴入的代码以服务进程权限执行，等同部署一个 Python 文件，只允许可信管理员编辑。</li>
+<li>OAuth / 多字段账号在 <code>account_schema()["fields"]</code> 声明表单字段；运行时字段写 <code>ACCOUNT_FIELDS</code>。两者自动挂成 <code>p.access_token</code> 这类实例属性。</li>
+</ol>
+
+<h2 id="scenarios">场景索引：你属于哪种情况？</h2>
+<figure class="shot" data-shot="cap-code-channel/scenarios.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">场景索引：你属于哪种情况？</span></div><button class="shot-open" type="button" aria-label="放大截图：场景索引：你属于哪种情况？"><img src="assets/screenshots/cap-code-channel/scenarios.png" alt="场景索引：你属于哪种情况？" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-code-channel/scenarios.png</code></div></div></figure>
+<div class="table-wrap"><table><thead><tr><th>你的情况</th><th>你写什么</th></tr></thead><tbody>
+<tr><td>上游是 OpenAI / Anthropic / Responses / Gemini 兼容接口</td><td><strong>零钩子</strong>（渠道配置即可）；源码至少留一个最小 <code>init_auth</code></td></tr>
+<tr><td>只多一个签名头 / 租户头</td><td><code>headers</code></td></tr>
+<tr><td>请求体只多一个字段</td><td><code>payload</code></td></tr>
+<tr><td>聊天 URL 非标准路径</td><td><code>build_url</code></td></tr>
+<tr><td>接入地址登录后动态下发</td><td><code>base_url</code>（覆盖全部出站路径）</td></tr>
+<tr><td>SSE 字段不是 <code>choices[].delta</code></td><td><code>parse_chunk</code></td></tr>
+<tr><td>OAuth 设备码登录</td><td><code>account_schema</code> + <code>begin_device_flow</code> + <code>poll_device_flow</code></td></tr>
+<tr><td>OAuth 回调登录</td><td><code>account_schema</code> + <code>build_auth_start</code> + <code>handle_auth_callback</code></td></tr>
+<tr><td>token 需要定时刷新</td><td><code>refresh_auth</code> + <code>SCHEDULED_REFRESH = True</code></td></tr>
+<tr><td>运行时刷新 token 要落库</td><td><code>await p.persist_account_fields({...})</code></td></tr>
+<tr><td>账密登录换 ticket / Cookie</td><td><code>init_auth</code> + 需要的聊天/模型钩子</td></tr>
+<tr><td>只想拒绝某些模型或消息</td><td><code>check_message</code></td></tr>
+<tr><td>上游不认 function calling</td><td><code>p.build_tools_prompt</code> + <code>p.parse_tool_calls</code>（解析框架已内置）</td></tr>
+</tbody></table></div>
+
+<h2 id="hooks">钩子速查</h2>
+<figure class="shot" data-shot="cap-code-channel/hooks.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">钩子速查</span></div><button class="shot-open" type="button" aria-label="放大截图：钩子速查"><img src="assets/screenshots/cap-code-channel/hooks.png" alt="钩子速查" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-code-channel/hooks.png</code></div></div></figure>
+<h3>认证、账号和授权</h3>
+<div class="table-wrap"><table><thead><tr><th>钩子</th><th>签名</th><th>用途</th></tr></thead><tbody>
+<tr><td><code>init_auth</code></td><td>(p, is_check=False) -> bool</td><td>首次使用、失效自愈、体检</td></tr>
+<tr><td><code>check_auth</code> / <code>is_init</code> / <code>health_check</code></td><td>(p)</td><td>检查登录态 / 凭据就绪 / 健康检查</td></tr>
+<tr><td><code>account_schema</code></td><td>() -> dict</td><td>声明前端账号字段和授权入口</td></tr>
+<tr><td><code>begin_device_flow</code> / <code>poll_device_flow</code></td><td>(p[, poll_params]) -> dict</td><td>设备码授权启动与单步轮询</td></tr>
+<tr><td><code>build_auth_start</code> / <code>handle_auth_callback</code></td><td>(name, …, cfg)</td><td>OAuth 跳转与回调</td></tr>
+<tr><td><code>refresh_auth</code></td><td>(p, account, cfg) -> dict</td><td>刷新 token，返回窄写字段</td></tr>
+</tbody></table></div>
+<h3>聊天、模型和请求</h3>
+<div class="table-wrap"><table><thead><tr><th>钩子</th><th>签名</th><th>用途</th></tr></thead><tbody>
+<tr><td><code>fetch_models</code></td><td>(p) -> list[dict]</td><td>自定义模型列表</td></tr>
+<tr><td><code>stream_chat</code></td><td>(p, model_id, messages, **kwargs)</td><td>自定义流式聊天，yield 统一帧</td></tr>
+<tr><td><code>non_stream_chat</code></td><td>(…) -> dict</td><td>自定义非流式响应</td></tr>
+<tr><td><code>headers</code> / <code>payload</code></td><td>(p, …) -> dict</td><td>请求头 / 请求体后处理</td></tr>
+<tr><td><code>build_url</code> / <code>base_url</code></td><td>(p[, kwargs]) -> str</td><td>覆盖聊天 URL / 全部出站地址</td></tr>
+<tr><td><code>parse_chunk</code></td><td>(p, event_str) -> dict</td><td>覆盖一帧 SSE 解析</td></tr>
+</tbody></table></div>
+<h3>回调、配额和生命周期</h3>
+<div class="table-wrap"><table><thead><tr><th>钩子</th><th>用途</th></tr></thead><tbody>
+<tr><td><code>on_response_headers</code> / <code>update_quota</code></td><td>响应头回调 / 从响应头更新配额</td></tr>
+<tr><td><code>check_message</code> / <code>record_message</code></td><td>请求前放行判定 / 自定义记账</td></tr>
+<tr><td><code>on_channel_attached</code> / <code>close</code></td><td>配置注入后初始化 / 释放资源</td></tr>
+<tr><td><code>clear_conversations</code></td><td>清理上游会话</td></tr>
+</tbody></table></div>
+
+<h2 id="switches">类级开关</h2>
+<figure class="shot" data-shot="cap-code-channel/switches.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">类级开关</span></div><button class="shot-open" type="button" aria-label="放大截图：类级开关"><img src="assets/screenshots/cap-code-channel/switches.png" alt="类级开关" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-code-channel/switches.png</code></div></div></figure>
+<div class="table-wrap"><table><thead><tr><th>开关</th><th>默认</th><th>作用</th></tr></thead><tbody>
+<tr><td><code>SUPPORTS_TOKEN_AUTO_REFRESH</code></td><td>False</td><td>凭据过期后能否自愈；True 时前端标「已过期（等待自动刷新）」</td></tr>
+<tr><td><code>SCHEDULED_REFRESH</code></td><td>False</td><td>纳入每日 10:00 主动刷新（需同时写 <code>refresh_auth</code>）</td></tr>
+<tr><td><code>SUPPORTS_MULTI_MESSAGES</code></td><td>False</td><td>是否把多轮 messages 整批发给上游</td></tr>
+<tr><td><code>TOOLS_AS_PROMPT</code> / <code>TOOLS_PROMPT_FORMAT</code></td><td>False / "xml"</td><td>上游不认 function calling 时工具说明进 system；形态 xml/json/hermes</td></tr>
+<tr><td><code>REQUIRES_BASE_URL</code></td><td>True</td><td>渠道地址是否必填；不打外网的 spec 写 False 豁免</td></tr>
+<tr><td><code>ACCOUNT_FIELDS</code></td><td>()</td><td>账号字段名清单，挂实例属性</td></tr>
+<tr><td><code>APPLY_CLIENT_PRESET</code></td><td>True</td><td>是否套客户端伪装头；上游校验自家 CLI 头时写 False 硬关</td></tr>
+</tbody></table></div>
+
+<h2 id="p-helpers"><code>p</code> 上最常用的东西</h2>
+<figure class="shot" data-shot="cap-code-channel/p-helpers.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">p 上最常用的东西</span></div><button class="shot-open" type="button" aria-label="放大截图：p 上最常用的东西"><img src="assets/screenshots/cap-code-channel/p-helpers.png" alt="p 上最常用的东西" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-code-channel/p-helpers.png</code></div></div></figure>
+<div class="table-wrap"><table><thead><tr><th>属性 / 方法</th><th>含义</th></tr></thead><tbody>
+<tr><td><code>p.base_url</code></td><td>管理端「渠道配置」里填写的渠道地址；不要在 spec 里写死</td></tr>
+<tr><td><code>p.api_key</code> / <code>p.username</code> / <code>p.password</code></td><td>渠道 / 账号配置派生的凭据</td></tr>
+<tr><td><code>p.proxy</code> / <code>p.timeout_seconds</code></td><td>统一出口代理配置 / 请求超时</td></tr>
+<tr><td><code>p._channel</code></td><td>渠道领域对象：base_url、protocol、chat_protocols、billing_mode</td></tr>
+<tr><td><code>p._make_session()</code> / <code>p.send_sse_request(...)</code></td><td>遵循渠道代理的 HTTP session / SSE 请求（带请求留痕）</td></tr>
+<tr><td><code>p.build_openai_response(id, model, content, …)</code></td><td>构造统一 OpenAI 响应；id 传 <code>generate_completion_id()</code>（已注入）</td></tr>
+<tr><td><code>p._raise_upstream_error(error)</code></td><td>复用框架错误归一，不要自己复制一份</td></tr>
+<tr><td><code>p.build_tools_prompt</code> / <code>p.prepare_provider_messages</code> / <code>p.parse_tool_calls</code></td><td>文本工具三件套：说明 prompt / 拼 system / 文本→工具调用解析</td></tr>
+<tr><td><code>await p.persist_account_fields({...})</code></td><td>运行时刷新出的字段窄写回本账号并同步池内实例</td></tr>
+</tbody></table></div>
+
+<h2 id="frames">流式统一帧</h2>
+<figure class="shot" data-shot="cap-code-channel/frames.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">流式统一帧</span></div><button class="shot-open" type="button" aria-label="放大截图：流式统一帧"><img src="assets/screenshots/cap-code-channel/frames.png" alt="流式统一帧" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-code-channel/frames.png</code></div></div></figure>
+<pre><code>yield {}  # 可选但推荐：先通知主链路上游已接通
+yield {"content": "正文增量", "thinking": "", "tool_calls": []}
+yield {"content": "", "thinking": "思考增量", "tool_calls": []}
+yield {"content": "", "thinking": "", "tool_calls": [{
+    "index": 0, "id": "call_1", "type": "function",
+    "function": {"name": "search", "arguments": {"q": "天气"}}}]}
+# 也可带 usage / finish_reason / done；上游返回真实 usage 时才需要覆盖</code></pre>
+
+<h2 id="samples">样例与演示片段</h2>
+<figure class="shot" data-shot="cap-code-channel/samples.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">样例与演示片段</span></div><button class="shot-open" type="button" aria-label="放大截图：样例与演示片段"><img src="assets/screenshots/cap-code-channel/samples.png" alt="样例与演示片段" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-code-channel/samples.png</code></div></div></figure>
+<div class="table-wrap"><table><thead><tr><th>样例</th><th>演示内容</th><th>用到的钩子</th></tr></thead><tbody>
+<tr><td><strong>最小可跑：EchoChannel</strong></td><td>原样回吐用户最后一条消息，验证「贴代码→出渠道」链路</td><td>init_auth / fetch_models / stream_chat</td></tr>
+<tr><td><strong>OAuth 设备码授权渠道</strong></td><td>声明前端字段 + 授权按钮 + 轮询 + 定时刷新令牌；聊天走渠道配置，只用 headers 塞 Authorization</td><td>account_schema / begin_device_flow / poll_device_flow / refresh_auth / init_auth / headers</td></tr>
+<tr><td><strong>OpenAI 兼容反代</strong></td><td>上游已是标准 /v1/chat/completions；聊天一行不写，只用 init_auth + headers 塞访问密码</td><td>init_auth / headers / payload</td></tr>
+<tr><td><strong>账密登录抓取型</strong></td><td>账号密码换 ticket / Cookie、非标 SSE、登录态维护和失效自愈等组合场景</td><td>init_auth / check_auth / fetch_models / stream_chat / non_stream_chat / clear_conversations</td></tr>
+</tbody></table></div>
+<div class="info"><strong>下面是理解钩子关系的演示片段，不是完整实现。</strong>它们故意省略真实认证、签名、持久化、错误处理和协议细节；请按自己的上游改写后再放入「源码」Tab，不要直接用于生产。</div>
+
+<h3>兼容接口：只加一个请求头</h3>
+<pre><code>class TenantChannel:
+    @staticmethod
+    async def init_auth(p, is_check=False):
+        # 标准聊天流程继续由配置驱动实现
+        return bool(p.api_key and p.base_url)
+
+    @staticmethod
+    def headers(p, base_headers, kwargs):
+        # 只在框架生成的请求头上补充自己的字段
+        base_headers["X-Tenant-Id"] = p.username
+        return base_headers</code></pre>
+
+<h3>设备码授权：三个钩子的配合</h3>
+<pre><code>class DeviceChannel:
+    @staticmethod
+    def account_schema():
+        # 声明字段与授权入口；真实字段按上游协议补充
+        return {
+            "fields": [{"key": "access_token", "type": "password", "secret": True}],  # 其他字段省略
+
+            "auth_start": {"enabled": True, "mode": "device_code"},
+        }
+
+    @staticmethod
+    async def begin_device_flow(p):
+        # 请求细节省略，只返回前端展示信息和轮询参数
+        return {"auth_url": "...", "user_code": "...", "interval": 5,
+                "poll_params": {"device_code": "..."}}
+
+    @staticmethod
+    async def poll_device_flow(p, poll_params):
+        # pending 继续轮询；成功字段放进 account_data
+        return {"status": "authorized", "account_data": {"access_token": "..."}}</code></pre>
+
+<h3>非标准 SSE：只覆盖一帧解析</h3>
+<pre><code>class SseChannel:
+    @staticmethod
+    def parse_chunk(p, event_str):
+        # 上游自定义事件 → 平台统一帧；解析不了可返回 None
+        data = json.loads(event_str.removeprefix("data:").strip())
+        return {
+            "content": data.get("answer", ""),
+            "thinking": data.get("analysis", ""),
+            "tool_calls": [],
+        }</code></pre>
+
+<p>文档页只提供上述说明性片段；完整的认证和协议实现应由你根据上游接口自行设计，并通过框架提供的 <code>p._make_session()</code>、<code>p.send_sse_request()</code> 等能力接入。</p>
+
+<h2 id="errors">常见错误</h2>
+<figure class="shot" data-shot="cap-code-channel/errors.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">常见错误</span></div><button class="shot-open" type="button" aria-label="放大截图：常见错误"><img src="assets/screenshots/cap-code-channel/errors.png" alt="常见错误" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-code-channel/errors.png</code></div></div></figure>
+<div class="table-wrap"><table><thead><tr><th>错误</th><th>处理</th></tr></thead><tbody>
+<tr><td>渠道地址留空就保存</td><td>保存被拒绝；填地址，或写 <code>REQUIRES_BASE_URL = False</code> 声明不打外网</td></tr>
+<tr><td>继承 BaseProvider 报错</td><td>删掉继承，写普通类；框架能力通过 <code>p.xxx</code> 使用</td></tr>
+<tr><td>写了 stream_chat 没有 yield</td><td>流式无内容；至少 yield 统一帧</td></tr>
+<tr><td>account_schema 字段名和 account_data 对不上</td><td>两边 key 必须一致，否则授权后不回填</td></tr>
+<tr><td>base_url 写在代码里</td><td>管理端填的地址不生效；用 <code>p.base_url</code></td></tr>
+<tr><td>自己 import aiohttp 发请求</td><td>绕开出站代理、连接复用和请求留痕；用 <code>p._make_session()</code></td></tr>
+<tr><td>每个钩子都重写</td><td>越容易漏协议、工具调用、日志和重试；优先只写一个最小钩子</td></tr>
+</tbody></table></div>
+
+<div class="info"><strong>保存即热更新</strong>保存 <code>code</code> 后，后端校验语法、扫描唯一 spec 类并热更新适配器，进程内立即生效无需重启。语法错、无 spec、钩子拼错、误继承基类、渠道地址缺失都会返回 HTTP 400，不落库。代码在服务进程权限下执行，只应由可信管理员编辑；它不是沙箱。</div>
+
+<p><a href="cap-llm-server.html">← 大模型网关能力详解</a> · <a href="users-admin.html#channel-workflow">渠道配置操作 →</a></p>
+
+<footer class="footer"><span><a href="cap-llm-server.html">← 上一篇：大模型网关</a></span><span><a href="cap-agent.html">下一篇：Agent →</a></span></footer>
+</article></main></div>
+</body></html>

@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>API 接入指南 · Ai Lubricant</title>
+  <link rel="stylesheet" href="assets/docs.css?v=20260831-3"><script src="assets/docs.js?v=20260831-3" defer></script>
+</head>
+<body>
+<button class="nav-toggle" id="nav-toggle" aria-expanded="false">☰ 打开文档导航</button>
+<div class="wrap">
+<aside class="sidebar">
+  <div class="brand"><span class="dot">A</span> Ai Lubricant</div>
+  <div class="nav-group">产品</div><nav>
+    <a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a>
+  </nav>
+  <div class="nav-group">能力详解</div><nav>
+    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
+  </nav>
+  <div class="nav-group">操作手册</div><nav>
+    <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
+  </nav>
+  <div class="nav-group">部署与接入</div><nav>
+    <a href="users-api.html"><span class="ic">↔</span>API 接入</a><a href="governance.html"><span class="ic">◈</span>安全与治理</a><a href="deploy.html"><span class="ic">⇩</span>生产部署</a><a href="desktop.html"><span class="ic">▭</span>Windows 桌面版</a><a href="architecture.html"><span class="ic">⚖</span>技术白皮书</a><a href="env-vars.html"><span class="ic">⊧</span>环境变量</a><a href="local-debug.html"><span class="ic">⚙</span>本地调试</a>
+  </nav>
+</aside>
+<main class="main"><div class="topbar"><button id="theme-toggle" type="button">☾ 深色</button><button id="print-page" type="button">⎙ 打印</button></div>
+<article class="content">
+<header class="hero"><h1>API 调用指南</h1><p class="desc">通过 OpenAI / Anthropic 兼容接口使用平台。多数客户端无需修改即可接入，只需把 base URL 与 API Key 指向本平台。</p></header>
+
+<div class="toc"><strong>本页目录</strong><a href="#base">Base URL 与鉴权</a><a href="#models">模型列表</a><a href="#chat">对话补全</a><a href="#messages">Anthropic Messages</a><a href="#responses">Responses</a><a href="#coding-clients">编码客户端</a><a href="#media">图片/视频/音频</a><a href="#usage">用量查询</a><a href="#errors">错误与限流</a><a href="#sdk">SDK 示例</a><a href="#security">安全</a></div>
+
+<h2 id="base">1. Base URL 与鉴权</h2>
+<p>将下面示例中的 <code>https://api.example.com</code> 替换为你的平台入口地址。生产部署应通过 HTTPS 访问，由 nginx 反向代理到数据服务 <code>:8001</code>。</p>
+<table><thead><tr><th>请求头</th><th>格式</th><th>适用场景</th></tr></thead><tbody>
+<tr><td><code>Authorization</code></td><td><code>Bearer &lt;api-key&gt;</code></td><td>OpenAI 风格，所有接口通用。</td></tr>
+<tr><td><code>x-api-key</code></td><td><code>&lt;api-key&gt;</code></td><td>Anthropic 风格；<code>/v1/messages</code> 同时支持。当两者都存在时 <code>x-api-key</code> 优先，便于 playground 与多 key 场景。</td></tr>
+</tbody></table>
+<div class="danger"><strong>API Key 是访问凭据</strong>不要在浏览器、App 客户端、Git、日志或截图里明文出现。如果部署关闭了全局 API Key 校验，所有 /v1 请求将无需鉴权，这只能用于受控临时调试，绝不可用于公网。</div>
+
+<h2 id="models">2. 获取模型列表</h2>
+<pre><code>curl https://api.example.com/v1/models</code></pre>
+<p>返回 OpenAI 格式的可用模型。每个模型由平台的路由映射到一个或多个渠道账号。<code>id</code> 是请求时传入的模型名。</p>
+<pre><code>{
+  "object": "list",
+  "data": [
+    { "id": "gpt-4o", "object": "model", "created": 1700000000, "owned_by": "..." }
+  ]
+}</code></pre>
+
+<h2 id="chat">3. Chat Completions（OpenAI 兼容）</h2>
+<pre><code>curl https://api.example.com/v1/chat/completions \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [{"role": "user", "content": "用一句话介绍模型代理平台"}],
+    "stream": false
+  }'</code></pre>
+<h3 id="chat-stream">3.1 流式</h3>
+<pre><code>curl https://api.example.com/v1/chat/completions \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [{"role": "user", "content": "讲一个技术笑话"}],
+    "stream": true
+  }'</code></pre>
+<p>响应是 SSE，每条以 <code>data: </code> 开头，最后以 <code>data: [DONE]</code> 结束。平台会过滤上游心跳/注释事件；若上游在未完整结束前断开且开启了流式完整性策略，会返回流式错误而非伪造成正常结束，便于客户端重试。</p>
+<h3 id="chat-tools">3.2 工具调用</h3>
+<p>支持原生 <code>tools</code> 的渠道直接转发；对不支持原生工具调用的渠道，平台可注入工具提示词并解析模型输出为工具调用。请求格式与 OpenAI 一致，无需特殊适配。</p>
+
+<h2 id="messages">4. Anthropic Messages 兼容</h2>
+<pre><code>curl https://api.example.com/v1/messages \
+  -H "x-api-key: $API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-3-5-sonnet",
+    "max_tokens": 1024,
+    "messages": [{"role": "user", "content": "用一句话介绍 Agent 节点系统"}]
+  }'</code></pre>
+<ul>
+  <li>同时支持 <code>/v1/messages</code> 与无前缀的 <code>/messages</code>。</li>
+  <li>错误返回 Anthropic 格式：<code>{"type":"error","error":{"type":"...","message":"..."}}</code>。</li>
+  <li><strong>同协议直通：</strong>当上游渠道本身就是 Anthropic 协议、且流式与非流式形态一致时，平台原样转发上游 SSE/JSON，保留 <code>signature</code>、<code>cache_control</code>、content block 顺序、<code>citations</code> 等全部字段，不做重写。</li>
+  <li><strong>连接复用：</strong>平台复用出站连接池，避免每次请求重复建立 TCP/TLS 连接，减少握手等待，让高频 LLM 请求更快返回。</li>
+  <li>只有跨协议路径（例如客户端发 Anthropic、上游是 OpenAI）才做字段映射：<code>thinking</code> 与 <code>reasoning_content</code> 双向转换、工具调用与 <code>finish_reason</code> 映射。</li>
+  <li>关闭思考一律通过<strong>省略参数</strong>表达，不会向上游注入 <code>reasoning_effort: none</code> 之类的非标准值污染请求。</li>
+</ul>
+
+<h2 id="responses">5. OpenAI Responses 兼容</h2>
+<pre><code>curl https://api.example.com/v1/responses \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o",
+    "input": "总结一下多渠道代理的核心价值"
+  }'</code></pre>
+<p>同时支持 <code>/v1/responses</code> 与 <code>/responses</code>。可用于偏好 Responses API 风格的客户端和 SDK。</p>
+
+<h2 id="coding-clients">6. 编码类客户端接入</h2>
+<p>Claude Code、Codex CLI、Cursor、Cline、Roo Code、opencode 等编码工具通常只需把 base URL 与 API Key 指向平台即可使用，不需要改造。平台在渠道侧提供<strong>客户端模板</strong>能力：当上游要求特定客户端形态时，管理员为该渠道配置对应模板，平台会按目标协议构造请求，并补齐上游期望的请求头与默认字段。</p>
+<div class="table-wrap"><table><thead><tr><th>客户端模板</th><th>上游请求形态</th></tr></thead><tbody>
+<tr><td><code>claude-code</code></td><td>Anthropic Messages</td></tr>
+<tr><td><code>codex-cli</code>（Codex Desktop）、<code>codex-tui</code>（终端版 Codex）</td><td>OpenAI Responses（<code>input</code> / <code>instructions</code> 形态）</td></tr>
+<tr><td><code>codex-openai</code>、<code>cursor</code>、<code>cline</code>、<code>roo-code</code>、<code>opencode</code></td><td>OpenAI Chat Completions</td></tr>
+</tbody></table></div>
+<p>平台还会识别客户端类型（请求头特征、body 中的 <code>client_type</code>、或 system 提示词特征），据此应用对应的默认字段。<strong>你显式传入的标准参数始终优先</strong>——例如已带 <code>reasoning_effort</code>（OpenAI）、<code>thinking</code>（Anthropic）或 <code>reasoning</code>（Responses）时，平台不会覆盖。</p>
+<div class="note"><strong>这是渠道侧配置，不是调用方负担</strong>客户端模板由管理员在渠道上配置，用于满足上游对客户端形态的要求。作为 API 调用方，你按标准协议请求即可。实现细节见<a href="architecture.html#preset">技术白皮书</a>。</div>
+
+<h2 id="media">7. 图片/视频/音频生成</h2>
+<table><thead><tr><th>接口</th><th>说明</th></tr></thead><tbody>
+<tr><td><code>POST /v1/images/generations</code></td><td>图片生成，模型需支持图片输出能力（由模型元数据 <code>output_modalities</code> 决定，不加渠道支持开关）。</td></tr>
+<tr><td><code>POST /v1/videos/generations</code></td><td>视频生成；取决于上游模型与渠道能力。</td></tr>
+<tr><td><code>POST /v1/audio/speech</code></td><td>文本转语音（TTS）。</td></tr>
+</tbody></table>
+<div class="note"><strong>能力判定</strong>图片/视频生成是否可用由模型元数据 <code>output_modalities</code> 判断，而不是渠道开关。某模型不可用说明该路由当前没有支持该模态的渠道账号。</div>
+
+<h2 id="usage">8. 用量查询</h2>
+<h3 id="billing">8.1 账单用量</h3>
+<pre><code>curl "https://api.example.com/v1/dashboard/billing/usage" \
+  -H "Authorization: Bearer $API_KEY"</code></pre>
+<p>返回该 key 的累计用量，包括 prompt/completion/total token、请求数与时间戳。未提供 key 时按 anonymous 口径处理，不会返回 401。</p>
+<h3 id="tokencount">8.2 估算 token</h3>
+<pre><code>curl https://api.example.com/v1/token/count \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [{"role": "user", "content": "估算这段文本的 token 数"}]
+  }'</code></pre>
+<p>这是粗略估算（基于字符数），不调用真实 tokenizer，仅用于 UI 提示，不要用于精确计费。</p>
+
+<h2 id="errors">9. 错误与限流</h2>
+<table><thead><tr><th>状态码</th><th>含义</th><th>建议</th></tr></thead><tbody>
+<tr><td>401</td><td>缺少或无效 API Key（OpenAI: <code>authentication_error</code>）</td><td>核对 key 与作用域；key 可能被禁用或过期。</td></tr>
+<tr><td>403</td><td>key 被禁用或权限不足（<code>permission_error</code>）</td><td>确认 key 授权的模型/渠道；父 key 的配额/约束也会作用到子 key。</td></tr>
+<tr><td>404</td><td>资源不存在（<code>not_found_error</code>）</td><td>检查模型名与路径。</td></tr>
+<tr><td>422</td><td>请求参数校验失败（<code>validation_error</code>）</td><td>按错误详情修正 body。</td></tr>
+<tr><td>429</td><td>限流（<code>rate_limit_error</code>）</td><td>退避重试；平台会在账号/渠道维度自动冷却和切换。</td></tr>
+<tr><td>5xx</td><td>上游或平台错误（<code>server_error</code> / <code>api_error</code>）</td><td>指数退避重试；持续 5xx 联系管理员查看请求日志。</td></tr>
+</tbody></table>
+<p>错误体遵循请求协议：OpenAI 路径返回 <code>{"error":{"message","type","code"}}</code>，Anthropic 路径返回 <code>{"type":"error","error":{...}}</code>。上下文超限等不可重试错误会被归一化，便于客户端统一处理。</p>
+<div class="note"><strong>幂等与重试</strong>平台对单次请求只做一次限流预占，内部渠道重试不会重复计数。客户端侧建议使用 <code>Idempotency-Key</code> 或请求指纹避免上游重试导致重复副作用。</div>
+
+<h2 id="sdk">10. SDK 示例</h2>
+<h3 id="openai-sdk">10.1 OpenAI Python SDK</h3>
+<pre><code>from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://api.example.com/v1",
+    api_key="YOUR_API_KEY",
+)
+
+# 非流式
+resp = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "你好"}],
+)
+print(resp.choices[0].message.content)
+
+# 流式
+stream = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "继续"}],
+    stream=True,
+)
+for chunk in stream:
+    delta = chunk.choices[0].delta.content
+    if delta:
+        print(delta, end="", flush=True)</code></pre>
+<h3 id="anthropic-sdk">10.2 Anthropic Python SDK</h3>
+<pre><code>from anthropic import Anthropic
+
+client = Anthropic(
+    base_url="https://api.example.com",
+    api_key="YOUR_API_KEY",
+)
+
+resp = client.messages.create(
+    model="claude-3-5-sonnet",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "你好"}],
+)
+print(resp.content[0].text)</code></pre>
+<div class="note"><strong>base_url 写法</strong>OpenAI SDK 末尾应带 <code>/v1</code>；Anthropic SDK 用根地址即可（SDK 会自动追加 <code>/v1/messages</code>）。不要把 API Key 写进前端或移动端客户端；浏览器/移动端应通过自建后端中转调用平台。</div>
+
+<h2 id="security">11. 安全与运维建议</h2>
+<ul>
+  <li>客户端只通过 HTTPS 调用，并校验证书；不要为绕过证书问题关闭验证。</li>
+  <li>不同环境（开发/预发布/生产）使用不同 API Key，避免一个 key 泄漏影响全部环境。</li>
+  <li>对高频客户端设置合理超时、连接复用和退避；流式请求保持 SSE 连接稳定，避免频繁断开重连。</li>
+  <li>生产前先发非流式、流式、工具调用、错误场景四类请求，验证路由、用量与日志符合预期。</li>
+  <li>不要用 <code>?token=</code> 方式把 key 放进 URL；优先使用请求头。</li>
+  <li>遇到 429/5xx 时，参考平台文档实现指数退避；不要立即重试放大流量。</li>
+</ul>
+
+<footer class="footer"><span><a href="users-mobile.html">← 上一篇：移动端</a></span><span><a href="governance.html">下一篇：安全与治理 →</a></span></footer>
+</article></main></div>
+</body></html>

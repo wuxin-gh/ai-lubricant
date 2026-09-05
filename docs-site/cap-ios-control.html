@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="iOS 控制能力详解：iOS 主机节点通过 go-ios + WebDriverAgent 实现自动化设备管理，设备发现、一键接入、WDA 自动签名/安装/续期，与 Android 完全相同的 device-control 协议。">
+  <title>iOS 控制 · 能力详解 · Ai Lubricant</title>
+  <link rel="stylesheet" href="assets/docs.css?v=20260831-3"><script src="assets/docs.js?v=20260831-3" defer></script>
+</head>
+<body>
+<button class="nav-toggle" id="nav-toggle" aria-expanded="false">☰ 打开文档导航</button>
+<div class="wrap">
+<aside class="sidebar">
+  <div class="brand"><span class="dot">A</span> Ai Lubricant</div>
+  <div class="nav-group">产品</div><nav>
+    <a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a>
+  </nav>
+  <div class="nav-group">能力详解</div><nav>
+    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-android-control.html"><span class="ic">🤖</span>Android 控制</a><a href="cap-ios-control.html"><span class="ic">📲</span>iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
+  </nav>
+  <div class="nav-group">操作手册</div><nav>
+    <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
+  </nav>
+  <div class="nav-group">部署与接入</div><nav>
+    <a href="users-api.html"><span class="ic">↔</span>API 接入</a><a href="governance.html"><span class="ic">◈</span>安全与治理</a><a href="deploy.html"><span class="ic">⇩</span>生产部署</a><a href="desktop.html"><span class="ic">▭</span>Windows 桌面版</a><a href="architecture.html"><span class="ic">⚖</span>技术白皮书</a><a href="env-vars.html"><span class="ic">⊧</span>环境变量</a><a href="local-debug.html"><span class="ic">⚙</span>本地调试</a>
+  </nav>
+</aside>
+<main class="main"><div class="topbar"><button id="theme-toggle" type="button">☾ 深色</button><button id="print-page" type="button">⎙ 打印</button></div>
+<article class="content">
+<header class="hero"><h1>iOS 控制</h1><p class="desc">iOS 主机节点通过 go-ios + WebDriverAgent 实现自动化设备管理——<strong>设备自动发现、一键接入、WDA 自动签名/安装/续期</strong>。服务端视角与 Android 完全相同：相同的 device-control 协议、相同的 15 个命令、相同的屏幕树格式。</p></header>
+
+<div class="table-wrap"><table>
+<thead><tr><th>问题</th><th>传统 WDA 手工方式</th><th>Ai Lubricant iOS 控制</th></tr></thead>
+<tbody>
+<tr><td>接入方式</td><td>手填 UDID、手敲 shell 命令</td><td><strong>自动发现设备</strong>，界面点击「接入」</td></tr>
+<tr><td>WDA 签名</td><td>Mac 上用 Xcode 手工签名，7 天过期重签</td><td>上传签名材料一次，服务端自动签名/安装/续期</td></tr>
+<tr><td>跨平台</td><td>必须 macOS + Xcode</td><td>go-ios 纯 Go 签名，Linux/Windows/Mac 均可</td></tr>
+<tr><td>多设备</td><td>每台设备单独配置、单独启动</td><td>一个节点自动管理多台 iPhone</td></tr>
+<tr><td>续期监控</td><td>手工记日历，到期前手动重签</td><td>14 天前自动续签，无需人工操作</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="architecture">架构：iOS 主机节点 + 自动化管理</h2>
+<figure class="shot" data-shot="cap-ios-control/architecture.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">架构：iOS 主机节点 + 自动化管理</span></div><button class="shot-open" type="button" aria-label="放大截图：架构：iOS 主机节点 + 自动化管理"><img src="assets/screenshots/cap-ios-control/architecture.png" alt="架构：iOS 主机节点 + 自动化管理" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径,或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-ios-control/architecture.png</code></div></div></figure>
+
+<p>iOS 设备由 <strong>iOS 主机节点</strong>（<code>node-ios</code>）驱动，一台物理主机（Mac/Linux/Windows）+ USB 连接多台 iPhone → 运行一个 <code>node-ios</code> 进程 → 自动发现与管理所有设备。</p>
+
+<div class="table-wrap"><table><thead><tr><th>层次</th><th>组件</th><th>职责</th></tr></thead><tbody>
+<tr><td>控制面</td><td>NodeConnect</td><td>设备发现上报、认领指令下发、WDA job 调度、进度事件上报（与 Agent 节点、构建节点同款双向帧协议）</td></tr>
+<tr><td>数据面</td><td>device-control WebSocket</td><td>每台 iPhone 一条独立 WS 连接，v0 协议与 Android 完全相同，15 个命令、屏幕树格式、凭据隔离</td></tr>
+<tr><td>设备通信</td><td>go-ios v1.3.2</td><td>纯 Go 实现的 iOS 设备通信库（USB/WiFi），内置 signing 包支持 ASC API、证书管理、profile 构建、IPA 重签（基于 go-codesign），<strong>不依赖 macOS</strong></td></tr>
+<tr><td>自动化引擎</td><td>WebDriverAgent</td><td>Apple XCTest 框架的自动化 runner（唯一合法的跨 App 控制通道），节点通过 go-ios 启动并维护 WDA session，转译 device-control 命令为 WebDriver 调用</td></tr>
+</tbody></table></div>
+
+<div class="note"><strong>协议透明</strong>服务端无法区分 Android APK 与 iOS 节点——协议、命令、屏幕树格式完全一致。Agent 调用同一套 MCP device-control 工具，无需关心设备平台。</div>
+
+<h2 id="workflow">自动化接入流程（无需手工操作）</h2>
+<figure class="shot" data-shot="cap-ios-control/workflow.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">自动化接入流程</span></div><button class="shot-open" type="button" aria-label="放大截图：自动化接入流程"><img src="assets/screenshots/cap-ios-control/workflow.png" alt="自动化接入流程" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-ios-control/workflow.png</code></div></div></figure>
+
+<h3>1. 设备发现</h3>
+<p>iOS 主机节点启动后自动枚举所有 USB/WiFi 连接的 iPhone（通过 go-ios），上报到服务端：</p>
+<ul>
+<li>UDID（设备唯一标识）</li>
+<li>设备名称（用户设置的 iPhone 名称）</li>
+<li>机型（iPhone 14 Pro / iPhone 15 等）</li>
+<li>系统版本（iOS 17.2.1 等）</li>
+<li>连接方式（USB / WiFi）</li>
+<li>当前状态（未接入 / 已接入 / WDA 状态）</li>
+</ul>
+
+<h3>2. 一键接入</h3>
+<p>用户在「我的工具」→「设备」Tab 操作：</p>
+<ol>
+<li>点击「添加设备」→ 选择「iOS」</li>
+<li>选择一个在线的 iOS 主机节点</li>
+<li>点击「扫描设备」——界面显示该节点发现的所有 iPhone 列表（名称/型号/系统版本/UDID 尾号/连接方式）</li>
+<li>点击设备旁的「接入」按钮——服务端自动完成：
+   <ul>
+     <li>签发一次性配对码</li>
+     <li>通过 NodeConnect 下发 <code>NodeIosClaimDevice</code> 指令（含配对码、UDID、设备标签）</li>
+     <li>节点收到后调用既有的 <code>devicecontrol.Pair</code> 流程（HTTP 兑换配对码 → 写入 0600 凭据文件）</li>
+     <li>启动该设备的 device-control WebSocket 连接循环</li>
+   </ul>
+</li>
+<li>接入成功后设备显示为在线，但 WDA 状态为「未准备」——需要进行 WDA 准备</li>
+</ol>
+
+<h3>3. WDA 自动化准备</h3>
+<p>用户首次使用前需要准备签名材料与 WDA 产物（一次性操作，后续复用）：</p>
+
+<h4>3.1 签名配置管理</h4>
+<p>点击顶部「签名配置」按钮，上传签名材料：</p>
+<ul>
+<li><strong>ASC p8 API key（推荐）</strong>：需要 $99/年付费开发者账号
+  <ul>
+    <li>上传字段：p8 私钥文件内容、Key ID、Issuer ID、Team ID</li>
+    <li>自动化程度：完全自动（UDID 注册 → 证书创建 → profile 构建 → 签名 → 安装 → 续期，全程无人工介入）</li>
+    <li>到期周期：1 年</li>
+  </ul>
+</li>
+<li><strong>P12 + mobileprovision（半自动）</strong>：手动从 Xcode 导出
+  <ul>
+    <li>上传字段：.p12 证书文件、证书密码、.mobileprovision 文件</li>
+    <li>自动化程度：首次手动导出，后续自动签名安装</li>
+    <li>到期周期：取决于证书类型</li>
+  </ul>
+</li>
+<li><strong>免费 Apple ID（仅手动）</strong>：无付费账号
+  <ul>
+    <li>需要在 Mac 上用 Xcode 手工签名 WDA，上传已签名 .ipa</li>
+    <li><strong>无法自动续期</strong>，7 天过期后必须重新手工签名上传</li>
+  </ul>
+</li>
+</ul>
+
+<h4>3.2 WDA 产物管理</h4>
+<p>点击顶部「WDA 产物」按钮，上传预构建的 WebDriverAgent .ipa：</p>
+<ul>
+<li>一次性上传，全局复用（按 SHA256 去重，避免重复存储）</li>
+<li>可由管理员上传全局共享产物（owner_user_id 为 NULL），所有用户可见</li>
+<li>用户自己上传的产物仅自己可见</li>
+<li>界面显示产物名称、版本、文件大小、SHA256 哈希前缀</li>
+</ul>
+
+<h4>3.3 准备 WDA（一键启动 job）</h4>
+<p>点击设备详情的「准备 WDA」按钮：</p>
+<ol>
+<li>选择签名配置（下拉列表）</li>
+<li>选择 WDA 产物（下拉列表）</li>
+<li>点击「准备 WDA」——服务端下发 job：
+   <ul>
+     <li>签名材料经 TLS NodeConnect 一次性下发（不落日志/UI/GET 响应）</li>
+     <li>节点执行流水线：<strong>下载 .ipa → go-ios 签名（ASC: 注册 UDID + 创建证书 + 构建 profile + 重签；P12: 直接重签）→ zipconduit 安装 → testmanagerd 启动 → 动态端口转发（USE_PORT=8100 设备侧，宿主端口自动分配）→ WebDriver session 验证（GET /status → POST /session → 读 capabilities）</strong></li>
+     <li>节点上报 job 事件：阶段（queued/downloading/signing/installing/verifying/completed/failed）、进度百分比、阶段消息、错误码</li>
+   </ul>
+</li>
+<li>前端 2 秒轮询显示进度条与阶段信息（复用通用 job 轮询组件）</li>
+<li>成功后设备 WDA 状态变为「就绪」，显示 mobileprovision 到期时间</li>
+</ol>
+
+<h3>4. 自动续期监控</h3>
+<p>节点监控 mobileprovision 到期时间：</p>
+<ul>
+<li>14 天前：WDA 状态变为「将过期」，服务端定时扫描自动派发 renew job（无需人工点击）</li>
+<li>Renew job 流程：复用证书 ID（不重新创建证书）→ 仅重建 profile → 重签 → 重装 → 重启 runner → 验证成功才切换（失败保留旧 WDA）</li>
+<li>过期后：WDA 状态变为「已过期」，扫描器对终端错误发通知（如签名配置被删）；用户仍可手动「立即续期」兜底</li>
+</ul>
+
+<h3>5. 多设备管理</h3>
+<p>一个 iOS 主机节点可管理多台 iPhone：</p>
+<ul>
+<li>每台设备一条独立的 device-control WebSocket 连接</li>
+<li>每台设备独立的凭据文件（0600 权限）</li>
+<li>服务端视角：每台设备是独立的 <code>device_id</code>，与 Android 设备同级</li>
+<li>节点详情页显示当前主机的所有 iOS 设备列表与 WDA 状态</li>
+</ul>
+
+<h2 id="signing">签名方式对比</h2>
+<figure class="shot" data-shot="cap-ios-control/signing.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">签名方式对比</span></div><button class="shot-open" type="button" aria-label="放大截图：签名方式对比"><img src="assets/screenshots/cap-ios-control/signing.png" alt="签名方式对比" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-ios-control/signing.png</code></div></div></figure>
+
+<div class="table-wrap"><table><thead><tr><th>方式</th><th>要求</th><th>自动化程度</th><th>到期周期</th><th>使用场景</th></tr></thead><tbody>
+<tr><td>ASC p8 API key（推荐）</td><td>$99/年付费开发者账号</td><td>完全自动：UDID 注册 → 证书 → profile → 签名 → 安装 → 续期，全程无人工介入</td><td>1 年</td><td>生产环境、持续集成、多设备管理</td></tr>
+<tr><td>P12 + mobileprovision</td><td>手动 Xcode 导出</td><td>半自动：首次手动导出证书与 profile，后续自动签名安装</td><td>取决于证书类型</td><td>已有证书、无 ASC API 访问权限</td></tr>
+<tr><td>免费 Apple ID</td><td>无</td><td>仅手动：需在 Mac 上用 Xcode 手工签名，上传已签名 .ipa，<strong>无法自动续期</strong></td><td>7 天</td><td>临时测试、学习研究（不推荐生产）</td></tr>
+</tbody></table></div>
+
+<div class="warn"><strong>免费 Apple ID 限制</strong>免费账号 7 天过期且无官方 API 可自动化（不支持 keychain 访问、2FA 交互），平台不伪装成功。如需自动化，升级到付费开发者账号。</div>
+
+<h2 id="commands">功能：15 个操控命令（与 Android 相同）</h2>
+<figure class="shot" data-shot="cap-ios-control/commands.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">15 个操控命令</span></div><button class="shot-open" type="button" aria-label="放大截图：15 个操控命令"><img src="assets/screenshots/cap-ios-control/commands.png" alt="15 个操控命令" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-ios-control/commands.png</code></div></div></figure>
+
+<div class="table-wrap"><table><thead><tr><th>命令</th><th>iOS 行为</th></tr></thead><tbody>
+<tr><td><code>get_screen_state</code></td><td>WDA <code>/source</code> → 紧凑 TSV 树（与 Android 相同格式）；<code>/screenshot</code> → JPEG q80/≤700px/≤1.5MiB</td></tr>
+<tr><td><code>tap</code> / <code>long_press</code> / <code>double_tap</code></td><td>W3C Actions 坐标点击（物理像素），或 <code>node_id</code> 解析到 bounds 中心（iOS 无 <code>performAction</code>，统一点中心）</td></tr>
+<tr><td><code>swipe</code> / <code>scroll</code> / <code>scroll_to_node</code></td><td>WDA drag + 合成方向滑动；滚到节点最多 5 次尝试，300ms 间隔</td></tr>
+<tr><td><code>type_text</code> / <code>set_text</code></td><td>WDA <code>/keys</code> 与 <code>/element/{id}/value</code></td></tr>
+<tr><td><code>press_key</code></td><td>W3C key actions（enter/tab/delete/backspace/escape/space/dpad_*）</td></tr>
+<tr><td><code>dismiss_keyboard</code></td><td>WDA <code>/wda/keyboard/dismiss</code></td></tr>
+<tr><td><code>press_home</code></td><td>WDA <code>/wda/pressButton</code> home</td></tr>
+<tr><td><code>press_recents</code></td><td>App switcher 手势（近似）</td></tr>
+<tr><td><code>press_back</code></td><td><strong>返回 device_error</strong>——iOS 无系统级返回键（为 Android 平价声明，实际不可用）</td></tr>
+<tr><td><code>open_app</code> / <code>list_apps</code></td><td><code>package</code> = iOS bundle id；go-ios <code>installationproxy.BrowseUserApps</code> + <code>BrowseSystemApps</code></td></tr>
+</tbody></table></div>
+
+<h3>坐标系统</h3>
+<p>device-control 协议要求整数<strong>物理像素</strong>（spec §1）。WDA 返回的 rects 是 <strong>points</strong>（逻辑点），驱动自动乘以设备 scale（2×/3×）后发出 <code>bounds</code>/<code>screen</code>，tap 坐标除以 scale 后发给 WDA。<code>density</code>（Android densityDpi 整数）在 iOS 无对应概念，驱动上报 scale 派生值（2×→320, 3×→480），最佳努力。</p>
+
+<h2 id="deployment">部署模式</h2>
+<figure class="shot" data-shot="cap-ios-control/deployment.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">部署模式</span></div><button class="shot-open" type="button" aria-label="放大截图：部署模式"><img src="assets/screenshots/cap-ios-control/deployment.png" alt="部署模式" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-ios-control/deployment.png</code></div></div></figure>
+
+<h3>推荐：iOS 主机节点（自动化管理）</h3>
+<p>一台物理主机（Mac/Linux/Windows）+ USB Hub 连接多台 iPhone → 运行 <code>node-ios</code> 进程：</p>
+<ul>
+<li>自动发现所有设备（插拔热加载）</li>
+<li>用户界面一键接入、一键准备 WDA、一键续期</li>
+<li>签名材料与产物服务端托管，节点按需下载</li>
+<li>多设备并行管理，每设备独立状态</li>
+</ul>
+
+<h3>Sidecar 模式（开发/定制集成）</h3>
+<p>直接导入 Go 包 <code>device-control/ios/devicecontrol</code>，自己管理 WDA 生命周期：</p>
+<ul>
+<li>适用于已有设备管理基础设施、需要深度定制的场景</li>
+<li>手动配对、手动提供 WDA runner（需自己签名）</li>
+<li>参考 <a href="https://github.com/your-repo/device-control/tree/main/ios">device-control/ios/README.md</a></li>
+</ul>
+
+<h3>CLI（仅供协议测试）</h3>
+<p><code>device-control-ios</code> CLI 是协议层测试工具，不推荐生产使用（无发现、无 WDA 自动化、手工 flag 管理）。</p>
+
+<div class="warn"><strong>与节点的区别</strong>「节点」(<a href="cap-node.html">cap-node</a>) 主动连 NodeConnect、TOTP 鉴权、跑 CLI/终端/代理；「iOS 控制」(本页) 的 iOS 主机节点是特殊类型节点，同时具备 NodeConnect 管理面（设备发现/WDA job）+ device-control 数据面（每设备一条 WS）。协议、鉴权、用途都不同。</div>
+
+<h2 id="diff">与 Android 控制的差异</h2>
+<figure class="shot" data-shot="cap-ios-control/diff.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">与 Android 控制的差异</span></div><button class="shot-open" type="button" aria-label="放大截图：与 Android 控制的差异"><img src="assets/screenshots/cap-ios-control/diff.png" alt="与 Android 控制的差异" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-ios-control/diff.png</code></div></div></figure>
+
+<div class="table-wrap"><table><thead><tr><th></th><th>Android 控制</th><th>iOS 控制</th></tr></thead><tbody>
+<tr><td>接入方式</td><td>手机安装 APK，App 主动连 WebSocket</td><td>iOS 主机节点代理，USB/WiFi 连接设备</td></tr>
+<tr><td>设备发现</td><td>APK 自注册</td><td>节点枚举后上报服务端</td></tr>
+<tr><td>自动化引擎</td><td>Android Accessibility Service</td><td>WebDriverAgent (XCTest)</td></tr>
+<tr><td>签名/安装</td><td>APK 一次性安装即可</td><td>需要签名配置 + WDA 产物，定期续期</td></tr>
+<tr><td>协议与命令</td><td colspan="2">完全相同：device-control v0 协议、15 个命令、紧凑 TSV 树、物理像素坐标</td></tr>
+<tr><td>部署复杂度</td><td>低（手机自主接入）</td><td>中（需主机节点 + 签名材料管理）</td></tr>
+<tr><td>press_back</td><td>系统返回键</td><td>返回 <code>device_error</code>（iOS 无系统级返回）</td></tr>
+</tbody></table></div>
+
+<div class="note"><strong>Agent 透明</strong>从 Agent 视角，Android 与 iOS 设备没有差异——调用同一套 MCP device-control 工具，获得相同格式的屏幕树与命令响应。平台差异由驱动层屏蔽。</div>
+
+<p><a href="cap-android-control.html">← Android 控制详解</a> · <a href="governance.html#tools">device token / MCP token 隔离治理 →</a> · <a href="cap-browser.html">浏览器控制（CDP）详解 →</a></p>
+
+<footer class="footer"><span><a href="cap-android-control.html">← 上一篇：Android 控制</a></span><span><a href="cap-mail.html">下一篇：邮箱 →</a></span></footer>
+</article></main></div>
+</body></html>

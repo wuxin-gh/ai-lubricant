@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="浏览器控制能力详解：MV3 扩展把已登录的真实 Chrome 接入平台，12 个 CDP 工具、网页内 Agent 对话、两类 token 隔离。">
+  <title>浏览器控制 · 能力详解 · Ai Lubricant</title>
+  <link rel="stylesheet" href="assets/docs.css?v=20260831-3"><script src="assets/docs.js?v=20260831-3" defer></script>
+</head>
+<body>
+<button class="nav-toggle" id="nav-toggle" aria-expanded="false">☰ 打开文档导航</button>
+<div class="wrap">
+<aside class="sidebar">
+  <div class="brand"><span class="dot">A</span> Ai Lubricant</div>
+  <div class="nav-group">产品</div><nav>
+    <a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a>
+  </nav>
+  <div class="nav-group">能力详解</div><nav>
+    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
+  </nav>
+  <div class="nav-group">操作手册</div><nav>
+    <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
+  </nav>
+  <div class="nav-group">部署与接入</div><nav>
+    <a href="users-api.html"><span class="ic">↔</span>API 接入</a><a href="governance.html"><span class="ic">◈</span>安全与治理</a><a href="deploy.html"><span class="ic">⇩</span>生产部署</a><a href="desktop.html"><span class="ic">▭</span>Windows 桌面版</a><a href="architecture.html"><span class="ic">⚖</span>技术白皮书</a><a href="env-vars.html"><span class="ic">⊧</span>环境变量</a><a href="local-debug.html"><span class="ic">⚙</span>本地调试</a>
+  </nav>
+</aside>
+<main class="main"><div class="topbar"><button id="theme-toggle" type="button">☾ 深色</button><button id="print-page" type="button">⎙ 打印</button></div>
+<article class="content">
+<header class="hero"><h1>浏览器控制</h1><p class="desc">一个 MV3 扩展把你<strong>现在正在用的</strong>真实 Chrome 交给 Agent 和编辑器：登录态、标签页、Cookie 全部沿用，Agent 与编辑器直接在这个会话里干活。</p></header>
+
+<div class="table-wrap"><table>
+<thead><tr><th>对比项</th><th>无头脚本（Playwright 等）</th><th>Ai Lubricant CDP 桥接</th></tr></thead>
+<tbody>
+<tr><td>浏览器实例</td><td>每次新起一个临时实例</td><td><strong>你正在用的 Chrome</strong>，Agent 与编辑器共用</td></tr>
+<tr><td>登录态 / Cookie</td><td>默认没有，需自己注入</td><td>沿用你已登录的会话</td></tr>
+<tr><td>生命周期</td><td>脚本跑完即销毁</td><td>常驻，Agent / 编辑器随时接管当前标签</td></tr>
+<tr><td>操作方式</td><td>写死在脚本里</td><td>Agent 实时决定读页、执行 JS、切标签、截图、抓网络；编辑器任务也能用同一浏览器</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="editor-share">功能：浏览器交给编辑器一起用</h2>
+<figure class="shot" data-shot="cap-browser/editor-share.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">浏览器交给编辑器一起用</span></div><button class="shot-open" type="button" aria-label="放大截图：浏览器交给编辑器一起用"><img src="assets/screenshots/cap-browser/editor-share.png" alt="浏览器交给编辑器一起用" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-browser/editor-share.png</code></div></div></figure>
+<div class="table-wrap"><table><thead><tr><th>能力</th><th>行为</th></tr></thead><tbody>
+<tr><td>同一浏览器，两个使用者</td><td>CDP client 接入后，Agent（工具调用 / 网页内对话）与编辑器任务共用这条已登录的真实 Chrome 会话——不用为编辑器另开一套浏览器环境</td></tr>
+<tr><td>网页内 code_run</td><td>Agent 级 <code>browser_code_run_enabled</code> 开关打开后，网页内对话可在浏览器侧跑代码；带审批协调器（approval timeout 可配），关闭时直接拒绝并在文案里提示</td></tr>
+<tr><td>会话级隔离</td><td>每帧按连接身份校验：Agent 是否对该 client 授权、页面是否属于该 client——多人多 Agent 不串台</td></tr>
+</tbody></table></div>
+
+<h2 id="tools">功能：12 个 CDP 工具</h2>
+<figure class="shot" data-shot="cap-browser/tools.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">12 个 CDP 工具</span></div><button class="shot-open" type="button" aria-label="放大截图：12 个 CDP 工具"><img src="assets/screenshots/cap-browser/tools.png" alt="12 个 CDP 工具" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-browser/tools.png</code></div></div></figure>
+<div class="table-wrap"><table><thead><tr><th>工具</th><th>能力</th></tr></thead><tbody>
+<tr><td><code>browser_get_tabs</code></td><td>列出已连接的浏览器标签页（ID/URL/标题）</td></tr>
+<tr><td><code>browser_scan</code></td><td>返回当前活动标签的优化 HTML/文本及标签列表</td></tr>
+<tr><td><code>browser_execute_js</code></td><td>在页面执行 JavaScript，捕获结果与 DOM 变化</td></tr>
+<tr><td><code>browser_navigate</code></td><td>导航活动标签到指定 URL</td></tr>
+<tr><td><code>browser_switch_tab</code></td><td>切换 MCP 活动标签（不改变可见 Chrome 标签）</td></tr>
+<tr><td><code>browser_focus_tab</code></td><td>把某标签带到前台并聚焦其窗口</td></tr>
+<tr><td><code>browser_screenshot</code></td><td>截取活动标签（返回 base64 PNG）</td></tr>
+<tr><td><code>browser_batch</code></td><td>一次请求执行多个扩展/CDP 命令</td></tr>
+<tr><td><code>browser_wait</code></td><td>等待某 JavaScript 条件返回真值</td></tr>
+<tr><td><code>browser_network_start / get / stop</code></td><td>启动/读取/停止标签网络请求捕获（附加调试器、缓冲事件、返回捕获）</td></tr>
+</tbody></table></div>
+<div class="note"><strong>新任务开新标签</strong>新任务或独立站点用 <code>browser_open_tab</code> 开新 tab，同站内跳转才用页内点击——避免把当前会话的上下文覆盖掉。</div>
+
+<h2 id="chat">功能：网页内直接和 Agent 对话</h2>
+<figure class="shot" data-shot="cap-browser/chat.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">网页内直接和 Agent 对话</span></div><button class="shot-open" type="button" aria-label="放大截图：网页内直接和 Agent 对话"><img src="assets/screenshots/cap-browser/chat.png" alt="网页内直接和 Agent 对话" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-browser/chat.png</code></div></div></figure>
+<p>一套 <code>chat_*</code> 帧协议复用同一条扩展 WebSocket，按帧 <code>type</code> 前缀与 CDP 驱动帧分流：</p>
+<div class="table-wrap"><table><thead><tr><th>帧</th><th>用途</th></tr></thead><tbody>
+<tr><td><code>chat_list_agents</code> / <code>chat_send</code> / <code>chat_abort</code></td><td>选择 Agent、发送消息、中断</td></tr>
+<tr><td><code>chat_new_conversation</code> / <code>chat_load_conversation</code> / <code>chat_list_conversations</code></td><td>会话生命周期管理</td></tr>
+<tr><td><code>chat_event</code></td><td>对话流回传；chunked 传输截断时有专门收尾处理</td></tr>
+</tbody></table></div>
+<p>每帧按连接身份校验：Agent 是否对该 client 授权、页面是否属于该 client（会话级隔离）。</p>
+
+<h2 id="tokens">功能：两类 token 不能混用</h2>
+<figure class="shot" data-shot="cap-browser/tokens.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">两类 token 不能混用</span></div><button class="shot-open" type="button" aria-label="放大截图：两类 token 不能混用"><img src="assets/screenshots/cap-browser/tokens.png" alt="两类 token 不能混用" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-browser/tokens.png</code></div></div></figure>
+<div class="table-wrap"><table><thead><tr><th>token</th><th>用途</th><th>绑定对象</th></tr></thead><tbody>
+<tr><td>连接 token</td><td>扩展 ↔ 平台的 WebSocket 握手</td><td>单个扩展连接</td></tr>
+<tr><td>MCP 访问 token</td><td>访问 <code>/mcp/cdp-bridge/sse</code></td><td>必须绑定具体 CDP client；未绑定报 "not authorized to operate any CDP client"</td></tr>
+</tbody></table></div>
+
+<h2 id="usage">怎么用</h2>
+<figure class="shot" data-shot="cap-browser/usage.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">怎么用</span></div><button class="shot-open" type="button" aria-label="放大截图：怎么用"><img src="assets/screenshots/cap-browser/usage.png" alt="怎么用" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-browser/usage.png</code></div></div></figure>
+<ol>
+<li>在 <code>/console/resources</code> 创建 CDP 客户端，拿到绑定该 client 的 MCP token。</li>
+<li>Chrome 安装 MV3 扩展并用连接 token 握手（使用隔离 Chrome profile，不连个人日常浏览器）。</li>
+<li>把该 client 授权给要用的 Agent；Agent 即可调用 12 个工具操作你的真实浏览器。</li>
+<li>改完 CDP 明细必须 resync，把新快照推给活着的 driver，否则不生效。</li>
+</ol>
+
+<p><a href="architecture.html#cdp">技术白皮书：12 个 CDP 工具与两类 token 隔离 →</a> · <a href="architecture.html#browser-agent">网页内 Agent 帧协议 →</a> · <a href="governance.html#tools">CDP 隔离治理 →</a></p>
+
+<footer class="footer"><span><a href="cap-mobile.html">← 上一篇：手机客户端</a></span><span><a href="cap-device-control.html">下一篇：Android/iOS 控制 →</a></span></footer>
+</article></main></div>
+</body></html>

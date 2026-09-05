@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Agent 能力详解：主/子 Agent 分工、终端 Agent、浏览器与网页内 Agent、邮箱 Agent、记忆增强、资源显式选择与使用者隔离。">
+  <title>Agent · 能力详解 · Ai Lubricant</title>
+  <link rel="stylesheet" href="assets/docs.css?v=20260831-3"><script src="assets/docs.js?v=20260831-3" defer></script>
+</head>
+<body>
+<button class="nav-toggle" id="nav-toggle" aria-expanded="false">☰ 打开文档导航</button>
+<div class="wrap">
+<aside class="sidebar">
+  <div class="brand"><span class="dot">A</span> Ai Lubricant</div>
+  <div class="nav-group">产品</div><nav>
+    <a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a>
+  </nav>
+  <div class="nav-group">能力详解</div><nav>
+    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
+  </nav>
+  <div class="nav-group">操作手册</div><nav>
+    <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
+  </nav>
+  <div class="nav-group">部署与接入</div><nav>
+    <a href="users-api.html"><span class="ic">↔</span>API 接入</a><a href="governance.html"><span class="ic">◈</span>安全与治理</a><a href="deploy.html"><span class="ic">⇩</span>生产部署</a><a href="desktop.html"><span class="ic">▭</span>Windows 桌面版</a><a href="architecture.html"><span class="ic">⚖</span>技术白皮书</a><a href="env-vars.html"><span class="ic">⊧</span>环境变量</a><a href="local-debug.html"><span class="ic">⚙</span>本地调试</a>
+  </nav>
+</aside>
+<main class="main"><div class="topbar"><button id="theme-toggle" type="button">☾ 深色</button><button id="print-page" type="button">⎙ 打印</button></div>
+<article class="content">
+<header class="hero"><h1>Agent</h1><p class="desc">Agent 通过网关绑定获授权的 API Key 与模型，加载项目上下文、提示词、技能、插件和 MCP 工具，将复杂目标委派给 Sub-agent。</p></header>
+
+<div class="table-wrap"><table>
+<thead><tr><th>问题</th><th>自己拼的 Agent 循环</th><th>平台 Agent</th></tr></thead>
+<tbody>
+<tr><td>工作上下文</td><td>每次对话从空白开始</td><td>绑定项目，加载项目提示词与工作区</td></tr>
+<tr><td>工具接入</td><td>每接一个工具写一遍集成</td><td>终端、浏览器、邮箱、外部 MCP 内置，显式授权即可用</td></tr>
+<tr><td>凭据安全</td><td>凭据贴进提示词或环境变量</td><td>走平台凭据链路，提示词不碰秘密；token 绑实例隔离</td></tr>
+<tr><td>多用户</td><td>单人单进程，跨用户串台</td><td>按发起用户校验 Key 与资源权限</td></tr>
+<tr><td>跨任务积累</td><td>每次从零开始</td><td>记忆增强：长期记忆按场景路由、按预算裁剪</td></tr>
+<tr><td>无人值守</td><td>只能等人发消息</td><td>内置定时任务：cron / repeat 触发，按任务选模型，可立即运行、启停、更新、审批脚本</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="forms">五种形态</h2>
+<figure class="shot" data-shot="cap-agent/forms.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">五种形态</span></div><button class="shot-open" type="button" aria-label="放大截图：五种形态"><img src="assets/screenshots/cap-agent/forms.png" alt="五种形态" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-agent/forms.png</code></div></div></figure>
+<div class="table-wrap"><table><thead><tr><th>形态</th><th>载体</th><th>用途</th><th>详见</th></tr></thead><tbody>
+<tr><td>Sub-agent 派发</td><td>平台任务</td><td>主 Agent 拆目标，子 Agent 并行执行，结果回主上下文</td><td>本页</td></tr>
+<tr><td>终端 Agent</td><td>节点 PTY</td><td>在受控连接内操作远程终端</td><td><a href="cap-node.html">节点</a></td></tr>
+<tr><td>浏览器 Agent（CDP）</td><td>Chrome MV3 扩展</td><td>实时读页、执行 JS、跨标签操作、截图、抓网络</td><td><a href="cap-browser.html">浏览器控制</a></td></tr>
+<tr><td>网页内 Agent</td><td>扩展内聊天帧</td><td>在受控页面里直接对话、管理会话</td><td><a href="cap-browser.html#chat">网页内对话</a></td></tr>
+<tr><td>邮箱服务 Agent</td><td>Mail MCP</td><td>按实例隔离只读邮件查询</td><td><a href="cap-mail.html">邮箱</a></td></tr>
+</tbody></table></div>
+<div class="note"><strong>共同点</strong>无论跑在哪，Agent 的模型调用都走平台统一网关与权限校验；资源（技能、插件、MCP）显式授权后才加载。</div>
+
+<h2 id="loop">功能：持续完成任务</h2>
+<figure class="shot" data-shot="cap-agent/loop.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">持续完成任务</span></div><button class="shot-open" type="button" aria-label="放大截图：持续完成任务"><img src="assets/screenshots/cap-agent/loop.png" alt="持续完成任务" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-agent/loop.png</code></div></div></figure>
+<div class="table-wrap"><table><thead><tr><th>功能</th><th>行为</th></tr></thead><tbody>
+<tr><td>主/子 Agent 分工</td><td>主 Agent 管目标与上下文，Sub-agent 用独立模型或复用主模型并行干活</td></tr>
+<tr><td>资源显式选择</td><td>技能、插件、MCP 由用户或管理员授权后才注入；Agent 拿到的始终是被明确选择过的资源</td></tr>
+<tr><td>工具执行闭环</td><td>终端、文件、浏览器和外部 MCP 的结果回到同一任务流作为上下文</td></tr>
+<tr><td>使用者身份隔离</td><td>平台 Agent 可多人可见，但运行时按当前发起用户校验 API Key 与资源权限</td></tr>
+</tbody></table></div>
+
+<h2 id="scheduled">功能：定时任务</h2>
+<figure class="shot" data-shot="cap-agent/scheduled.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">定时任务</span></div><button class="shot-open" type="button" aria-label="放大截图：定时任务"><img src="assets/screenshots/cap-agent/scheduled.png" alt="定时任务" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-agent/scheduled.png</code></div></div></figure>
+<p>Agent 不只是被动应答——平台内置调度器（APScheduler），给 Agent 挂上 cron 或 repeat 触发器即可无人值守跑批：</p>
+<div class="table-wrap"><table><thead><tr><th>能力</th><th>行为</th></tr></thead><tbody>
+<tr><td>触发方式</td><td>cron 表达式或 repeat 间隔；任务级可覆盖，同一个 Agent 的不同定时任务可各用一个模型</td></tr>
+<tr><td>专属模型/Key</td><td>定时任务默认绑定独立的 scheduled_api_key_id / scheduled_model（无人值守常要换更便宜/更稳的模型），空则回退主 Agent 配置</td></tr>
+<tr><td>任务管理</td><td>列表 / 创建 / 更新 / 删除 / 启停 / <strong>立即运行</strong>（run_now）；脚本型任务执行前需审批（approve-script）</td></tr>
+<tr><td>Agent 自助创建</td><td>Agent 运行时可通过 scheduler 工具自建定时任务（create / list / cancel / run_now，按 SOP 约束），归属发起用户</td></tr>
+</tbody></table></div>
+
+<h2 id="memory">功能：记忆增强</h2>
+<figure class="shot" data-shot="cap-agent/memory.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">记忆增强</span></div><button class="shot-open" type="button" aria-label="放大截图：记忆增强"><img src="assets/screenshots/cap-agent/memory.png" alt="记忆增强" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-agent/memory.png</code></div></div></figure>
+<div class="table-wrap"><table><thead><tr><th>机制</th><th>行为</th></tr></thead><tbody>
+<tr><td>长期记忆按场景路由</td><td>L1 索引是场景路由表，每次 ensure_agent_memory 重生成；SOP 正文按场景拆分</td></tr>
+<tr><td>注入节流</td><td>按奇偶轮 / 4 轮节流注入，避免每轮都塞满记忆</td></tr>
+<tr><td>超预算裁剪</td><td>超预算走 trim_messages 而非硬截断</td></tr>
+<tr><td>提示词两阶段组装</td><td>anchor 不照搬需求原文，按同级场景口吻重写</td></tr>
+</tbody></table></div>
+
+<h2 id="security">功能：身份与资源隔离</h2>
+<figure class="shot" data-shot="cap-agent/security.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">身份与资源隔离</span></div><button class="shot-open" type="button" aria-label="放大截图：身份与资源隔离"><img src="assets/screenshots/cap-agent/security.png" alt="身份与资源隔离" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-agent/security.png</code></div></div></figure>
+<div class="table-wrap"><table><thead><tr><th>措施</th><th>行为</th></tr></thead><tbody>
+<tr><td>MCP token 按用户校验</td><td>Agent 绑定用户后，所有鉴权 MCP 固定使用该用户已获授权的 token；未授权时 401</td></tr>
+<tr><td>目录边界</td><td><code>allowed_roots</code> + <code>denied_patterns</code>；默认拒绝 <code>/etc/</code>、<code>/var/</code>、<code>.env</code> 等敏感路径</td></tr>
+<tr><td>提示词不含秘密</td><td>秘密走专用凭据/资源链路，不写进 system prompt</td></tr>
+<tr><td>高危操作人工确认</td><td>高风险命令、删除、外部发布与对外发送保持人工确认</td></tr>
+</tbody></table></div>
+
+<h2 id="usage">怎么用</h2>
+<figure class="shot" data-shot="cap-agent/usage.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">怎么用</span></div><button class="shot-open" type="button" aria-label="放大截图：怎么用"><img src="assets/screenshots/cap-agent/usage.png" alt="怎么用" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-agent/usage.png</code></div></div></figure>
+<ol>
+<li>进入 <code>/console/agent-chat</code>，选管理员提供的平台 Agent 或自己创建的。</li>
+<li>确认 Agent 绑定的主模型、Sub-agent 模型与资源（详见 <a href="guide-developer.html#agent">开发者手册</a>）。</li>
+<li>发起对话；工具调用按当前运行用户身份校验权限。</li>
+</ol>
+
+<p><a href="architecture.html#browser-agent">技术白皮书：浏览器内 Agent 帧协议 →</a> · <a href="architecture.html#terminal-agent">终端与节点 Agent →</a> · <a href="guide-developer.html">开发者操作手册 →</a></p>
+
+<footer class="footer"><span><a href="cap-code-channel.html">← 上一篇：自定义代码渠道</a></span><span><a href="cap-editor.html">下一篇：连接编辑器 →</a></span></footer>
+</article></main></div>
+</body></html>

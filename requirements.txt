@@ -1,0 +1,52 @@
+fastapi==0.115.0
+# FastAPI's UploadFile/Form parsing (node host file upload) needs this; without
+# it the multipart route raises at import time.
+python-multipart==0.0.20
+python-dotenv>=1.0,<2
+# uvicorn serves the data service (main.py): HTTP/1.1 + WebSockets + SSE.
+uvicorn[standard]==0.32.0
+# Hypercorn serves the node control service (python -m node_server) only: it
+# speaks h2c (cleartext HTTP/2), which the shipped agent-compose-agent's
+# NodeConnect bidi stream requires and uvicorn cannot serve.
+hypercorn[h2]==0.18.0
+aiohttp==3.11.10
+# protobuf runtime for the vendored agent-compose v2 message bindings
+# (node_server/proto). Generated with grpcio-tools (dev only).
+protobuf>=5.0
+loguru~=0.7.3
+openai~=2.32.0
+redis~=5.2.1
+pycryptodome
+gemini_webapi
+# 文本形态工具调用解析兜底：LLM 吐的 JSON 常缺引号/尾随逗号/被流截断，
+# json_repair 容错还原成合法对象。tool_utils.py 里 optional import，缺失则回退 json.loads。
+json_repair>=0.7,<2
+
+# Token 估算分词器。tiktoken 一直在被 usage_utils 使用但历史上没写进依赖，
+# 缺失时估算会静默降级成字符估算（偏差可达 2 倍），必须固定版本。
+tiktoken>=0.8,<1
+# HuggingFace 真实词表（GLM/Qwen/DeepSeek/MiniMax 等开源模型）。只加载管理端
+# 预热到 data/tokenizers/ 的本地 tokenizer.json，运行时不联网。
+tokenizers>=0.20,<1
+
+requests~=2.32.3
+cryptography~=46.0.5
+asyncpg~=0.30.0
+apscheduler>=3.10.0,<4
+
+# Built-in cdp-bridge browser connector (vendored in mcp_builtin/cdp_bridge)
+simple-websocket-server>=0.4.4
+bottle>=0.13.4
+beautifulsoup4>=4.14.3
+
+# Optional MonkeyCode compatibility layer (Tortoise ORM + ClickHouse payload).
+# Imported lazily and disabled by feature flags; absence does not affect the
+# main service when MONKEYCODE_COMPAT_ENABLED is unset.
+tortoise-orm[asyncpg]==1.1.7
+clickhouse-connect>=0.8
+# C-side user auth password hashing. Uses the bcrypt library directly (not
+# passlib, which is incompatible with bcrypt 5.x). Byte-compatible with the
+# MonkeyCode Go bcrypt hashes ($2a$/$2b$).
+bcrypt>=4.0
+# Team OIDC login verifies ID Tokens against the issuer's JWKS.
+PyJWT[crypto]>=2.8

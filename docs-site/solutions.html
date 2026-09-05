@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Ai Lubricant 场景方案：统一模型入口、AI 项目交付、自有节点执行、工具自动化与私有化。问题、功能组合、操作路径与部署前提。">
+  <title>场景方案 · Ai Lubricant</title>
+  <link rel="stylesheet" href="assets/docs.css?v=20260831-3"><script src="assets/docs.js?v=20260831-3" defer></script>
+</head>
+<body>
+<button class="nav-toggle" id="nav-toggle" aria-expanded="false">☰ 打开文档导航</button>
+<div class="wrap">
+<aside class="sidebar">
+  <div class="brand"><span class="dot">A</span> Ai Lubricant</div>
+  <div class="nav-group">产品</div><nav>
+    <a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a>
+  </nav>
+  <div class="nav-group">能力详解</div><nav>
+    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
+  </nav>
+  <div class="nav-group">操作手册</div><nav>
+    <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
+  </nav>
+  <div class="nav-group">部署与接入</div><nav>
+    <a href="users-api.html"><span class="ic">↔</span>API 接入</a><a href="governance.html"><span class="ic">◈</span>安全与治理</a><a href="deploy.html"><span class="ic">⇩</span>生产部署</a><a href="desktop.html"><span class="ic">▭</span>Windows 桌面版</a><a href="architecture.html"><span class="ic">⚖</span>技术白皮书</a><a href="env-vars.html"><span class="ic">⊧</span>环境变量</a><a href="local-debug.html"><span class="ic">⚙</span>本地调试</a>
+  </nav>
+</aside>
+<main class="main"><div class="topbar"><button id="theme-toggle" type="button">☾ 深色</button><button id="print-page" type="button">⎙ 打印</button></div>
+<article class="content">
+<header class="hero"><h1>场景方案</h1><p class="desc">五个典型场景：每个场景给出“没平台时 vs 有平台”对比、用到的功能、操作路径与部署前提。</p></header>
+
+<h2 id="overview">总览</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>场景</th><th>解决的核心问题</th><th>用到的功能</th><th>操作入口</th></tr></thead>
+<tbody>
+<tr><td><a href="#gateway">统一模型入口</a></td><td>业务绑定单一 Provider，换账号改代码重启</td><td>渠道账号池、模型路由、API Key、请求日志</td><td><code>/manager/channels</code> → <code>/manager/model-routing</code> → <code>/manager/api-keys</code></td></tr>
+<tr><td><a href="#delivery">AI 开发与项目交付</a></td><td>Agent 在聊天窗口干活，仓库命令环境全没有</td><td>项目、任务、编辑器、终端、Git identity</td><td><code>/console/projects</code> → 新建任务 → 任务详情</td></tr>
+<tr><td><a href="#node">自有机器执行</a></td><td>要开 SSH、分发 Key、NAT 后够不着</td><td>节点主动连接、浏览器终端、节点代理</td><td><code>/manager/nodes</code> onboard → Approve → 使用</td></tr>
+<tr><td><a href="#tools">浏览器与邮箱自动化</a></td><td>无头浏览器没登录态，IMAP 自己接</td><td>浏览器控制、Mail MCP、外部 MCP</td><td><code>/console/resources</code> → <code>/manager/mcp-market</code></td></tr>
+<tr><td><a href="#private">私有化部署</a></td><td>数据执行要留自己环境，自建整套太重</td><td>完整可自托管组件 + 统一治理</td><td><a href="deploy.html">部署文档</a> → <code>/manager</code></td></tr>
+</tbody>
+</table></div>
+
+<h2 id="gateway">1. 统一模型入口</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>对比项</th><th>没平台（直连 Provider）</th><th>用 Ai Lubricant</th></tr></thead>
+<tbody>
+<tr><td>账号切换</td><td>配额耗尽改代码里的 Key，重启，重新测试</td><td>账号池自动切换，业务代码不动</td></tr>
+<tr><td>多供应商</td><td>每家一套 SDK、一套错误处理</td><td>一个入口兼容 OpenAI / Anthropic / Responses</td></tr>
+<tr><td>换模型</td><td>改请求里的模型名，逐处排查</td><td>管理端改路由映射，客户端模型名不变</td></tr>
+<tr><td>故障处理</td><td>自己写重试、冷却、切换逻辑</td><td>连续失败降权、窗口熔断、九种冻结自动处理</td></tr>
+<tr><td>排查依据</td><td>只能看客户端报错</td><td>请求日志显示每次尝试的账号、路径、Token、耗时</td></tr>
+</tbody>
+</table></div>
+<p><strong>操作路径：</strong></p>
+<ol>
+<li>管理员在 <code>/manager/channels</code> 新增 Provider 渠道 + 账号池，测试认证、刷新模型列表。</li>
+<li>在 <code>/manager/model-routing</code> 定义对外模型名，映射到候选渠道。</li>
+<li>在 <code>/manager/api-keys</code> 创建 Key，限定可用模型与额度。</li>
+<li>开发者把客户端 base URL 指向平台（见 <a href="users-api.html">API 接入</a>）。</li>
+</ol>
+<p><strong>部署前提：</strong>数据服务 + PostgreSQL + Redis（<a href="deploy.html">部署文档</a>）。</p>
+
+<h2 id="delivery">2. AI 开发与项目交付</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>对比项</th><th>没平台（聊天窗口）</th><th>用 Ai Lubricant</th></tr></thead>
+<tbody>
+<tr><td>工作上下文</td><td>每次对话从空白开始，代码靠粘贴</td><td>项目工作区常驻，Agent 直接读写仓库</td></tr>
+<tr><td>执行环境</td><td>自己准备沙箱、装依赖</td><td>任务派发到平台工作区或自有节点</td></tr>
+<tr><td>命令执行</td><td>复制到本地终端跑，结果再贴回去</td><td>终端/编辑器在平台内，输出实时回传</td></tr>
+<tr><td>多轮推进</td><td>上下文超长就断，无法续接</td><td>任务记录事件与产物，随时续接</td></tr>
+<tr><td>提交身份</td><td>Agent 用全局 Git 身份提交</td><td>按用户/项目维护 Git identity</td></tr>
+</tbody>
+</table></div>
+<p><strong>操作路径：</strong></p>
+<ol>
+<li>在 <code>/console/projects</code> 创建项目并关联仓库。</li>
+<li>在项目内新建任务，写清目标/范围/验收/约束（见 <a href="guide-developer.html#task">任务写法</a>）。</li>
+<li>选模型和执行节点，提交后进任务详情看 Agent 事件与 diff。</li>
+<li>完成后审查代码 diff 与测试输出，再决定合并。</li>
+</ol>
+<p><strong>部署前提：</strong>数据服务 + 前端，开启 <code>compat_enabled</code>；自有节点执行需先接入节点。</p>
+
+<h2 id="node">3. 自有机器执行</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>对比项</th><th>传统 SSH 方案</th><th>Ai Lubricant 节点</th></tr></thead>
+<tbody>
+<tr><td>入网方向</td><td>平台主动拨入机器，需要公网 IP / 端口映射</td><td>节点主动出站连接，NAT 后可用</td></tr>
+<tr><td>凭据管理</td><td>分发 SSH Key，手动轮换撤销</td><td>onboard 发 TOTP secret，AES-256-GCM 封存，一键 Revoke</td></tr>
+<tr><td>端口暴露</td><td>开放 22 端口，暴露攻击面</td><td>不开任何入站端口</td></tr>
+<tr><td>执行方式</td><td>SSH 命令行，无统一审批</td><td>审批后才调度，容量/角色可控</td></tr>
+<tr><td>附加能力</td><td>仅 shell</td><td>同一连接复用：PTY 终端、host exec、文件、HTTP 代理出口</td></tr>
+</tbody>
+</table></div>
+<p><strong>操作路径：</strong></p>
+<ol>
+<li>管理员在 <code>/manager/nodes</code> 点 Onboard，选 execution 或 management 角色。</li>
+<li>在目标机器执行安装命令（含 node_id 与 secret，30 分钟内有效）。</li>
+<li>回管理端核对身份后 Approve，节点上线。</li>
+<li>开发者建任务时选该节点；或进浏览器终端直接操作。</li>
+</ol>
+<p><strong>部署前提：</strong>节点控制服务（<code>python -m node_server</code>）+ <code>AGENT_COMPOSE_NODE_SERVER_PUBLIC_URL</code>；主密钥持久化。详见 <a href="guide-node.html">节点管理员手册</a>。</p>
+
+<h2 id="tools">4. 浏览器与邮箱自动化</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>对比项</th><th>无头脚本 / 自接 IMAP</th><th>平台内置工具</th></tr></thead>
+<tbody>
+<tr><td>登录态</td><td>临时实例无 Cookie，自己注入</td><td>复用已登录的真实 Chrome</td></tr>
+<tr><td>生命周期</td><td>脚本跑完即销毁</td><td>常驻，Agent 随时接管当前标签</td></tr>
+<tr><td>操作方式</td><td>写死在脚本里</td><td>Agent 实时决定读页、执行 JS、切标签、截图</td></tr>
+<tr><td>邮箱读取</td><td>自接 IMAP，维护登录态与大正文</td><td>只读 MCP 按实例隔离，正文限长、附件默认元数据</td></tr>
+<tr><td>凭据隔离</td><td>脚本持有全部凭据</td><td>token 绑定具体 client/邮箱实例，不串台</td></tr>
+</tbody>
+</table></div>
+<p><strong>操作路径：</strong></p>
+<ol>
+<li>用户在 <code>/console/resources</code> 创建 CDP 客户端或 Mail 实例，拿到绑定的 MCP token。</li>
+<li>把资源授权给要用的 Agent。</li>
+<li>管理员在 <code>/manager/mcp-market</code> 管理平台级工具与外部 MCP。</li>
+</ol>
+<p><strong>部署前提：</strong>CDP 需装 Chrome + MV3 扩展；Mail 需在服务端配置上游邮箱；外部 MCP 需服务可访问。</p>
+
+<h2 id="private">5. 私有化部署</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>对比项</th><th>公有云 AI 服务</th><th>私有化 Ai Lubricant</th></tr></thead>
+<tbody>
+<tr><td>数据位置</td><td>供应商控制</td><td>自己的 PostgreSQL / Redis，执行在自己的节点</td></tr>
+<tr><td>模型凭据</td><td>绑定供应商</td><td>自带任意 Provider Token，平台只做路由</td></tr>
+<tr><td>审计与日志</td><td>看供应商提供什么</td><td>请求级日志、用量、审批、审计全在本地</td></tr>
+<tr><td>运维责任</td><td>供应商承担</td><td>自己负责 DB、TLS、备份、升级（见 <a href="governance.html#private">责任边界</a>）</td></tr>
+</tbody>
+</table></div>
+<p><strong>操作路径：</strong></p>
+<ol>
+<li>按 <a href="deploy.html">部署文档</a> 拉代码、配 <code>.env</code>、<code>docker compose up</code>。</li>
+<li>首次访问 <code>/manager</code> 完成管理员引导。</li>
+<li>配置渠道、路由、API Key、节点，开始使用。</li>
+</ol>
+<p><strong>部署前提：</strong>自己的服务器 + PostgreSQL/Redis；模型 Token 自备并遵守供应商条款。</p>
+
+<footer class="footer"><span><a href="index.html">← 上一篇：产品首页</a></span><span><a href="cap-llm-server.html">下一篇：大模型网关 →</a></span></footer>
+</article></main></div>
+</body></html>

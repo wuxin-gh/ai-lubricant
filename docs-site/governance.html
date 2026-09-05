@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Ai Lubricant 安全与治理：模型凭据、API Key、渠道路由、节点、工具、日志、数据保留与私有化责任边界。">
+  <title>安全与治理 · Ai Lubricant</title>
+  <link rel="stylesheet" href="assets/docs.css?v=20260831-3"><script src="assets/docs.js?v=20260831-3" defer></script>
+</head>
+<body>
+<button class="nav-toggle" id="nav-toggle" aria-expanded="false">☰ 打开文档导航</button>
+<div class="wrap">
+<aside class="sidebar">
+  <div class="brand"><span class="dot">A</span> Ai Lubricant</div>
+  <div class="nav-group">产品</div><nav>
+    <a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a>
+  </nav>
+  <div class="nav-group">能力详解</div><nav>
+    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
+  </nav>
+  <div class="nav-group">操作手册</div><nav>
+    <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
+  </nav>
+  <div class="nav-group">部署与接入</div><nav>
+    <a href="users-api.html"><span class="ic">↔</span>API 接入</a><a href="governance.html"><span class="ic">◈</span>安全与治理</a><a href="deploy.html"><span class="ic">⇩</span>生产部署</a><a href="desktop.html"><span class="ic">▭</span>Windows 桌面版</a><a href="architecture.html"><span class="ic">⚖</span>技术白皮书</a><a href="env-vars.html"><span class="ic">⊧</span>环境变量</a><a href="local-debug.html"><span class="ic">⚙</span>本地调试</a>
+  </nav>
+</aside>
+<main class="main"><div class="topbar"><button id="theme-toggle" type="button">☾ 深色</button><button id="print-page" type="button">⎙ 打印</button></div>
+<article class="content">
+<header class="hero"><h1>安全与治理</h1><p class="desc">将模型 Token、Agent、远程节点与工具变成可授权、可限制、可追踪和可撤销的生产能力。</p></header>
+<div class="toc"><strong>本页目录</strong><a href="#model">模型凭据</a><a href="#keys">API Key</a><a href="#routing">渠道与路由</a><a href="#agents">Agent 与工作区</a><a href="#nodes">节点</a><a href="#tools">工具/MCP</a><a href="#logs">日志/数据</a><a href="#private">私有化边界</a><a href="#incident">事件响应</a></div>
+
+<h2 id="model">1. 模型 Token 与上游凭据</h2>
+<p>“只带 Token”是用户体验主张，不代表 Token 可以无治理地共享。模型 Token、Cookie、refresh token 和账号密码应作为高敏感 Secret 管理。</p>
+<ul>
+<li>模型凭据只录入渠道账号配置，不写入前端、提示词、项目文件、任务描述或文档。</li>
+<li>按 Provider、环境和业务拆分凭据；开发/预发布/生产不共用。</li>
+<li>限制上游账号额度、地区和来源 IP；定期轮换并撤销闲置账号。</li>
+<li>账号凭据变更时平台会重认证；现有账号就地更新，保留限流/冷却等运行态。</li>
+<li>请求日志应脱敏认证头；开启 payload 捕获前完成隐私、访问控制与保留期评估。</li>
+</ul>
+<div class="danger"><strong>上游凭据当前为明文存储</strong>渠道账号的 Cookie、refresh token、账号密码等上游凭据当前以明文 JSONB 存储在数据库中，保护依赖<strong>数据库访问控制、磁盘/备份加密与 API 层脱敏</strong>，而非应用层加密。请据此收紧数据库权限、开启存储加密并限制备份访问。（对外 API Key 与节点 TOTP 凭据另有保护，见下文。）</div>
+<div class="danger"><strong>禁止把真实凭据用于演示截图</strong>渠道详情、API Key、请求头、CDP/Mail token、节点安装命令与 .env 一律不得出现在对外图片中。</div>
+
+<h2 id="keys">2. API Key 权限与生命周期</h2>
+<h3>最小权限</h3>
+<ul>
+<li>每个应用/团队/环境使用独立 Key，不共享“万能 Key”。</li>
+<li>限制可用模型和 Provider；对高成本或外部数据模型单独授权。</li>
+<li>配置 RPM/RPD、TPM、并发与累计用量约束；子 Key 同时受父 Key 活跃状态、过期和累计配额约束。</li>
+<li>浏览器/移动端不保存模型 API Key；平台用户通过 session 与 <code>api_key_id</code> 使用，后端再按当前身份解析真实 Key。</li>
+</ul>
+<h3>生命周期</h3>
+<ol>
+<li>创建：使用可标识业务+环境的名称，如 <code>order-agent-prod</code>。</li>
+<li>交付：明文只进入目标 Secret 管理系统；平台 UI 不重复公开。</li>
+<li>观察：按 Key 查看请求量、Token、错误与模型/渠道使用。</li>
+<li>轮换：创建新 Key → 应用切换并验证 → 禁用旧 Key → 删除。</li>
+<li>事件：疑似泄露立即禁用，保留日志证据并轮换关联凭据。</li>
+</ol>
+<div class="danger"><strong>全局鉴权不可关闭</strong>当 <code>api_keys_enabled()</code> 为 false，模型 API 主链路可接受无 Key 请求。这只适合隔离调试环境；公网生产必须启用鉴权与 HTTPS。</div>
+
+<h2 id="routing">3. 渠道、账号池与路由治理</h2>
+<div class="table-wrap"><table><thead><tr><th>对象</th><th>治理点</th><th>审计证据</th></tr></thead><tbody>
+<tr><td>Provider/渠道</td><td>启停、协议、base URL、模型白名单、retry_count、限流</td><td>渠道配置与操作日志</td></tr>
+<tr><td>账号</td><td>启停、优先级、权重、RPM/TPM/并发、认证状态、配额</td><td>请求日志中的 provider/account 快照</td></tr>
+<tr><td>模型路由</td><td>外部名、模型组、Provider/账号范围、Key scope</td><td>每次请求的 routed model 与 retry path</td></tr>
+<tr><td>运行态</td><td>连续失败降权、冷却、熔断、冻结、会话亲和/反亲和</td><td>Redis 运行态、渠道请求记录和错误详情</td></tr>
+</tbody></table></div>
+<ul>
+<li>账号冻结与限流运行态必须跨实例同步；不要只改数据库绕过管理 API。</li>
+<li>智能选择评分全 0 时直接回退模型组/返回 429，不使用 LRU 反复探测故障渠道。</li>
+<li>403 等不可重试 4xx 仍需应用冻结规则，避免持续打击失效账号。</li>
+<li>测试请求只在入口构造一次 header/body/白名单；dispatch 不注入测试补丁。</li>
+</ul>
+
+<h2 id="agents">4. Agent、项目与工作区边界</h2>
+<ul>
+<li>平台 Agent 可以全局可见，但运行时按当前用户校验绑定 API Key 与 MCP 用户身份。</li>
+<li>技能、插件、MCP 不自动全部注入；资源系统负责供给与治理，使用者显式选择。</li>
+<li>为 Agent 配置 <code>allowed_roots</code> 与 <code>denied_patterns</code>；默认拒绝 <code>/etc/</code>、<code>/var/</code>、<code>.env</code> 等敏感路径。</li>
+<li>项目提示词、任务描述和 Agent system prompt 不写秘密；秘密通过专用凭据/资源链路提供。</li>
+<li>高风险命令、删除、外部发布与对外发送保持人工确认。</li>
+<li>用户必须审查 Agent 实际 diff、终端输出和测试结果，不把最终总结当作完成证据。</li>
+</ul>
+
+<h2 id="nodes">5. 节点与远程执行治理</h2>
+<h3>身份和审批</h3>
+<ul>
+<li>execution/management 节点 onboard 时获得唯一 node_id 与 TOTP secret；服务端用 AES-256-GCM 封存 secret。</li>
+<li>未知 ID、撤销、缺 secret、错误 TOTP 与重放统一返回 permission_denied，避免身份枚举。</li>
+<li>节点在线不等于可执行；只有 approved、在线、能力匹配且容量足够的 execution 节点参与调度。</li>
+<li>定期审计节点角色、父分组、在线状态、客户端版本、容量与活跃会话。</li>
+</ul>
+<h3>高权限能力</h3>
+<ul>
+<li>浏览器终端等价于节点用户 shell 权限；仅向可信管理员/用户开放。</li>
+<li>management 可在宿主机创建/删除 execution、执行 host exec，按高权限基础设施管理。</li>
+<li>节点 HTTP 代理可以使用节点网络访问资源；限制目标地址，防止访问 metadata 与内网敏感服务。</li>
+<li>节点使用专用 OS 用户/容器，限制 Docker socket、sudo、主机目录和网络出口。</li>
+</ul>
+<h3>主密钥与控制面</h3>
+<div class="danger"><strong>NODE_CREDENTIAL_ENCRYPTION_KEY 不可随意轮换</strong>它加密既有 TOTP 凭据；丢失/更换会让节点身份无法解密。必须备份并限制读取。控制面迁移时先停旧实例、同步数据库和主密钥，再启新实例，禁止双 Registry。</div>
+
+<h2 id="tools">6. MCP、CDP 与 Mail 隔离</h2>
+<ul>
+<li><strong>两类 token：</strong>CDP Chrome 扩展 connection token 只用于 WebSocket 握手；MCP access token 用于 <code>/mcp/cdp-bridge/sse</code>，二者不能混用。</li>
+<li><strong>CDP 绑定：</strong>外部 MCP token 必须绑定具体 CDP client；调用时再次检查 client 属于该实例、启用且有连接 token。</li>
+<li><strong>Mail 绑定：</strong>token 只能读取自己的 mail instance；插件只加载该实例的上游账户。</li>
+<li><strong>Agent MCP 身份：</strong>Agent 绑定用户后，所有鉴权 MCP 固定使用该用户已获授权的 token；未授权时 401，不从 token 集合任取，避免跨用户串台。</li>
+<li><strong>CDP 浏览器：</strong>使用隔离 Chrome profile，不连接个人日常浏览器；只开启任务需要的标签页和账户。</li>
+<li><strong>URL token：</strong>能用 Authorization header 时不要用 <code>?token=</code>，避免代理/历史/日志记录。</li>
+</ul>
+
+<h2 id="logs">7. 请求日志、Payload 与数据保留</h2>
+<h3>默认请求证据</h3>
+<ul>
+<li>request ID 与 parent request ID</li>
+<li>API Key ID/名称/父级 lineage 快照</li>
+<li>请求模型、路由模型、Provider、账号与请求路径</li>
+<li>流式、状态、耗时、首 Token、错误与 retry path</li>
+<li>prompt/completion/total/cached token</li>
+<li>脱敏请求/响应头；可配置的请求/响应体保留</li>
+</ul>
+<p>一次上游渠道尝试逐条记录，以 request ID 建立关系；详情页显示实际请求路径，便于定位协议/路由问题。</p>
+<h3>ClickHouse 与正文</h3>
+<ul>
+<li>ClickHouse payload 双写是可选组件，关闭不影响模型代理主链路。</li>
+<li><code>request_payload_enabled</code> 是唯一开关，控制是否启用 ClickHouse/对话能力并捕获请求正文。</li>
+<li>开启前评估个人数据、源代码、商业秘密与上游凭据风险；配置 <code>request_payload_ttl_days</code> 和 <code>max_payload_bytes</code>。</li>
+<li>限制日志/ClickHouse 访问角色；集中日志导出时维持脱敏。</li>
+</ul>
+
+<h2 id="private">8. 私有化数据与责任边界</h2>
+<div class="table-wrap"><table><thead><tr><th>范围</th><th>平台提供</th><th>客户责任</th></tr></thead><tbody>
+<tr><td>模型</td><td>协议适配、路由、账号池、限流、重试与观测</td><td>合法模型凭据、供应商条款、额度与数据传输合规</td></tr>
+<tr><td>平台</td><td>数据/控制服务、Web、移动端、管理和用户 API</td><td>PostgreSQL/Redis/TLS、Secret、备份、升级与高可用</td></tr>
+<tr><td>节点</td><td>主动连接、PTY、host exec、文件、会话与 HTTP 代理</td><td>安装、出站网络、OS/容器加固、目录/网络权限</td></tr>
+<tr><td>工具</td><td>CDP、Mail、MCP 接入与作用域隔离</td><td>外部系统凭据、业务授权、浏览器 profile 和账户安全</td></tr>
+<tr><td>数据</td><td>请求日志、用量、审计和可配置保留</td><td>数据分类、保留策略、访问审批、备份销毁与法规合规</td></tr>
+</tbody></table></div>
+<div class="warn"><strong>私有化不自动等于合规</strong>数据留在客户环境只是基础。客户仍需配置最小权限、日志保留、备份、加密、审计与事件响应，并评估模型供应商收到的请求数据。</div>
+
+<h2 id="incident">9. 凭据或节点事件响应</h2>
+<ol>
+<li><strong>隔离：</strong>立即禁用泄露 API Key / MCP token；revoke 可疑节点；停用相关渠道账号。</li>
+<li><strong>保全证据：</strong>记录时间、request ID、API Key ID、Provider/account、节点 ID、用户与来源；不要修改原始日志。</li>
+<li><strong>评估影响：</strong>查询该凭据的请求、用量、模型、渠道、工具调用与节点会话范围。</li>
+<li><strong>轮换：</strong>创建新凭据并切换应用；轮换上游 Token、CDP/Mail token、节点身份或 control token。</li>
+<li><strong>恢复：</strong>确认新凭据/节点工作正常后删除旧凭据，修复权限/日志/分发流程。</li>
+<li><strong>复盘：</strong>更新最小权限、告警、保留策略与应急手册；检查是否有相同模式的其他资产。</li>
+</ol>
+
+<h2 id="checklist">10. 生产安全检查清单</h2>
+<ul>
+<li>☐ 公网只开放 HTTPS 反向代理；PG/Redis/ClickHouse/控制服务不直接暴露。</li>
+<li>☐ API Key 全局鉴权已开启，应用 Key 已按环境/模型/渠道最小授权。</li>
+<li>☐ .env、master key、control token、上游凭据由 Secret 管理并有备份。</li>
+<li>☐ 管理员首次密码已由可信人员设置并轮换；平台用户按角色授权。</li>
+<li>☐ 节点使用专用用户/容器；已审计 OS、Docker、目录与网络权限。</li>
+<li>☐ 所有 CDP token 绑定具体 client；Mail token 绑定实例；闲置 token 已撤销。</li>
+<li>☐ 日志 header 已脱敏；payload capture 有明确审批、TTL 与访问控制。</li>
+<li>☐ 已验证 OpenAI/Anthropic 流式错误、限流、重试、节点断线与控制面恢复。</li>
+<li>☐ 数据库、Redis、.env/Secrets 和节点主密钥有恢复演练。</li>
+<li>☐ 升级/回滚流程明确，禁止两个控制 Registry 同时运行。</li>
+</ul>
+
+<footer class="footer"><span><a href="users-api.html">← 上一篇：API 接入</a></span><span><a href="deploy.html">下一篇：生产部署 →</a></span></footer>
+</article></main></div>
+</body></html>

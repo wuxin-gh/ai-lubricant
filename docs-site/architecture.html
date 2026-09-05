@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Ai Lubricant 技术白皮书：LLM 网关协议兼容与直通、智能选路与熔断、CDP 浏览器工具、浏览器内 Agent、节点终端与请求级观测的实现细节。">
+  <title>技术白皮书 · Ai Lubricant</title>
+  <link rel="stylesheet" href="assets/docs.css?v=20260831-3"><script src="assets/docs.js?v=20260831-3" defer></script>
+</head>
+<body>
+<button class="nav-toggle" id="nav-toggle" aria-expanded="false">☰ 打开文档导航</button>
+<div class="wrap">
+<aside class="sidebar">
+  <div class="brand"><span class="dot">A</span> Ai Lubricant</div>
+  <div class="nav-group">产品</div><nav>
+    <a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a>
+  </nav>
+  <div class="nav-group">能力详解</div><nav>
+    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
+  </nav>
+  <div class="nav-group">操作手册</div><nav>
+    <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
+  </nav>
+  <div class="nav-group">部署与接入</div><nav>
+    <a href="users-api.html"><span class="ic">↔</span>API 接入</a><a href="governance.html"><span class="ic">◈</span>安全与治理</a><a href="deploy.html"><span class="ic">⇩</span>生产部署</a><a href="desktop.html"><span class="ic">▭</span>Windows 桌面版</a><a href="architecture.html"><span class="ic">⚖</span>技术白皮书</a><a href="env-vars.html"><span class="ic">⊧</span>环境变量</a><a href="local-debug.html"><span class="ic">⚙</span>本地调试</a>
+  </nav>
+</aside>
+<main class="main"><div class="topbar"><button id="theme-toggle" type="button">☾ 深色</button><button id="print-page" type="button">⎙ 打印</button></div>
+<article class="content">
+<header class="hero"><h1>技术白皮书</h1><p class="desc">面向技术评估者：Ai Lubricant 在 LLM 网关、协议兼容、浏览器与终端 Agent、节点系统和可观测性上的关键实现取舍。术语与当前源码一致。</p></header>
+<div class="toc"><strong>本页目录</strong><a href="#gateway">协议兼容与转换</a><a href="#preset">客户端模板</a><a href="#thinking">思考字段处理</a><a href="#routing">智能选路与熔断</a><a href="#retry">限流/冻结/重试</a><a href="#usage">计费与用量口径</a><a href="#cdp">CDP 浏览器工具</a><a href="#browser-agent">浏览器内 Agent</a><a href="#terminal-agent">终端与节点 Agent</a><a href="#observability">请求级观测</a></div>
+
+<h2 id="gateway">1. 协议兼容：同协议直通，跨协议才转换</h2>
+<p>平台同时提供三类对外协议入口，每类都注册带 <code>/v1</code> 前缀和不带前缀两个路径：</p>
+<div class="table-wrap"><table><thead><tr><th>入口</th><th>协议</th><th>处理方法</th></tr></thead><tbody>
+<tr><td><code>/v1/chat/completions</code></td><td>OpenAI Chat</td><td>标准链路</td></tr>
+<tr><td><code>/v1/responses</code></td><td>OpenAI Responses</td><td>同协议直通 / 跨协议转换</td></tr>
+<tr><td><code>/v1/messages</code></td><td>Anthropic Messages</td><td>同协议直通 / 跨协议转换</td></tr>
+<tr><td><code>/v1/images/generations</code>、<code>/v1/videos/generations</code>、<code>/v1/audio/speech</code></td><td>媒体</td><td>按输出模态路由</td></tr>
+</tbody></table></div>
+<p>核心取舍是<strong>不做无谓的协议归一</strong>：当客户端协议与渠道上游协议一致、且流式模式匹配时，走<strong>原始直通</strong>，上游 SSE/JSON 原样转发，完整保留 signature、cache_control、block 顺序、citations、thinking 等字段；只有跨协议时才做字段映射。</p>
+<div class="cards">
+<div class="card"><h3>同协议直通</h3><p>Anthropic 客户端打到 Anthropic 渠道、Responses 打到 Responses 渠道时保持上游原样，不丢字段、不改语义。</p></div>
+<div class="card"><h3>跨协议转换</h3><p>Anthropic ↔ OpenAI 双向转换 system、多模态、工具调用、reasoning/thinking；流式经转换器输出目标协议 SSE，并在上游缺 usage 时估算输入 token 避免客户端报错。</p></div>
+<div class="card"><h3>媒体能力判定</h3><p>图片/视频/语音是否可用由模型元数据的 <code>output_modalities</code> 决定，而不是渠道开关；不满足直接返回 400。</p></div>
+</div>
+<div class="note"><strong>为什么重要</strong>直通保住了各家客户端（Claude Code、Codex、Cursor、Cline 等）依赖的私有字段和缓存语义；跨协议转换让同一个模型名可以同时服务 OpenAI 和 Anthropic 生态的客户端。</div>
+
+<h2 id="preset">2. 客户端模板（client_preset）：按客户端"伪装"上游请求</h2>
+<p>很多编码类客户端对上游有特定的 header、默认 body 字段和协议形态要求。平台内置<strong>客户端预设</strong>，让一个渠道可以按目标客户端形态构造上游请求：</p>
+<ul>
+<li><strong>预设 → 目标协议映射：</strong>codex-cli / codex-tui→Responses、claude-code→Anthropic、gemini-cli→Gemini、cursor / cline / roo-code / opencode / workbuddy→OpenAI。渠道 <code>protocol</code> 与 <code>client_preset</code> 不一致时，按预设目标协议构造上游 payload。</li>
+<li><strong>按客户端补默认字段：</strong>例如 codex-cli 的 Responses 形态会补齐 instructions、<code>text.verbosity</code>、<code>store=false</code>、<code>include=["reasoning.encrypted_content"]</code>、<code>reasoning.effort</code>、<code>prompt_cache_key</code> 等，采用深度缺省合并——只补客户端没显式给的字段。</li>
+<li><strong>客户端识别：</strong>依次从 header（User-Agent 等）、body 的 <code>client_type</code>/<code>client_preset</code>、system 首条消息特征（如 "You are Claude Code"/"You are Codex"）判定。</li>
+</ul>
+<div class="warn"><strong>准确边界</strong>预设里的 UA、session id、安装 id 等是为兼容特定客户端形态而构造的模板值；它们让上游把请求当作对应 CLI 发出，从而复用其协议路径和缓存语义。</div>
+
+<h2 id="thinking">3. 思考/推理字段：关闭即省略，不污染默认值</h2>
+<p>不同协议、不同客户端表达"思考"的字段各异（<code>reasoning_effort</code> / <code>thinking</code> / <code>reasoning</code> / thinking_budget 等）。平台的原则是<strong>不给上游塞客户端没要的字段</strong>：</p>
+<ul>
+<li>API Key 级 thinking 注入时，<strong>客户端已显式带该协议标准 thinking 参数则不覆盖</strong>。</li>
+<li>"关闭思考"一律通过<strong>省略参数</strong>表达：OpenAI 直接删 <code>reasoning_effort</code>，Anthropic 用标准 <code>{"type":"disabled"}</code>，Responses 删 <code>reasoning</code>。</li>
+<li>跨协议构建请求时<strong>只复制存在的字段</strong>，<code>context_management</code>、<code>mcp_servers</code>、<code>container</code> 仅在源请求存在时才透传。</li>
+<li>Qwen 风格的非标准思考键（thinking_enabled / thinking_mode / thinking_budget 等）会映射为标准 <code>reasoning_effort</code> 后删除，避免污染上游。</li>
+</ul>
+
+<h2 id="routing">4. 多渠道账号池与智能选路</h2>
+<p>每个 Provider 维护账号池，账号带优先级、权重、限流和运行态。智能选择不是简单轮询，而是多因子评分：</p>
+<div class="table-wrap"><table><thead><tr><th>机制</th><th>行为</th></tr></thead><tbody>
+<tr><td>连续失败指数降权</td><td>失败分数按连续失败次数指数衰减（intelligent 0.8ⁿ、fast 0.7ⁿ），一次成功清零。</td></tr>
+<tr><td>秒级窗口熔断</td><td>独立的失败窗口（5 分钟内阈值 2 次）触发熔断冷却，基数/步长 15s、上限 120s，不要求连续失败。</td></tr>
+<tr><td>计费滑动偏好</td><td>按次计费渠道按 prompt token 量线性偏好（约 2000 token 处交叉），token 计费中性；按次计费日额度 &lt;20% 时评分再乘 0.3。</td></tr>
+<tr><td>Session 亲和/反亲和</td><td>成功会话在 TTL 内升权（×1.3），连续失败按 0.3ⁿ 反亲和，达阈值直接排除该账号。</td></tr>
+<tr><td>余量 headroom</td><td>RPM/TPM/并发任一用尽的账号评分归零，不参与本轮选择。</td></tr>
+<tr><td>评分全 0 直接返回</td><td>全部账号被冻结/熔断/余额不足时不做恢复性探测，直接交给模型组回退或返回 429。</td></tr>
+</tbody></table></div>
+<div class="note"><strong>设计取舍</strong>不用 LRU 反复探测故障渠道——评分全零时直接回退或 429，避免把请求打到已知失效的账号上放大失败。</div>
+
+<h2 id="retry">5. 限流、冻结与重试</h2>
+<ul>
+<li><strong>多级限流：</strong>API Key 级 RPM/RPD/TPM/并发（Redis 固定窗口 + 原子并发占用），账号级 RPM/TPM/并发 headroom，模型级 TPM 固定窗口。</li>
+<li><strong>冻结策略：</strong>429 与上游异常触发冷却；渠道可配 freeze_policy 按状态码/响应头/错误码/模型匹配，scope 支持渠道/渠道模型/账号/账号模型，可永久冻结。</li>
+<li><strong>非重试 4xx 也走冻结：</strong>所有上游 HTTPException 先经冻结策略——例如 403 命中规则会当天冻结该账号，而不是简单透传。</li>
+<li><strong>两级重试：</strong>账号级重试（Provider 自身 retry_count 或全局配置）+ 模型组回退管线（visited 防环、backup_group 回退）。</li>
+<li><strong>上下文超限硬编码归一：</strong>prompt_too_long / context_length_exceeded 等特征被抽为硬编码归一器，命中判断零 IO 先行，出口层统一成 400 invalid_request_error，上游原文只进日志。</li>
+</ul>
+
+<h2 id="usage">6. 计费与用量口径</h2>
+<ul>
+<li><strong>total = 输入 + 输出。</strong>缓存读、缓存写是输入 token 的明细子集，不额外计入 total；平台不采信上游自报的 total，一律用 prompt + completion 重算。</li>
+<li><strong>零 completion 兜底（协议无关）：</strong>usage 里 completion 为 0 但响应确有内容时，删除该 usage 让后续估算兜底；确实无内容才判为异常空输出。内容检测覆盖 OpenAI/Gemini/Anthropic/Responses 各类帧。</li>
+<li><strong>口径一致：</strong>管理端面板与主链路使用同一套 usage 归一逻辑，避免两处口径漂移。</li>
+</ul>
+
+<h2 id="cdp">7. CDP 浏览器工具（内置 MCP）</h2>
+<p>CDP 桥接把一个真实 Chrome 会话的能力暴露为 12 个 MCP 工具。配套 MV3 扩展通过 WebSocket 连接平台，平台把 Chrome DevTools Protocol 能力包装为工具供 Agent 或外部 MCP 客户端调用：</p>
+<div class="table-wrap"><table><thead><tr><th>工具</th><th>能力</th></tr></thead><tbody>
+<tr><td><code>browser_get_tabs</code></td><td>列出已连接的浏览器标签页（ID/URL/标题）</td></tr>
+<tr><td><code>browser_scan</code></td><td>返回当前活动标签的优化 HTML/文本及标签列表</td></tr>
+<tr><td><code>browser_execute_js</code></td><td>在页面执行 JavaScript，捕获结果与 DOM 变化</td></tr>
+<tr><td><code>browser_navigate</code></td><td>导航活动标签到指定 URL</td></tr>
+<tr><td><code>browser_switch_tab</code></td><td>切换 MCP 活动标签（不改变可见 Chrome 标签）</td></tr>
+<tr><td><code>browser_focus_tab</code></td><td>把某标签带到前台并聚焦其窗口</td></tr>
+<tr><td><code>browser_screenshot</code></td><td>截取活动标签（返回 base64 PNG）</td></tr>
+<tr><td><code>browser_batch</code></td><td>一次请求执行多个扩展/CDP 命令</td></tr>
+<tr><td><code>browser_wait</code></td><td>等待某 JavaScript 条件返回真值</td></tr>
+<tr><td><code>browser_network_start / get / stop</code></td><td>启动/读取/停止标签网络请求捕获（附加调试器、缓冲事件、返回捕获）</td></tr>
+</tbody></table></div>
+<h3>两种 token 不能混用</h3>
+<div class="danger"><strong>连接 token ≠ MCP 访问 token</strong>Chrome 扩展的<strong>连接 token</strong>只用于扩展↔平台的 WebSocket 握手；外部 MCP 客户端访问 <code>/mcp/cdp-bridge/sse</code> 用的是单独签发、<strong>绑定具体 CDP client</strong> 的 MCP 访问 token。per-request token 路由到对应浏览器会话池，一个外部 token 只能操作它绑定的那个 client——未绑定会得到 "not authorized to operate any CDP client"。</div>
+
+<h2 id="browser-agent">8. 浏览器内 Agent：网页里直接对话</h2>
+<p>除了把浏览器当工具，平台还支持在网页里直接和 Agent 对话——由一套 <code>chat_*</code> 帧协议驱动，复用同一条扩展 WebSocket，按帧 <code>type</code> 前缀与 CDP 驱动帧分流：</p>
+<ul>
+<li><code>chat_list_agents</code> / <code>chat_send</code> / <code>chat_abort</code> / <code>chat_new_conversation</code> / <code>chat_load_conversation</code> / <code>chat_list_conversations</code> 等帧覆盖会话生命周期。</li>
+<li>每帧按连接身份校验：Agent 是否对该 client 授权、页面是否属于该 client（会话级隔离）。</li>
+<li>对话流以 <code>chat_event</code> 帧回传；底层 chunked 传输被截断时有专门的收尾处理，避免半截流污染会话。</li>
+</ul>
+<p>效果：用户在受控浏览器页面里就能让 Agent 读取当前页、执行 JS、跨标签操作，Agent 的模型调用仍走平台统一网关和权限校验。</p>
+
+<h2 id="terminal-agent">9. 终端与节点 Agent：无需 SSH 的执行</h2>
+<ul>
+<li><strong>浏览器 PTY 终端：</strong>浏览器 WebSocket → 数据服务 → 控制服务 → NodeConnect 帧 → 节点本机 PTY（Unix pty / Windows ConPTY），输入、输出、窗口 resize 全在受控连接内；终端默认从节点用户 home 目录启动，连接断开时节点关闭残留 shell。</li>
+<li><strong>host exec：</strong>在节点宿主机执行单条命令并结构化返回 stdout/stderr/exit_code，受超时（默认 2 分钟、上限 10 分钟）和输出上限（默认 1 MiB、上限 16 MiB）保护，需要节点声明 <code>host_exec=true</code> 能力。</li>
+<li><strong>execution 节点跑 provider CLI：</strong>execution 节点在工作区内运行 claude/codex/gemini/opencode 等 CLI 会话，输出/结果/事件流式回传，会话配置以带版本号的帧下发并确认。</li>
+<li><strong>节点 HTTP 代理：</strong>请求可通过节点自身网络出口发起（用节点 IP、NAT 后网络或内网资源），响应以隧道帧回传。</li>
+</ul>
+<div class="info"><strong>无需 SSH 的准确含义</strong>节点从客户机器<strong>主动</strong>拨向控制服务，命令沿既有连接下发，平台不反向拨入客户机器、不开放 22 端口、不分发 SSH Key。客户仍需安装节点程序、赋予操作系统权限并允许其主动出站。</div>
+
+<h2 id="observability">10. 请求级观测</h2>
+<p>每一次客户端请求对应一个 <code>request_id</code>，每次账号尝试（attempt）逐条记录，<code>attempt_key</code> 唯一、<code>attempt_no</code> 顺序编号，以 request_id 建立关系。记录字段包括：</p>
+<ul>
+<li>request_id / API Key lineage 快照 / provider / account / 请求模型 / routed model / upstream 返回模型 / endpoint</li>
+<li>success / status / stream / duration / 首 token 时间 / prompt·completion·total·cached·cache_creation·reasoning token</li>
+<li>请求路径、上游状态、错误、脱敏请求/响应头、按策略保留的正文、路由耗时分项、routing 降级标记、proxy 信息</li>
+</ul>
+<p>PostgreSQL 是权威存储；开启后可把大字段 payload 旁路双写到 ClickHouse（started=version1 / finalized=version2），双写失败只丢批、绝不影响主链路和路由。</p>
+<div class="warn"><strong>请求正文捕获是可选项</strong>开启前需评估隐私、密钥脱敏、保留期（<code>request_payload_ttl_days</code>）与访问审计，详见<a href="governance.html#logs">安全与治理</a>。</div>
+
+<footer class="footer"><span><a href="desktop.html">← 上一篇：Windows 桌面版</a></span><span><a href="env-vars.html">下一篇：环境变量 →</a></span></footer>
+</article></main></div>
+</body></html>

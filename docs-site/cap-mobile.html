@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="手机客户端能力详解：任务与项目跟踪、新建任务与远程操控、语音转写、图片与 zip 附件、预签名直传、隐私边界与下载升级。">
+  <title>手机客户端 · 能力详解 · Ai Lubricant</title>
+  <link rel="stylesheet" href="assets/docs.css?v=20260831-3"><script src="assets/docs.js?v=20260831-3" defer></script>
+</head>
+<body>
+<button class="nav-toggle" id="nav-toggle" aria-expanded="false">☰ 打开文档导航</button>
+<div class="wrap">
+<aside class="sidebar">
+  <div class="brand"><span class="dot">A</span> Ai Lubricant</div>
+  <div class="nav-group">产品</div><nav>
+    <a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a>
+  </nav>
+  <div class="nav-group">能力详解</div><nav>
+    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
+  </nav>
+  <div class="nav-group">操作手册</div><nav>
+    <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
+  </nav>
+  <div class="nav-group">部署与接入</div><nav>
+    <a href="users-api.html"><span class="ic">↔</span>API 接入</a><a href="governance.html"><span class="ic">◈</span>安全与治理</a><a href="deploy.html"><span class="ic">⇩</span>生产部署</a><a href="desktop.html"><span class="ic">▭</span>Windows 桌面版</a><a href="architecture.html"><span class="ic">⚖</span>技术白皮书</a><a href="env-vars.html"><span class="ic">⊧</span>环境变量</a><a href="local-debug.html"><span class="ic">⚙</span>本地调试</a>
+  </nav>
+</aside>
+<main class="main"><div class="topbar"><button id="theme-toggle" type="button">☾ 深色</button><button id="print-page" type="button">⎙ 打印</button></div>
+<article class="content">
+<header class="hero"><h1>手机客户端</h1><p class="desc">面向发起、跟踪与复核开发任务的独立客户端，与 Web 门户同账号同后端，让你不在电脑前也能把任务推进下去。</p></header>
+
+<div class="table-wrap"><table>
+<thead><tr><th>问题</th><th>没 App 时</th><th>手机客户端</th></tr></thead>
+<tbody>
+<tr><td>需求/bug 处理</td><td>记在备忘录里等回电脑</td><td>当场选项目/模型/节点发起任务</td></tr>
+<tr><td>任务进度</td><td>只能回电脑看</td><td>任务列表、执行详情、Agent 输出、Token 统计随时看</td></tr>
+<tr><td>文字输入慢</td><td>手机打长描述很费劲</td><td>按住麦克风流式语音转写，边说边出字</td></tr>
+<tr><td>带素材</td><td>截图/代码包没法带</td><td>图片（≤2 MB × 3）与 zip（≤10 MB）附件预签名直传</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="features">功能清单</h2>
+<figure class="shot" data-shot="cap-mobile/features.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">功能清单</span></div><button class="shot-open" type="button" aria-label="放大截图：功能清单"><img src="assets/screenshots/cap-mobile/features.png" alt="功能清单" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-mobile/features.png</code></div></div></figure>
+<div class="table-wrap"><table><thead><tr><th>功能</th><th>说明</th></tr></thead><tbody>
+<tr><td>任务与项目跟踪</td><td>查看任务列表、状态、执行详情、Agent 输出与 Token 统计；查看项目概况与相关任务</td></tr>
+<tr><td>新建任务</td><td>选项目、模型与节点发起 AI 开发任务；模型来自授权 API Key，移动端不保存上游 Token；节点只显示 approved 且可用的 execution 节点</td></tr>
+<tr><td>语音转写</td><td>按住麦克风流式转写，支持中间结果和最终结果编辑</td></tr>
+<tr><td>图片与 zip 附件</td><td>相册/拍照图片（单张 ≤2 MB、最多 3 张）与 zip（单个 ≤10 MB），限制与 Web 一致</td></tr>
+<tr><td>预签名直传</td><td>先申请一次性上传地址，再 PUT 文件字节，提交任务时只带回 URL 与文件名；请求里不捎带文件二进制</td></tr>
+<tr><td>下载升级</td><td>市场管理页上传 APK，App 内下载、校验 sha256、调起系统安装；iOS 跳 App Store</td></tr>
+</tbody></table></div>
+
+<h2 id="limits">边界</h2>
+<figure class="shot" data-shot="cap-mobile/limits.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">边界</span></div><button class="shot-open" type="button" aria-label="放大截图：边界"><img src="assets/screenshots/cap-mobile/limits.png" alt="边界" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-mobile/limits.png</code></div></div></figure>
+<ul>
+<li>移动端适合发起、跟踪、复核，不替代桌面编辑器、完整终端与高风险管理操作。</li>
+<li>iOS 在新建任务/任务会话首次使用时弹 AI 数据处理同意确认，结果保本机；Android 不弹。</li>
+<li>技术栈：Expo SDK、React Native、Expo Router；支持 development / preview / production 三种 EAS 构建 profile。</li>
+</ul>
+
+<h2 id="usage">怎么用</h2>
+<figure class="shot" data-shot="cap-mobile/usage.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">怎么用</span></div><button class="shot-open" type="button" aria-label="放大截图：怎么用"><img src="assets/screenshots/cap-mobile/usage.png" alt="怎么用" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-mobile/usage.png</code></div></div></figure>
+<ol>
+<li>打开 App，登录页填写服务器域名（如 <code>https://ai.example.com</code>，不要填控制服务 8003）。</li>
+<li>底部 Tab：任务 / 项目 / 我的。</li>
+<li>点中央「+」新建任务：选项目、模型、节点，语音或文字描述目标。</li>
+<li>提交后进任务详情跟踪执行。完整说明见 <a href="users-mobile.html">移动端手册</a>。</li>
+</ol>
+
+<p><a href="users-mobile.html">移动端安装、输入、模型与发布手册 →</a> · <a href="cap-editor.html">桌面编辑器详解 →</a></p>
+
+<footer class="footer"><span><a href="cap-node.html">← 上一篇：节点</a></span><span><a href="cap-browser.html">下一篇：浏览器控制 →</a></span></footer>
+</article></main></div>
+</body></html>

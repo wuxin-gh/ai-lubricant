@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="邮箱能力详解：邮件读取 MCP、按邮箱实例隔离只读查询、正文长度控制、附件元数据、token 绑实例。">
+  <title>邮箱 · 能力详解 · Ai Lubricant</title>
+  <link rel="stylesheet" href="assets/docs.css?v=20260831-3"><script src="assets/docs.js?v=20260831-3" defer></script>
+</head>
+<body>
+<button class="nav-toggle" id="nav-toggle" aria-expanded="false">☰ 打开文档导航</button>
+<div class="wrap">
+<aside class="sidebar">
+  <div class="brand"><span class="dot">A</span> Ai Lubricant</div>
+  <div class="nav-group">产品</div><nav>
+    <a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a>
+  </nav>
+  <div class="nav-group">能力详解</div><nav>
+    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
+  </nav>
+  <div class="nav-group">操作手册</div><nav>
+    <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
+  </nav>
+  <div class="nav-group">部署与接入</div><nav>
+    <a href="users-api.html"><span class="ic">↔</span>API 接入</a><a href="governance.html"><span class="ic">◈</span>安全与治理</a><a href="deploy.html"><span class="ic">⇩</span>生产部署</a><a href="desktop.html"><span class="ic">▭</span>Windows 桌面版</a><a href="architecture.html"><span class="ic">⚖</span>技术白皮书</a><a href="env-vars.html"><span class="ic">⊧</span>环境变量</a><a href="local-debug.html"><span class="ic">⚙</span>本地调试</a>
+  </nav>
+</aside>
+<main class="main"><div class="topbar"><button id="theme-toggle" type="button">☾ 深色</button><button id="print-page" type="button">⎙ 打印</button></div>
+<article class="content">
+<header class="hero"><h1>邮箱</h1><p class="desc">把「读取已配置上游邮箱的当前邮件」做成内置 MCP：按实例隔离、只读、正文限长、附件默认元数据。</p></header>
+
+<div class="table-wrap"><table>
+<thead><tr><th>问题</th><th>自己接 IMAP</th><th>平台 Mail 工具</th></tr></thead>
+<tbody>
+<tr><td>接入成本</td><td>自己写 IMAP 客户端、处理协议</td><td>服务端配置上游，Agent 直接调用 MCP</td></tr>
+<tr><td>登录态</td><td>自己维护刷新与重连</td><td>密码/签名密钥只在保存时写入服务端</td></tr>
+<tr><td>大正文</td><td>整篇灌进上下文，撑爆窗口</td><td>正文有长度上限，超长截断</td></tr>
+<tr><td>附件</td><td>自动拉二进制</td><td>默认只返回元数据（文件名/大小/类型）</td></tr>
+<tr><td>多用户隔离</td><td>自己实现</td><td>token 绑邮箱实例，不能跨实例</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="features">功能清单</h2>
+<figure class="shot" data-shot="cap-mail/features.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">功能清单</span></div><button class="shot-open" type="button" aria-label="放大截图：功能清单"><img src="assets/screenshots/cap-mail/features.png" alt="功能清单" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-mail/features.png</code></div></div></figure>
+<div class="table-wrap"><table><thead><tr><th>功能</th><th>说明</th></tr></thead><tbody>
+<tr><td>按邮箱实例隔离</td><td>每个 Mail 实例绑定自己的上游账户；token 只能读自己绑定的实例，插件只加载该实例的上游账户</td></tr>
+<tr><td>真实邮箱与别名</td><td>支持以真实邮箱或转发/别名邮箱查询；别名替换为实际来源邮箱并标注，避免误当主邮箱</td></tr>
+<tr><td>正文长度控制</td><td>正文超长截断，保护 Agent 上下文与计费</td></tr>
+<tr><td>附件默认元数据</td><td>不自动下载正文/二进制；需要内容时另行显式请求</td></tr>
+<tr><td>只读</td><td>不发送、不删除、不改邮箱状态</td></tr>
+<tr><td>服务端配置上游</td><td>「服务端配置」维护每个上游邮箱服务及其真实邮箱、别名邮箱</td></tr>
+</tbody></table></div>
+
+<h2 id="tokens">功能：token 绑实例，与 CDP 同构</h2>
+<figure class="shot" data-shot="cap-mail/tokens.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">token 绑实例，与 CDP 同构</span></div><button class="shot-open" type="button" aria-label="放大截图：token 绑实例，与 CDP 同构"><img src="assets/screenshots/cap-mail/tokens.png" alt="token 绑实例，与 CDP 同构" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-mail/tokens.png</code></div></div></figure>
+<div class="table-wrap"><table><thead><tr><th>能力</th><th>绑定</th><th>同构关系</th></tr></thead><tbody>
+<tr><td>Mail MCP token</td><td>绑定邮箱实例，不能跨实例</td><td><a href="cap-browser.html#tokens">CDP token 绑 client</a></td></tr>
+<tr><td>设备 token（device-control）</td><td>绑定 device_id</td><td><a href="cap-device-control.html#android-apk">device-control</a></td></tr>
+</tbody></table></div>
+<ul>
+<li><strong>外部 MCP 接入走 <code>/mcp/mail/sse</code></strong>；用户侧写 Mail 明细后必须 resync，把新快照推给活着的 driver。</li>
+<li><strong>Agent MCP 身份：</strong>Agent 绑定用户后，所有鉴权 MCP 固定使用该用户已获授权的 token；未授权时 401。</li>
+</ul>
+
+<h2 id="config">配置流程</h2>
+<figure class="shot" data-shot="cap-mail/config.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">配置流程</span></div><button class="shot-open" type="button" aria-label="放大截图：配置流程"><img src="assets/screenshots/cap-mail/config.png" alt="配置流程" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-mail/config.png</code></div></div></figure>
+<ol>
+<li>在「服务端配置」维护上游邮箱服务及其真实邮箱、重定向/别名邮箱；密码和签名密钥只在保存时写入。</li>
+<li>在「邮件列表」输入可选邮箱地址实时查询，验证别名标注是否正确。</li>
+<li>从 MCP 市场右上角「MCP 设置」创建共享 MCP 用户并分配服务；把 Mail 实例授权给需要用邮件的 Agent。</li>
+</ol>
+
+<p><a href="governance.html#tools">Mail token 隔离治理 →</a> · <a href="solutions.html#tools">浏览器与邮箱自动化方案 →</a></p>
+
+<footer class="footer"><span><a href="cap-device-control.html">← 上一篇：Android/iOS 控制</a></span><span><a href="cap-security.html">下一篇：安全防护 →</a></span></footer>
+</article></main></div>
+</body></html>

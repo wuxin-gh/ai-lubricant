@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Ai Lubricant 平台管理员手册：首次登录、渠道账号池、模型路由、API Key、请求日志、MCP 与节点治理。">
+  <title>平台管理员手册 · Ai Lubricant</title>
+  <link rel="stylesheet" href="assets/docs.css?v=20260831-3"><script src="assets/docs.js?v=20260831-3" defer></script>
+</head>
+<body>
+<button class="nav-toggle" id="nav-toggle" aria-expanded="false">☰ 打开文档导航</button>
+<div class="wrap">
+<aside class="sidebar">
+  <div class="brand"><span class="dot">A</span> Ai Lubricant</div>
+  <div class="nav-group">产品</div><nav>
+    <a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a>
+  </nav>
+  <div class="nav-group">能力详解</div><nav>
+    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
+  </nav>
+  <div class="nav-group">操作手册</div><nav>
+    <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
+  </nav>
+  <div class="nav-group">部署与接入</div><nav>
+    <a href="users-api.html"><span class="ic">↔</span>API 接入</a><a href="governance.html"><span class="ic">◈</span>安全与治理</a><a href="deploy.html"><span class="ic">⇩</span>生产部署</a><a href="desktop.html"><span class="ic">▭</span>Windows 桌面版</a><a href="architecture.html"><span class="ic">⚖</span>技术白皮书</a><a href="env-vars.html"><span class="ic">⊧</span>环境变量</a><a href="local-debug.html"><span class="ic">⚙</span>本地调试</a>
+  </nav>
+</aside>
+<main class="main"><div class="topbar"><button id="theme-toggle" type="button">☾ 深色</button><button id="print-page" type="button">⎙ 打印</button></div>
+<article class="content">
+<header class="hero"><h1>平台管理员手册</h1><p class="desc">把模型 Token、渠道账号、API Key、Agent 工具与远程节点配置成可使用、可限制、可观察的生产能力——不管这套平台是你一个人用，还是多人共用。</p></header>
+<div class="toc"><strong>本页目录</strong><a href="#login">首次登录</a><a href="#overview">管理入口</a><a href="#channel-workflow">渠道账号池</a><a href="#routing">模型路由</a><a href="#keys">API Key</a><a href="#logs">日志观测</a><a href="#mcp">MCP 工具</a><a href="#nodes">节点</a><a href="#acceptance">上线验收</a></div>
+
+<h2 id="login">1. 首次登录与管理员身份</h2>
+<p>管理端统一入口为 <code>/manager</code>。认证优先使用平台用户 session 中的 <code>role=admin</code>；<code>/manager/login</code> 是尚无管理员用户或兼容层异常时的 break-glass 单密码入口。</p>
+<h3>引导平台管理员</h3>
+<pre><code>AI_LUBRICANT_COMPAT_ENABLED=true
+AI_LUBRICANT_BOOTSTRAP_ADMIN_EMAIL=admin@example.com
+AI_LUBRICANT_BOOTSTRAP_ADMIN_PASSWORD=&lt;强密码&gt;
+AI_LUBRICANT_BOOTSTRAP_ADMIN_NAME=admin</code></pre>
+<p>引导是幂等的：相同邮箱已存在则跳过，重启不会重置密码。创建后从 .env 移除明文密码并转入 Secret 管理。</p>
+<div class="danger"><strong>应急管理员首次提交即设密码</strong>旧管理配置没有 <code>password_hash</code> 时，第一次向 <code>/admin/login</code> 提交的密码会成为初始管理员密码。部署初期先限制来源，由可信管理员访问 <code>/manager/login</code> 设置强密码，再开放管理入口。</div>
+
+<h2 id="overview">2. 管理能力入口</h2>
+<div class="cards">
+<div class="card"><h3>数据仪表盘</h3><p><code>/manager/data-dashboard</code>：请求、成功率、Token 和趋势。</p></div>
+<div class="card"><h3>渠道</h3><p><code>/manager/channels</code>：Provider、账号池、认证、模型和限流。</p></div>
+<div class="card"><h3>模型路由</h3><p><code>/manager/model-routing</code>：对外模型、模型组和候选渠道。</p></div>
+<div class="card"><h3>API Keys</h3><p><code>/manager/api-keys</code>：权限、额度、状态、使用量与轮换。</p></div>
+<div class="card"><h3>请求日志</h3><p><code>/manager/request-logs</code>：请求级路由、渠道尝试、耗时与 Token。</p></div>
+<div class="card"><h3>节点</h3><p><code>/manager/nodes</code>：onboard、审批、分组、容量与终端。</p></div>
+<div class="card"><h3>MCP 市场</h3><p><code>/manager/mcp-market</code>：内置插件、远程 MCP 与服务状态。</p></div>
+<div class="card"><h3>安全</h3><p><code>/manager/security</code>：安全状态与相关治理配置。</p></div>
+</div>
+
+<h2 id="channel-workflow">3. 接入模型渠道与账号池</h2>
+<ol>
+<li>进入“渠道”，新增内置 Provider 类型或自定义 OpenAI / Anthropic / Responses 兼容渠道。</li>
+<li>配置上游 base URL、协议路径、认证方式和渠道限流；不要直接在生产 Key 上试错。</li>
+<li>新增一个或多个账号，设置启停、优先级、权重、RPM/TPM/并发与代理。</li>
+<li>使用账号测试功能验证认证与基础请求；刷新上游模型列表。</li>
+<li>核对模型 ID、别名、白名单、上下文与 <code>output_modalities</code>；图片/视频生成能力由输出模态决定。</li>
+<li>观察认证状态、配额与失败原因，再进入模型路由配置。</li>
+</ol>
+<div class="warn"><strong>凭据与测试边界</strong>Cookie、Bearer/refresh token、账号密码只进入安全字段。测试入参在入口一次构造，dispatch 不应加临时补丁；测试结束后撤销临时凭据。</div>
+<div class="shot-grid">
+<figure class="shot" data-shot="channels/channels-list.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">/manager/channels</span></div><button class="shot-open" type="button"><img src="assets/screenshots/channels/channels-list.png" alt="Ai Lubricant 渠道列表" loading="lazy"></button><div class="pending"><span class="tag">截图加载失败</span><br>多 Provider、渠道与运行状态<br><code>channels/channels-list.png</code></div></div><figcaption><b>渠道中心：</b>统一管理模型供应来源，而不是让每个应用保存上游配置。</figcaption></figure>
+<figure class="shot" data-shot="channels/channel-dialog-01.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">渠道账号池</span></div><button class="shot-open" type="button"><img src="assets/screenshots/channels/channel-dialog-01.png" alt="渠道账号池配置" loading="lazy"></button><div class="pending"><span class="tag">截图加载失败</span><br>账号、健康、模型、限流与能力配置<br><code>channels/channel-dialog-01.png</code></div></div><figcaption><b>账号池：</b>同渠道多个账号参与路由、限流与故障切换。</figcaption></figure>
+</div>
+
+<h2 id="routing">4. 配置模型路由</h2>
+<ol>
+<li>定义稳定的对外模型名；客户端只依赖此名称。</li>
+<li>把外部名映射到实际模型或模型组；为组配置多个 Provider/模型候选。</li>
+<li>按 API Key scope 限制可用模型与 Provider，避免高成本/敏感渠道被全局使用。</li>
+<li>验证同协议直通：上游与客户端协议一致时保持原始语义；仅跨协议路径做字段映射。</li>
+<li>用测试 Key 验证非流式、流式、工具调用、错误和上下文超限。</li>
+<li>在请求日志确认实际 routed model、Provider、account 和 request path。</li>
+</ol>
+<p>账号选择会综合启停、认证、冷却、限流、配额、优先级、权重和渠道评分。评分全部为零时交给模型组回退或返回 429，不用 LRU 反复探测故障渠道。</p>
+<figure class="shot" data-shot="model-metadata/model-metadata-list.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">/manager/model-routing</span></div><button class="shot-open" type="button"><img src="assets/screenshots/model-metadata/model-metadata-list.png" alt="Ai Lubricant 模型路由" loading="lazy"></button><div class="pending"><span class="tag">截图加载失败</span><br>对外模型、模型组、渠道与账号路由<br><code>model-metadata/model-metadata-list.png</code></div></div><figcaption><b>业务解耦：</b>客户端使用稳定模型名，供应商和账号变化由管理员在平台内处理。</figcaption></figure>
+
+<h2 id="keys">5. API Key 生命周期</h2>
+<h3>创建与授权</h3>
+<ol>
+<li>使用“业务-环境”命名，如 <code>order-agent-prod</code>。</li>
+<li>按最小权限授权模型、Provider 与功能，不默认允许全部。</li>
+<li>设置 RPM/RPD、TPM、并发、Token 或累计用量限制。</li>
+<li>明文只交给目标 Secret 管理系统；不进入浏览器前端、Git、日志或截图。</li>
+</ol>
+<h3>观察、轮换与撤销</h3>
+<ul>
+<li>按 Key 查看请求量、Token、错误、模型和渠道使用。</li>
+<li>轮换顺序：新建 → 应用切换并验证 → 禁用旧 Key → 删除。</li>
+<li>疑似泄露立即禁用；查询 request ID 与用量，轮换关联上游凭据。</li>
+<li>定期清理闲置 Key、离职用户和下线项目。</li>
+</ul>
+<div class="danger"><strong>生产不可关闭全局 Key 校验</strong><code>api_keys_enabled()</code> 关闭时模型 API 主链路可接受无 Key 请求，只适合隔离调试环境。</div>
+<figure class="shot" data-shot="api-keys/api-keys-list.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">/manager/api-keys</span></div><button class="shot-open" type="button"><img src="assets/screenshots/api-keys/api-keys-list.png" alt="API Key 权限与额度管理" loading="lazy"></button><div class="pending"><span class="tag">截图加载失败</span><br>模型/渠道权限、额度、状态与使用量<br><code>api-keys/api-keys-list.png</code></div></div><figcaption><b>将 Token 变成治理单元：</b>应用只拿到平台 Key，实际模型凭据留在渠道账号池。</figcaption></figure>
+
+<h2 id="logs">6. 用请求日志定位问题</h2>
+<p>请求日志不是简单访问记录；它关联一次客户端请求和多次渠道尝试：</p>
+<ul>
+<li>request ID / parent request ID</li><li>API Key lineage 快照</li><li>请求模型与 routed model</li>
+<li>Provider、账号和实际请求路径</li><li>成功/失败、状态码、错误与 retry path</li>
+<li>总耗时、首 Token、prompt/completion/total/cached token</li><li>脱敏头与按策略保留的正文</li>
+</ul>
+<p>排障先从客户端 request ID 进入详情，按时间顺序查看每次渠道尝试；不要只看最终错误。</p>
+<div class="shot-grid">
+<figure class="shot" data-shot="request-logs/request-logs-list.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">/manager/request-logs</span></div><button class="shot-open" type="button"><img src="assets/screenshots/request-logs/request-logs-list.png" alt="Ai Lubricant 请求日志" loading="lazy"></button><div class="pending"><span class="tag">截图加载失败</span><br>模型、渠道、状态、耗时与 Token<br><code>request-logs/request-logs-list.png</code></div></div><figcaption><b>列表定位：</b>按模型、Provider、状态和 Key 找到异常请求。</figcaption></figure>
+<figure class="shot" data-shot="request-logs/request-log-detail.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">请求详情</span></div><button class="shot-open" type="button"><img src="assets/screenshots/request-logs/request-log-detail.png" alt="请求路由与渠道尝试详情" loading="lazy"></button><div class="pending"><span class="tag">截图加载失败</span><br>渠道请求路径、重试、错误与用量<br><code>request-logs/request-log-detail.png</code></div></div><figcaption><b>请求级证据：</b>查看一次请求在多个渠道账号之间的真实路径。</figcaption></figure>
+</div>
+
+<h2 id="mcp">7. 管理 MCP 与内置工具</h2>
+<h3>平台 MCP 市场</h3>
+<ul>
+<li>在 <code>/manager/mcp-market</code> 管理内置插件和远程 SSE MCP。</li>
+<li>custom 插件版本需完成 security review 并为 passed 才能激活。</li>
+<li>内置 CDP/Mail 常驻运行；start/reload 会确保注册并推送最新配置。</li>
+<li>修改 CDP client 或 Mail 明细后必须 resync，将配置快照下发到运行时。</li>
+</ul>
+<h3>CDP 与 Mail token</h3>
+<ul>
+<li>用户只创建“对外开放” token；Agent/节点/用户内部 token 由服务按身份自动签发。</li>
+<li>CDP 外部 MCP token 必须绑定具体 client；未绑定会得到“not authorized to operate any CDP client”。</li>
+<li>Chrome 扩展 connection token 只用于 WebSocket 握手，不是 MCP access token。</li>
+<li>Mail token 只能访问自己的实例；插件按 instance key 过滤上游账户。</li>
+</ul>
+
+<h2 id="nodes">8. 节点治理</h2>
+<ul>
+<li>在 <code>/manager/nodes</code> 创建 passive_management 分组，或 onboard execution/management 客户端。</li>
+<li>核对节点身份、OS/arch、标签与版本后 Approve；在线但 pending 的节点不参与调度。</li>
+<li>配置容量、父分组和授权；定期审计活跃会话与最后心跳。</li>
+<li>异常/泄露节点立即 Revoke；管理节点删除前处理其 execution 子节点。</li>
+<li>浏览器终端与 host exec 是高权限能力，只向可信管理员开放。</li>
+</ul>
+<p>详细接入、安装、终端、文件、代理和安全说明见 <a href="guide-node.html">节点管理员手册</a>。</p>
+
+<h2 id="acceptance">9. 上线验收清单</h2>
+<ul>
+<li>☐ 至少两个独立 Provider/账号（如有）完成认证、模型刷新和基础请求测试。</li>
+<li>☐ 外部模型名和模型组已定义，Key 只看见授权模型。</li>
+<li>☐ OpenAI 非流式/流式、Anthropic Messages、工具调用与错误路径已验证。</li>
+<li>☐ 429、账号冻结、Provider 故障时路由行为和日志符合预期。</li>
+<li>☐ API Key 全局鉴权开启；生产 Key 有模型/渠道/额度限制。</li>
+<li>☐ 请求日志头脱敏；payload capture 与保留期通过审批。</li>
+<li>☐ 节点 approved、终端/文件可用，控制面只有一个 Registry。</li>
+<li>☐ CDP/Mail token 绑定正确实例，不存在跨用户访问。</li>
+<li>☐ 管理员、普通用户、节点管理员权限边界已验证。</li>
+<li>☐ TLS、备份、Secret、升级与事件响应流程已演练。</li>
+</ul>
+
+<footer class="footer"><span><a href="guide-developer.html">← 上一篇：开发者手册</a></span><span><a href="guide-node.html">下一篇：节点管理员手册 →</a></span></footer>
+</article></main></div>
+</body></html>

@@ -1,0 +1,16 @@
+[submodule "node_server"]
+	path = node_server
+	url = ../ai-lubricant-node-server.git
+[submodule "nodes"]
+	path = nodes
+	url = ../ai-lubricant-nodes.git
+[submodule "user-frontend"]
+	path = user-frontend
+	url = ../ai-lubricant-user-frontend.git
+[submodule "mobile"]
+	path = mobile
+	url = ../ai-lubricant-mobile.git
+[submodule "device-control"]
+	path = device-control
+	url = ../ai-lubricant-device-control.git
+	branch = master

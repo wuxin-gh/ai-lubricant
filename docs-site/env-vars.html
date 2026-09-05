@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>环境变量清单 · Ai Lubricant</title>
+  <link rel="stylesheet" href="assets/docs.css?v=20260831-3"><script src="assets/docs.js?v=20260831-3" defer></script>
+</head>
+<body>
+<button class="nav-toggle" id="nav-toggle" aria-expanded="false">☰ 打开文档导航</button>
+<div class="wrap">
+<aside class="sidebar">
+  <div class="brand"><span class="dot">A</span> Ai Lubricant</div>
+  <div class="nav-group">产品</div><nav>
+    <a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a>
+  </nav>
+  <div class="nav-group">能力详解</div><nav>
+    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
+  </nav>
+  <div class="nav-group">操作手册</div><nav>
+    <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
+  </nav>
+  <div class="nav-group">部署与接入</div><nav>
+    <a href="users-api.html"><span class="ic">↔</span>API 接入</a><a href="governance.html"><span class="ic">◈</span>安全与治理</a><a href="deploy.html"><span class="ic">⇩</span>生产部署</a><a href="desktop.html"><span class="ic">▭</span>Windows 桌面版</a><a href="architecture.html"><span class="ic">⚖</span>技术白皮书</a><a href="env-vars.html"><span class="ic">⊧</span>环境变量</a><a href="local-debug.html"><span class="ic">⚙</span>本地调试</a>
+  </nav>
+</aside>
+<main class="main"><div class="topbar"><button id="theme-toggle" type="button">☾ 深色</button><button id="print-page" type="button">⎙ 打印</button></div>
+<article class="content">
+<header class="hero"><h1>环境变量清单</h1><p class="desc">ai-lubricant 启动依赖配置项的唯一总表。数据服务（<code>python main.py</code>）读取 <code>bootstrap_config.py</code>，节点控制服务（<code>python -m node_server</code>）独立解析 <code>node_server/config.py</code>，不 import bootstrap_config。本页把散落在 <a href="deploy.html">部署文档</a>各小节的字段集中成一份，便于一次性核对。</p></header>
+
+<div class="toc"><strong>本页目录</strong><a href="#priority">解析优先级</a><a href="#server">server</a><a href="#postgres">postgres</a><a href="#redis">redis</a><a href="#outbound">outbound</a><a href="#ai_lubricant">ai_lubricant</a><a href="#clickhouse">clickhouse</a><a href="#marketplace">marketplace</a><a href="#process">进程级环境变量</a></div>
+
+<h2 id="priority">1. 解析优先级与约定</h2>
+<p>启动依赖统一按“<strong>环境变量优先 → <code>.env</code> → 内置默认值</strong>”解析。渠道、模型、API Key、重试和治理策略等业务配置存放在 PostgreSQL/Redis，不属于 .env。本地启动 <code>python main.py</code> / <code>python -m node_server</code> 会自动加载项目根 <code>.env</code>；外部环境变量优先于 <code>.env</code>。</p>
+<div class="danger"><strong>不要提交 .env</strong>其中包含数据库密码、内部 token、引导管理员密码和节点凭据加密密钥。<code>.env</code> 已被 <code>.gitignore</code> 排除；从 <code>.env.example</code> 复制模板后填入真实值。生产环境应通过 Secret 管理系统或环境变量注入敏感值。</div>
+<ul>
+  <li>布尔值在 <code>.env</code> 中使用 <code>true</code>/<code>false</code>；环境变量还接受 <code>1/0</code>、<code>yes/no</code>、<code>on/off</code>。</li>
+  <li>「进程」列：<strong>数据</strong> = 数据服务（main.py）读取，<strong>控制</strong> = 节点控制服务（node_server）读取，<strong>两</strong> = 两者都读。</li>
+  <li>「必需」列指：当无环境变量、无 ini 值、无默认值时启动是否报 <code>ConfigurationError</code>。</li>
+  <li>所有配置均以 <code>.env</code> 变量为准，表中不再存在仅 INI 的字段。</li>
+</ul>
+
+<h2 id="server">2. <code>[server]</code> 数据服务监听</h2>
+<div class="table-wrap"><table><thead><tr><th>ini 字段</th><th>环境变量</th><th>进程</th><th>必需/默认</th><th>说明</th></tr></thead><tbody>
+<tr><td><code>host</code></td><td>无</td><td>数据</td><td>固定 <code>0.0.0.0</code></td><td>main.py 末尾硬编码 <code>uvicorn.run(app, host="0.0.0.0", port=8001)</code>，ini 段实际未被 bootstrap_config 读取。</td></tr>
+<tr><td><code>port</code></td><td>无</td><td>数据</td><td>固定 <code>8001</code></td><td>同上；需要其他地址或端口时用 <code>uvicorn main:app --host ... --port ...</code> 启动，不要只改 ini。</td></tr>
+</tbody></table></div>
+
+<h2 id="postgres">3. <code>[postgres]</code> 业务数据库（两进程共享）</h2>
+<div class="table-wrap"><table><thead><tr><th>ini 字段</th><th>环境变量</th><th>进程</th><th>必需/默认</th><th>说明</th></tr></thead><tbody>
+<tr><td><code>host</code></td><td><code>POSTGRES_HOST</code></td><td>两</td><td>必需</td><td>PostgreSQL 主机。</td></tr>
+<tr><td><code>port</code></td><td><code>POSTGRES_PORT</code></td><td>两</td><td>必需，1–65535</td><td>PostgreSQL 端口。</td></tr>
+<tr><td><code>user</code></td><td><code>POSTGRES_USER</code></td><td>两</td><td>必需</td><td>数据库用户。</td></tr>
+<tr><td><code>password</code></td><td><code>POSTGRES_PASSWORD</code></td><td>两</td><td>必需</td><td>数据库密码。</td></tr>
+<tr><td><code>database</code></td><td><code>POSTGRES_DATABASE</code>，兼容 <code>POSTGRES_DB</code></td><td>两</td><td>必需</td><td>主数据库名。</td></tr>
+<tr><td><code>pool_min_size</code></td><td><code>POSTGRES_POOL_MIN_SIZE</code></td><td>数据</td><td>默认 1</td><td>单进程连接池最小连接数，至少为 1。</td></tr>
+<tr><td><code>pool_max_size</code></td><td><code>POSTGRES_POOL_MAX_SIZE</code></td><td>数据</td><td>默认 10</td><td>单进程连接池上限，不能小于 pool_min_size。</td></tr>
+</tbody></table></div>
+
+<h2 id="redis">4. <code>[redis]</code> 运行态真相源（两进程共享）</h2>
+<div class="table-wrap"><table><thead><tr><th>ini 字段</th><th>环境变量</th><th>进程</th><th>必需/默认</th><th>说明</th></tr></thead><tbody>
+<tr><td><code>host</code></td><td><code>REDIS_HOST</code></td><td>两</td><td>必需</td><td>Redis 主机。</td></tr>
+<tr><td><code>port</code></td><td><code>REDIS_PORT</code></td><td>两</td><td>必需，1–65535</td><td>Redis 端口。</td></tr>
+<tr><td><code>db</code></td><td><code>REDIS_DB</code></td><td>两</td><td>必需，≥0</td><td>Redis 逻辑库。</td></tr>
+<tr><td><code>prefix_key</code></td><td>无</td><td>两</td><td>必需</td><td>Redis key 命名空间；多套环境共用 Redis 时必须互不相同。</td></tr>
+<tr><td><code>decode_responses</code></td><td>无</td><td>两</td><td>必需</td><td>必须是布尔值；示例配置为 <code>true</code>。</td></tr>
+<tr><td><code>max_connections</code></td><td><code>REDIS_MAX_CONNECTIONS</code></td><td>两</td><td>必需，示例 500</td><td>单进程连接池上限；按进程数、Redis maxclients 和文件描述符容量规划。</td></tr>
+<tr><td><code>stream_timeout</code></td><td><code>REDIS_STREAM_TIMEOUT</code></td><td>数据</td><td>默认 10 秒</td><td>已取得连接后等待单条命令回包的最长时间；超时自愈重连，不影响 pubsub。</td></tr>
+<tr><td><code>pool_timeout</code></td><td><code>REDIS_POOL_TIMEOUT</code></td><td>数据</td><td>默认 10 秒</td><td>从连接池等待可用连接的最长时间。</td></tr>
+</tbody></table></div>
+
+<h2 id="outbound">5. <code>[outbound]</code> 出站上游连接池</h2>
+<p>数据服务转发到上游 LLM 的 <code>aiohttp</code> 连接池参数。<strong>每个出站模式实例（direct / url_prefix / network / node）独立持有连接池</strong>，环境变量对每个实例独立生效。无 ini 对应字段。</p>
+<div class="danger"><strong><code>OUTBOUND_CONNECTOR_LIMIT_PER_HOST</code> 是更细的脖子。</strong>到同一上游域名（如 <code>api.openai.com</code>）的连接再多账号也共用此额度；高并发打到单一上游时必须同时调大，只调 <code>OUTBOUND_CONNECTOR_LIMIT</code> 无效。</div>
+<div class="table-wrap"><table><thead><tr><th>ini 字段</th><th>环境变量</th><th>进程</th><th>必需/默认</th><th>说明</th></tr></thead><tbody>
+<tr><td>无</td><td><code>OUTBOUND_CONNECTOR_LIMIT</code></td><td>数据</td><td>默认 100</td><td>单出站模式实例的并发连接总数上限。1000 并发起步建议 ≥ 2000。</td></tr>
+<tr><td>无</td><td><code>OUTBOUND_CONNECTOR_LIMIT_PER_HOST</code></td><td>数据</td><td>默认 32</td><td>到同一上游域名的并发连接上限。集中打单一上游时按目标并发设；分散多上游可较小。</td></tr>
+</tbody></table></div>
+<p>两值非正整数时回退默认。未设置时行为与历史版本一致（100 / 32），不影响现有部署。连接池上限还需与 <code>POSTGRES_POOL_MAX_SIZE</code>、<code>REDIS_MAX_CONNECTIONS</code>、账号 <code>concurrent_limit</code> 之和、文件描述符上限一起规划，任一短板都成瓶颈。</p>
+
+<h2 id="ai_lubricant">6. <code>[ai_lubricant]</code> 兼容层与节点控制面</h2>
+<div class="table-wrap"><table><thead><tr><th>ini 字段</th><th>环境变量</th><th>进程</th><th>必需/默认</th><th>说明</th></tr></thead><tbody>
+<tr><td><code>compat_enabled</code></td><td><code>AI_LUBRICANT_COMPAT_ENABLED</code></td><td>数据</td><td>false</td><td>启用用户门户、多用户、项目、编辑器与节点适配 API；完整 Web 平台必须开启。</td></tr>
+<tr><td><code>database_url</code></td><td><code>AI_LUBRICANT_DATABASE_URL</code></td><td>控制</td><td>复用主 PostgreSQL</td><td>可选独立 asyncpg DSN；留空时 mc_* 表写入主库。</td></tr>
+<tr><td><code>user_adapter_enabled</code></td><td><code>AI_LUBRICANT_USER_ADAPTER_ENABLED</code></td><td>数据</td><td>false</td><td>启用系统用户适配；开启时使用下面三个 system_user_* 字段。</td></tr>
+<tr><td><code>system_user_id</code></td><td><code>AI_LUBRICANT_SYSTEM_USER_ID</code></td><td>数据</td><td>见 .env.example</td><td>系统用户身份；不要随意更换已经投入使用的 ID。</td></tr>
+<tr><td><code>system_user_name</code></td><td><code>AI_LUBRICANT_SYSTEM_USER_NAME</code></td><td>数据</td><td>见 .env.example</td><td>系统用户名。</td></tr>
+<tr><td><code>system_user_email</code></td><td><code>AI_LUBRICANT_SYSTEM_USER_EMAIL</code></td><td>数据</td><td>见 .env.example</td><td>系统用户邮箱。</td></tr>
+<tr><td><code>bootstrap_admin_email</code></td><td><code>AI_LUBRICANT_BOOTSTRAP_ADMIN_EMAIL</code></td><td>数据</td><td>空</td><td>首次启动幂等创建平台管理员；email 为空时不创建。创建后应从 Secret 注入中移除明文密码。</td></tr>
+<tr><td><code>bootstrap_admin_password</code></td><td><code>AI_LUBRICANT_BOOTSTRAP_ADMIN_PASSWORD</code></td><td>数据</td><td>空</td><td>同上管理员密码。</td></tr>
+<tr><td><code>bootstrap_admin_name</code></td><td><code>AI_LUBRICANT_BOOTSTRAP_ADMIN_NAME</code></td><td>数据</td><td>admin</td><td>管理员显示名。</td></tr>
+<tr><td><code>captcha_required</code></td><td><code>AI_LUBRICANT_CAPTCHA_REQUIRED</code></td><td>数据</td><td>true</td><td>登录/注册是否强制 cap.js 验证；关闭仅作为 CAPTCHA/Redis 故障逃生开关。</td></tr>
+<tr><td><code>session_cookie_samesite</code></td><td><code>AI_LUBRICANT_SESSION_SAMESITE</code></td><td>数据</td><td>lax</td><td>同源部署保持 lax；跨站浏览器前端需设 none。</td></tr>
+<tr><td><code>session_cookie_secure</code></td><td><code>AI_LUBRICANT_SESSION_SECURE</code></td><td>数据</td><td>false</td><td>HTTPS 生产环境建议 true；SameSite=None 时必须 true。</td></tr>
+<tr><td><code>agent_compose_base_url</code></td><td><code>AGENT_COMPOSE_BASE_URL</code></td><td>数据</td><td>空</td><td>数据服务访问独立节点控制服务的内部地址，例如 <code>http://127.0.0.1:8003</code>。</td></tr>
+<tr><td><code>agent_compose_timeout</code></td><td><code>AGENT_COMPOSE_TIMEOUT</code></td><td>数据</td><td>30 秒</td><td>数据服务调用节点控制服务的超时。</td></tr>
+<tr><td><code>review_project_max_concurrency</code></td><td>无</td><td>数据</td><td>2</td><td>每项目 review 任务池最大并发；全局默认，整主机统一调。</td></tr>
+<tr><td><code>node_control_token</code></td><td><code>NODE_CONTROL_TOKEN</code>（兼容 <code>AGENT_COMPOSE_NODE_API_TOKEN</code>）</td><td><strong>两</strong></td><td>缺失时控制服务生成</td><td>数据服务→控制服务内部 Bearer token；<strong>两个进程必须完全一致</strong>。旧名仅兼容读取，新部署使用此名称。</td></tr>
+<tr><td><code>node_credential_encryption_key</code></td><td><code>NODE_CREDENTIAL_ENCRYPTION_KEY</code></td><td>控制</td><td>缺失时控制服务生成</td><td>AES-256 凭据加密密钥，接受 64 位 hex 或解码后 32 字节的 Base64；<strong>生成后不可轮换</strong>，否则已加密节点凭据全部失效。</td></tr>
+<tr><td><code>node_server_public_url</code></td><td><code>AGENT_COMPOSE_NODE_SERVER_PUBLIC_URL</code></td><td>控制</td><td>空</td><td>Go 节点实际拨号地址；留空时部分引导链接会从当前请求 origin 推导。</td></tr>
+<tr><td><code>node_server_enabled</code></td><td><code>AGENT_COMPOSE_NODE_SERVER_ENABLED</code></td><td>控制</td><td>true</td><td>节点功能紧急停用开关；不等于进程角色选择。</td></tr>
+<tr><td><code>node_control_host</code></td><td><code>NODE_CONTROL_HOST</code></td><td>控制</td><td>0.0.0.0</td><td>Hypercorn 监听地址。</td></tr>
+<tr><td><code>node_control_port</code></td><td><code>NODE_CONTROL_PORT</code></td><td>控制</td><td>8003</td><td>Hypercorn 监听端口。</td></tr>
+<tr><td><code>agent_compose_agent_image</code></td><td><code>AGENT_COMPOSE_AGENT_IMAGE</code></td><td>控制</td><td>空</td><td>docker/docker-compose 节点引导脚本使用的镜像。</td></tr>
+<tr><td><code>agent_compose_node_bin_dir</code></td><td><code>AGENT_COMPOSE_NODE_BIN_DIR</code></td><td>控制</td><td>自动探测 nodes/dist</td><td>提供节点安装包下载的二进制目录。</td></tr>
+<tr><td><code>node_default_session_cpu</code></td><td><code>NODE_DEFAULT_SESSION_CPU</code></td><td>控制</td><td>1.0 核</td><td>每个节点会话的全局 CPU 计费量；0 表示不按该维度准入。</td></tr>
+<tr><td><code>node_default_session_memory</code></td><td><code>NODE_DEFAULT_SESSION_MEMORY</code></td><td>控制</td><td>1073741824 字节</td><td>每个节点会话的全局内存计费量；0 表示不按该维度准入。</td></tr>
+<tr><td><code>node_terminal_max_active_per_node</code></td><td><code>NODE_TERMINAL_MAX_ACTIVE_PER_NODE</code></td><td>控制</td><td>10</td><td>单节点最大活跃终端数，至少为 1。</td></tr>
+<tr><td><code>node_terminal_detached_ttl_seconds</code></td><td><code>NODE_TERMINAL_DETACHED_TTL_SECONDS</code></td><td>控制</td><td>1800 秒</td><td>无浏览器挂载终端的存活秒数，至少 60。</td></tr>
+</tbody></table></div>
+<div class="danger"><strong>.env 必须可写且持久化</strong>控制服务在缺少 token 或凭据加密密钥时会生成并回写 .env；写入失败会拒绝启动。在容器中必须挂载持久化配置，不能只把 .env 烘焙进一次性镜像。多副本控制服务也不能依赖各副本各自生成密钥。</div>
+
+<h2 id="clickhouse">7. <code>[clickhouse]</code> 请求 payload 双写（可选，默认关闭）</h2>
+<div class="table-wrap"><table><thead><tr><th>ini 字段</th><th>环境变量</th><th>进程</th><th>必需/默认</th><th>说明</th></tr></thead><tbody>
+<tr><td><code>request_payload_enabled</code></td><td><code>CLICKHOUSE_REQUEST_PAYLOAD_ENABLED</code></td><td>数据</td><td>false</td><td>启用 ClickHouse 数据源、payload 双写和对话存储；开启后完整请求/响应体将入库，开启前必须完成隐私评估。</td></tr>
+<tr><td><code>addr</code></td><td><code>CLICKHOUSE_ADDR</code></td><td>数据</td><td>空</td><td>ClickHouse 地址 <code>host:port</code>。</td></tr>
+<tr><td><code>database</code></td><td><code>CLICKHOUSE_DATABASE</code></td><td>数据</td><td>ai_lubricant_logs</td><td>ClickHouse 库名。</td></tr>
+<tr><td><code>username</code></td><td><code>CLICKHOUSE_USERNAME</code></td><td>数据</td><td>空</td><td>ClickHouse 用户。</td></tr>
+<tr><td><code>password</code></td><td><code>CLICKHOUSE_PASSWORD</code></td><td>数据</td><td>空</td><td>ClickHouse 密码。</td></tr>
+<tr><td><code>request_payload_ttl_days</code></td><td><code>CLICKHOUSE_REQUEST_PAYLOAD_TTL_DAYS</code></td><td>数据</td><td>30 天</td><td>payload 保留天数。</td></tr>
+<tr><td><code>max_payload_bytes</code></td><td><code>CLICKHOUSE_MAX_PAYLOAD_BYTES</code></td><td>数据</td><td>4194304 字节</td><td>单条 payload 上限。</td></tr>
+</tbody></table></div>
+<p>关闭 ClickHouse 时，模型代理主链路仍可工作；请求大字段双写和依赖 ClickHouse 的对话存储不可用。不要在未完成隐私、访问控制和 TTL 评估前捕获生产请求正文。</p>
+
+<h2 id="marketplace">8. <code>[marketplace]</code> / <code>[marketplace.consumer]</code> 资源市场（可选）</h2>
+<p>两级开关：<strong>只填 <code>repo_url</code></strong> 即「可看不可管」；<strong>再补 <code>github_token</code></strong> 才出现 <code>/manager/marketplace-admin</code> 管理页。</p>
+<div class="table-wrap"><table><thead><tr><th>ini 字段</th><th>环境变量</th><th>section</th><th>说明</th></tr></thead><tbody>
+<tr><td><code>repo_url</code></td><td><code>MARKETPLACE_REPO_URL</code></td><td>marketplace</td><td>市场仓库地址（唯一必填）。owner/repo 由它解析。</td></tr>
+<tr><td><code>github_branch</code></td><td><code>MARKETPLACE_GITHUB_BRANCH</code></td><td>marketplace</td><td>可选。留空用 main；地址里带 /tree/&lt;分支&gt; 时取那个分支。</td></tr>
+<tr><td><code>github_token</code></td><td><code>MARKETPLACE_GITHUB_TOKEN</code></td><td>marketplace</td><td>fine-grained token，仅「管市场」需要。仅服务端内存使用，从不传输给前端。</td></tr>
+<tr><td><code>modules</code></td><td><code>MARKETPLACE_MODULES</code></td><td>marketplace</td><td>模块白名单，逗号分隔，默认 <code>mcp,plugins,skills,channels,prompts,node-versions</code>。</td></tr>
+<tr><td><code>index_name</code></td><td><code>MARKETPLACE_INDEX_NAME</code></td><td>marketplace</td><td>每个模块的索引文件名，默认 <code>index.json</code>。</td></tr>
+<tr><td><code>repo_url</code> / <code>github_branch</code> / <code>modules</code> / <code>index_name</code></td><td>同名 <code>MARKETPLACE_*</code></td><td>marketplace.consumer</td><td>消费侧只读公开 raw；留空时回退到 <code>[marketplace]</code> 对应字段。</td></tr>
+</tbody></table></div>
+<div class="info"><strong>兼容旧写法</strong>早期版本要求分别填 <code>github_owner</code> 和 <code>github_repo</code>，这两个字段仍然可用：填了 <code>repo_url</code> 以它为准，没填才回落到拆字段写法，已有部署升级后无需改配置。</div>
+
+<h2 id="process">9. 进程级环境变量（无 ini 对应）</h2>
+<div class="table-wrap"><table><thead><tr><th>环境变量</th><th>进程</th><th>默认</th><th>说明</th></tr></thead><tbody>
+<tr><td><code>TZ</code></td><td>两</td><td>系统</td><td>时区；compose 内设为 <code>Asia/Shanghai</code>。</td></tr>
+<tr><td><code>DEBUG</code></td><td>数据</td><td>true</td><td>进程调试标志；缺省视为 true（<code>server/config.py</code>）。Compose 数据服务显式设为 <code>false</code>，生产保持这样。</td></tr>
+<tr><td><code>APP_VERSION</code></td><td>数据</td><td>dev</td><td>用户门户公开的当前版本号。</td></tr>
+<tr><td><code>EDITOR_SESSION_REAPER_INTERVAL</code></td><td>数据</td><td>300 秒</td><td>编辑器会话回收扫描间隔，最小 60 秒。</td></tr>
+<tr><td><code>EDITOR_SESSION_PENDING_TIMEOUT</code></td><td>数据</td><td>1800 秒</td><td>pending 会话超时，最小 60 秒。</td></tr>
+<tr><td><code>EDITOR_SESSION_IDLE_TIMEOUT</code></td><td>数据</td><td>86400 秒</td><td>空闲会话超时，最小 300 秒。</td></tr>
+<tr><td><code>NODE_BINDING_RECONCILE_INTERVAL</code></td><td>数据</td><td>300 秒</td><td>节点授权关系对账间隔，最小 60 秒。</td></tr>
+</tbody></table></div>
+
+<footer class="footer"><span><a href="architecture.html">← 上一篇：技术白皮书</a></span><span><a href="local-debug.html">下一篇：本地调试 →</a></span></footer>
+</article></main></div>
+</body></html>

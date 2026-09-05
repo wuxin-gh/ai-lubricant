@@ -1,0 +1,18 @@
+# Extra dependencies for the Windows desktop (exe) build only.
+# Install alongside requirements.txt:
+#     pip install -r requirements.txt -r requirements-desktop.txt
+#
+# pywebview renders the existing React SPA in a native window using the system
+# WebView2 runtime (present on Windows 10/11 by default) — no Chromium bundled.
+pywebview==6.0
+# Windows Job Object support, so killing AiLubricant.exe reaps the child services
+# and any frpc/cloudflared/npc grandchildren instead of orphaning them.
+pywin32==311; sys_platform == "win32"
+# Frozen-app builder.
+pyinstaller==6.16.0
+
+# protobuf must be pinned EXACTLY for the frozen build: node_server's generated
+# agentcompose_v2_pb2.py calls ValidateProtobufRuntimeVersion() at import time
+# and hard-fails on a gencode/runtime mismatch. requirements.txt only says
+# ">=5.0", which is fine for a source checkout but unsafe for a shipped exe.
+protobuf==7.35.1

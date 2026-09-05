@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+*{box-sizing:border-box}
+html,body{width:420px;margin:0;overflow:hidden;}
+body{display:flex;padding:14px;background:#f6f7f9;color:#182033;font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;}
+.shell{display:flex;flex:1;min-height:0;flex-direction:column;border:1px solid rgba(18,24,38,.08);border-radius:14px;background:#fff;box-shadow:0 10px 28px rgba(18,24,38,.10);overflow:hidden;}
+.header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 14px 12px;border-bottom:1px solid rgba(18,24,38,.07);}
+.title{display:flex;align-items:center;gap:9px;min-width:0;}
+.icon{width:28px;height:28px;border-radius:9px;display:grid;place-items:center;background:#10231b;color:#7cf29c;font-weight:700;}
+h1{margin:0;font-size:14px;line-height:1.2;font-weight:650;}
+.subtitle{margin-top:2px;color:#6b7280;font-size:12px;}
+button{height:30px;border:0;border-radius:8px;padding:0 12px;background:#182033;color:#fff;font:600 12px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;cursor:pointer;transition:background .15s ease,transform .15s ease,box-shadow .15s ease;}
+button:hover{background:#263047;box-shadow:0 6px 14px rgba(18,24,38,.16)}
+button:active{transform:translateY(1px);box-shadow:none}
+.status{display:flex;align-items:center;gap:10px;padding:9px 14px;color:#5f6b7a;font-size:12px;background:#fbfcfd;}
+.dot{width:7px;height:7px;border-radius:50%}
+.dot[data-state="connected"]{background:#18a058;box-shadow:0 0 0 3px rgba(24,160,88,.12)}
+.dot[data-state="authenticating"]{background:#d99a18;box-shadow:0 0 0 3px rgba(217,154,24,.14)}
+.dot[data-state="auth_error"],.dot[data-state="disabled"]{background:#d14b4b;box-shadow:0 0 0 3px rgba(209,75,75,.12)}
+.dot[data-state="unconfigured"],.dot[data-state="disconnected"]{background:#9aa3af;box-shadow:0 0 0 3px rgba(154,163,175,.14)}
+.status-left{display:flex;align-items:center;gap:8px;min-width:0;}
+.config{display:grid;grid-template-columns:1fr;gap:8px;padding:12px 14px;border-bottom:1px solid rgba(18,24,38,.07);background:#fbfcfd;}
+.config label{display:block;color:#5f6b7a;font-size:11px;margin-bottom:3px;}
+.config input{width:100%;height:28px;border:1px solid rgba(18,24,38,.14);border-radius:7px;padding:0 8px;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;}
+.config .full{grid-column:1 / -1;}
+.config .switch-row{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+.config .switch-row label{margin:0;font-size:12px;color:#182033;}
+.config .switch{position:relative;display:inline-block;width:38px;height:22px;flex:0 0 auto;}
+.config .switch input{opacity:0;width:0;height:0;}
+.config .slider{position:absolute;cursor:pointer;inset:0;background:#cbd2dc;border-radius:11px;transition:.2s;}
+.config .slider:before{position:absolute;content:"";height:16px;width:16px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.2s;}
+.config .switch input:checked + .slider{background:#168456;}
+.config .switch input:checked + .slider:before{transform:translateX(16px);}
+.preview{grid-column:1 / -1;color:#6b7280;font:12px ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;word-break:break-all;}
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="header">
+    <div class="title">
+      <div class="icon">A</div>
+      <div>
+        <h1>Ai Lubricant 浏览器助手</h1>
+        <div class="subtitle">连接设置</div>
+      </div>
+    </div>
+  </div>
+  <div class="config">
+    <div class="switch-row full">
+      <label>启用连接</label>
+      <label class="switch"><input type="checkbox" id="bridgeEnabled"><span class="slider"></span></label>
+    </div>
+    <div class="full"><label>服务地址（WebSocket）</label><input id="bridgeUrl" placeholder="ws://127.0.0.1:8001/mcp/cdp-bridge/session"></div>
+    <div class="full"><label>客户端 Token（在管理端创建或轮换客户端后一次性显示）</label><input id="clientToken" placeholder="粘贴客户端 Token" style="width:100%"></div>
+    <div id="wsPreview" class="preview">ws://127.0.0.1:8001/mcp/cdp-bridge/session</div>
+    <button id="saveBridge" class="full">保存连接配置</button>
+  </div>
+  <div class="status">
+    <div class="status-left"><span class="dot"></span><span id="state">Ready</span></div>
+  </div>
+</div>
+<script src="popup.js"></script>
+</body>
+</html>

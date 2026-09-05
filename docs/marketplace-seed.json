@@ -1,0 +1,913 @@
+{
+  "schema": "ai-lubricant.market.export.v1",
+  "modules": {
+    "mcp": {
+      "manifests": [
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "upstash.context7",
+          "kind": "mcp",
+          "name": "context7",
+          "display_name": "Context7",
+          "summary": "60k star 文档类 MCP：实时抓取库/框架最新文档。",
+          "publisher": "upstash",
+          "category": "docs",
+          "tags": [
+            "docs",
+            "context"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/upstash/context7",
+          "resource": {
+            "type": "stdio_mcp",
+            "command": "npx",
+            "args": [
+              "-y",
+              "@upstash/context7-mcp"
+            ]
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "context7-remote",
+          "kind": "mcp",
+          "name": "context7-remote",
+          "display_name": "Context7 (Remote)",
+          "summary": "Context7 官方托管远程端点，免安装。",
+          "publisher": "upstash",
+          "category": "docs",
+          "tags": [
+            "docs",
+            "remote"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/upstash/context7",
+          "resource": {
+            "type": "remote_mcp",
+            "transport": "streamable-http",
+            "url": "https://mcp.context7.com/mcp"
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "microsoft.playwright",
+          "kind": "mcp",
+          "name": "playwright-mcp",
+          "display_name": "Playwright MCP",
+          "summary": "浏览器自动化：导航、点击、抓取、截图。",
+          "publisher": "microsoft",
+          "category": "automation",
+          "tags": [
+            "browser",
+            "testing"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/microsoft/playwright-mcp",
+          "resource": {
+            "type": "stdio_mcp",
+            "command": "npx",
+            "args": [
+              "-y",
+              "@playwright/mcp@latest"
+            ]
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "glips.figma",
+          "kind": "mcp",
+          "name": "figma-context-mcp",
+          "display_name": "Figma Context MCP",
+          "summary": "把 Figma 布局信息喂给 AI 编码，还原设计稿。",
+          "publisher": "GLips",
+          "category": "design",
+          "tags": [
+            "figma",
+            "frontend"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/GLips/Figma-Context-MCP",
+          "resource": {
+            "type": "stdio_mcp",
+            "command": "npx",
+            "args": [
+              "-y",
+              "figma-developer-mcp",
+              "--stdio"
+            ]
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "hangwin.chrome",
+          "kind": "mcp",
+          "name": "mcp-chrome",
+          "display_name": "Chrome MCP",
+          "summary": "基于 Chrome 扩展的浏览器控制 MCP。",
+          "publisher": "hangwin",
+          "category": "automation",
+          "tags": [
+            "chrome",
+            "browser"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/hangwin/mcp-chrome",
+          "resource": {
+            "type": "stdio_mcp",
+            "command": "npx",
+            "args": [
+              "-y",
+              "mcp-chrome-bridge"
+            ]
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "wonderwhyer.desktop-commander",
+          "kind": "mcp",
+          "name": "desktop-commander",
+          "display_name": "Desktop Commander",
+          "summary": "给智能体终端与文件系统控制能力。",
+          "publisher": "wonderwhy-er",
+          "category": "system",
+          "tags": [
+            "terminal",
+            "filesystem"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/wonderwhy-er/DesktopCommanderMCP",
+          "resource": {
+            "type": "stdio_mcp",
+            "command": "npx",
+            "args": [
+              "-y",
+              "@wonderwhy-er/desktop-commander@latest"
+            ]
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "idosal.gitmcp",
+          "kind": "mcp",
+          "name": "gitmcp",
+          "display_name": "GitMCP",
+          "summary": "对任意 GitHub 仓库文档问答，免鉴权。",
+          "publisher": "idosal",
+          "category": "docs",
+          "tags": [
+            "github",
+            "remote"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/idosal/git-mcp",
+          "resource": {
+            "type": "remote_mcp",
+            "transport": "streamable-http",
+            "url": "https://gitmcp.io/docs"
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "mcp.filesystem",
+          "kind": "mcp",
+          "name": "server-filesystem",
+          "display_name": "Filesystem MCP",
+          "summary": "受控目录下的文件读写。",
+          "publisher": "modelcontextprotocol",
+          "category": "system",
+          "tags": [
+            "filesystem"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/modelcontextprotocol/servers",
+          "resource": {
+            "type": "stdio_mcp",
+            "command": "npx",
+            "args": [
+              "-y",
+              "@modelcontextprotocol/server-filesystem",
+              "/tmp"
+            ]
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "mcp.sequential-thinking",
+          "kind": "mcp",
+          "name": "server-sequential-thinking",
+          "display_name": "Sequential Thinking",
+          "summary": "结构化分步推理。",
+          "publisher": "modelcontextprotocol",
+          "category": "reasoning",
+          "tags": [
+            "thinking"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/modelcontextprotocol/servers",
+          "resource": {
+            "type": "stdio_mcp",
+            "command": "npx",
+            "args": [
+              "-y",
+              "@modelcontextprotocol/server-sequential-thinking"
+            ]
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "code-yeongyu.lsp-tools",
+          "kind": "mcp",
+          "name": "lsp-tools-mcp",
+          "display_name": "LSP Tools MCP",
+          "summary": "把 LSP 诊断以 stdio MCP 暴露（omO 作者）。",
+          "publisher": "code-yeongyu",
+          "category": "dev",
+          "tags": [
+            "lsp",
+            "omo"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/code-yeongyu/lsp-tools-mcp",
+          "resource": {
+            "type": "stdio_mcp",
+            "command": "npx",
+            "args": [
+              "-y",
+              "lsp-tools-mcp"
+            ]
+          }
+        }
+      ]
+    },
+    "skills": {
+      "manifests": [
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "obra.superpowers",
+          "kind": "skill",
+          "name": "superpowers",
+          "display_name": "Superpowers",
+          "summary": "268k star 智能体技能框架与开发方法论集合。",
+          "publisher": "obra",
+          "category": "framework",
+          "tags": [
+            "workflow",
+            "tdd"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/obra/superpowers",
+          "resource": {
+            "type": "skill_package",
+            "source": "github",
+            "url": "https://github.com/obra/superpowers",
+            "entry": "SKILL.md",
+            "ref": "main",
+            "path": "skills"
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "affaanm.ecc",
+          "kind": "skill",
+          "name": "ecc",
+          "display_name": "ECC",
+          "summary": "238k star 智能体性能优化系统：技能、直觉与本能。",
+          "publisher": "affaan-m",
+          "category": "framework",
+          "tags": [
+            "harness"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/affaan-m/ECC",
+          "resource": {
+            "type": "skill_package",
+            "source": "github",
+            "url": "https://github.com/affaan-m/ECC",
+            "entry": "SKILL.md",
+            "ref": "main"
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "nextlevelbuilder.ui-ux-pro-max",
+          "kind": "skill",
+          "name": "ui-ux-pro-max-skill",
+          "display_name": "UI/UX Pro Max",
+          "summary": "114k star 为专业界面提供设计智能。",
+          "publisher": "nextlevelbuilder",
+          "category": "design",
+          "tags": [
+            "ui",
+            "ux"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/nextlevelbuilder/ui-ux-pro-max-skill",
+          "resource": {
+            "type": "skill_package",
+            "source": "github",
+            "url": "https://github.com/nextlevelbuilder/ui-ux-pro-max-skill",
+            "entry": "SKILL.md",
+            "ref": "main"
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "juliusbrussee.caveman",
+          "kind": "skill",
+          "name": "caveman",
+          "display_name": "Caveman",
+          "summary": "96k star 极致精简 token 的编码技能。",
+          "publisher": "JuliusBrussee",
+          "category": "productivity",
+          "tags": [
+            "token"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/JuliusBrussee/caveman",
+          "resource": {
+            "type": "skill_package",
+            "source": "github",
+            "url": "https://github.com/JuliusBrussee/caveman",
+            "entry": "SKILL.md",
+            "ref": "main"
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "kepano.obsidian",
+          "kind": "skill",
+          "name": "obsidian-skills",
+          "display_name": "Obsidian Skills",
+          "summary": "44k star 教智能体用 Obsidian CLI 操作笔记库。",
+          "publisher": "kepano",
+          "category": "productivity",
+          "tags": [
+            "obsidian"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/kepano/obsidian-skills",
+          "resource": {
+            "type": "skill_package",
+            "source": "github",
+            "url": "https://github.com/kepano/obsidian-skills",
+            "entry": "SKILL.md",
+            "ref": "main"
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "multica.karpathy",
+          "kind": "skill",
+          "name": "andrej-karpathy-skills",
+          "display_name": "Karpathy Skills",
+          "summary": "200k star 从 Karpathy 经验提炼的行为增强。",
+          "publisher": "multica-ai",
+          "category": "productivity",
+          "tags": [
+            "behavior"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/multica-ai/andrej-karpathy-skills",
+          "resource": {
+            "type": "skill_package",
+            "source": "github",
+            "url": "https://github.com/multica-ai/andrej-karpathy-skills",
+            "entry": "SKILL.md",
+            "ref": "master"
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "graphify.graphify",
+          "kind": "skill",
+          "name": "graphify",
+          "display_name": "Graphify",
+          "summary": "104k star 把代码库/文档/SQL/PDF 转成知识图谱。",
+          "publisher": "Graphify-Labs",
+          "category": "knowledge",
+          "tags": [
+            "graph",
+            "rag"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/Graphify-Labs/graphify",
+          "resource": {
+            "type": "skill_package",
+            "source": "github",
+            "url": "https://github.com/Graphify-Labs/graphify",
+            "entry": "SKILL.md",
+            "ref": "main"
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "leonxlnx.taste",
+          "kind": "skill",
+          "name": "taste-skill",
+          "display_name": "Taste Skill",
+          "summary": "74k star 给 AI 好品味，避免千篇一律的产出。",
+          "publisher": "Leonxlnx",
+          "category": "design",
+          "tags": [
+            "taste"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/Leonxlnx/taste-skill",
+          "resource": {
+            "type": "skill_package",
+            "source": "github",
+            "url": "https://github.com/Leonxlnx/taste-skill",
+            "entry": "SKILL.md",
+            "ref": "main"
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "mvanhorn.last30days",
+          "kind": "skill",
+          "name": "last30days-skill",
+          "display_name": "Last 30 Days",
+          "summary": "58k star 跨 Reddit/X/YouTube/HN 研究任意话题。",
+          "publisher": "mvanhorn",
+          "category": "research",
+          "tags": [
+            "research"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/mvanhorn/last30days-skill",
+          "resource": {
+            "type": "skill_package",
+            "source": "github",
+            "url": "https://github.com/mvanhorn/last30days-skill",
+            "entry": "SKILL.md",
+            "ref": "main"
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "coreyhaines.marketing",
+          "kind": "skill",
+          "name": "marketingskills",
+          "display_name": "Marketing Skills",
+          "summary": "43k star CRO/文案/SEO 营销技能集。",
+          "publisher": "coreyhaines31",
+          "category": "marketing",
+          "tags": [
+            "seo",
+            "copywriting"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/coreyhaines31/marketingskills",
+          "resource": {
+            "type": "skill_package",
+            "source": "github",
+            "url": "https://github.com/coreyhaines31/marketingskills",
+            "entry": "SKILL.md",
+            "ref": "main"
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "kdense.scientific",
+          "kind": "skill",
+          "name": "scientific-agent-skills",
+          "display_name": "Scientific Agent Skills",
+          "summary": "33k star 把智能体变成 AI 科学家。",
+          "publisher": "K-Dense-AI",
+          "category": "research",
+          "tags": [
+            "science"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/K-Dense-AI/scientific-agent-skills",
+          "resource": {
+            "type": "skill_package",
+            "source": "github",
+            "url": "https://github.com/K-Dense-AI/scientific-agent-skills",
+            "entry": "SKILL.md",
+            "ref": "main"
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "imbad.academic",
+          "kind": "skill",
+          "name": "academic-research-skills",
+          "display_name": "Academic Research Skills",
+          "summary": "41k star 学术研究：检索到写作到评审。",
+          "publisher": "Imbad0202",
+          "category": "research",
+          "tags": [
+            "academic"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/Imbad0202/academic-research-skills",
+          "resource": {
+            "type": "skill_package",
+            "source": "github",
+            "url": "https://github.com/Imbad0202/academic-research-skills",
+            "entry": "SKILL.md",
+            "ref": "main"
+          }
+        }
+      ]
+    },
+    "plugins": {
+      "manifests": [
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "code-yeongyu.oh-my-openagent",
+          "kind": "editor_plugin",
+          "name": "oh-my-openagent",
+          "display_name": "Oh My OpenAgent (omO)",
+          "summary": "67k star tokenmaxxer 编码智能体 harness，omO 系列主仓库。",
+          "publisher": "code-yeongyu",
+          "category": "harness",
+          "tags": [
+            "omo",
+            "harness"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/code-yeongyu/oh-my-openagent",
+          "download_url": "https://github.com/code-yeongyu/oh-my-openagent/archive/refs/heads/dev.tar.gz",
+          "resource": {
+            "type": "editor_plugin",
+            "provider": "opencode",
+            "package_format": "tar",
+            "entry": ".claude-plugin/marketplace.json",
+            "ref": "dev"
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "code-yeongyu.lazycodex",
+          "kind": "editor_plugin",
+          "name": "lazycodex",
+          "display_name": "LazyCodex",
+          "summary": "面向复杂代码库的 omO 智能体 harness，含项目记忆。",
+          "publisher": "code-yeongyu",
+          "category": "harness",
+          "tags": [
+            "omo",
+            "codex"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/code-yeongyu/lazycodex",
+          "download_url": "https://github.com/code-yeongyu/lazycodex/archive/refs/heads/main.tar.gz",
+          "resource": {
+            "type": "editor_plugin",
+            "provider": "codex",
+            "package_format": "tar",
+            "entry": ".claude-plugin/marketplace.json",
+            "ref": "main"
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "code-yeongyu.lazyclaudecode",
+          "kind": "editor_plugin",
+          "name": "lazyclaudecode",
+          "display_name": "LazyClaudeCode",
+          "summary": "omO 的 Claude Code 原生插件市场版。",
+          "publisher": "code-yeongyu",
+          "category": "harness",
+          "tags": [
+            "omo",
+            "claude"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/code-yeongyu/lazyclaudecode",
+          "download_url": "https://github.com/code-yeongyu/lazyclaudecode/archive/refs/heads/main.tar.gz",
+          "resource": {
+            "type": "editor_plugin",
+            "provider": "claude",
+            "package_format": "tar",
+            "entry": ".claude-plugin/marketplace.json",
+            "ref": "main"
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "code-yeongyu.oh-my-codex",
+          "kind": "editor_plugin",
+          "name": "oh-my-codex",
+          "display_name": "Oh My Codex (OmX)",
+          "summary": "给 Codex 加 hooks/子智能体的 omO 系列插件。",
+          "publisher": "code-yeongyu",
+          "category": "harness",
+          "tags": [
+            "omo",
+            "codex"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/code-yeongyu/oh-my-codex",
+          "download_url": "https://github.com/code-yeongyu/oh-my-codex/archive/refs/heads/main.tar.gz",
+          "resource": {
+            "type": "editor_plugin",
+            "provider": "codex",
+            "package_format": "tar",
+            "entry": ".claude-plugin/marketplace.json",
+            "ref": "main"
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "code-yeongyu.oh-my-pi",
+          "kind": "editor_plugin",
+          "name": "oh-my-pi",
+          "display_name": "Oh My Pi",
+          "summary": "终端 AI 编码智能体，hash 锚定扩展体系。",
+          "publisher": "code-yeongyu",
+          "category": "harness",
+          "tags": [
+            "omo",
+            "pi"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/code-yeongyu/oh-my-pi",
+          "download_url": "https://github.com/code-yeongyu/oh-my-pi/archive/refs/heads/main.tar.gz",
+          "resource": {
+            "type": "editor_plugin",
+            "provider": "opencode",
+            "package_format": "tar",
+            "entry": ".claude-plugin/marketplace.json",
+            "ref": "main"
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "devswha.oh-my-claudecode",
+          "kind": "editor_plugin",
+          "name": "oh-my-claudecode",
+          "display_name": "Oh My ClaudeCode",
+          "summary": "团队优先的 Claude Code 多智能体编排（omO 生态）。",
+          "publisher": "devswha",
+          "category": "orchestration",
+          "tags": [
+            "omo",
+            "multiagent"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/devswha/oh-my-claudecode",
+          "download_url": "https://github.com/devswha/oh-my-claudecode/archive/refs/heads/main.tar.gz",
+          "resource": {
+            "type": "editor_plugin",
+            "provider": "claude",
+            "package_format": "tar",
+            "entry": ".claude-plugin/marketplace.json",
+            "ref": "main"
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "devswha.oh-my-gajae-code",
+          "kind": "editor_plugin",
+          "name": "oh-my-gajae-code",
+          "display_name": "Oh My Gajae Code",
+          "summary": "Gajae Code 社区插件市场（omO 生态）。",
+          "publisher": "devswha",
+          "category": "marketplace",
+          "tags": [
+            "omo"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/devswha/oh-my-gajae-code",
+          "download_url": "https://github.com/devswha/oh-my-gajae-code/archive/refs/heads/main.tar.gz",
+          "resource": {
+            "type": "editor_plugin",
+            "provider": "opencode",
+            "package_format": "tar",
+            "entry": ".claude-plugin/marketplace.json",
+            "ref": "main"
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "junlin233.oh-my-lite-openagent",
+          "kind": "editor_plugin",
+          "name": "oh-my-lite-openagent",
+          "display_name": "Oh My Lite OpenAgent",
+          "summary": "轻量子智能体插件，兼容 OpenCode（omO 生态）。",
+          "publisher": "junlin-233",
+          "category": "harness",
+          "tags": [
+            "omo",
+            "lite"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/junlin-233/oh-my-lite-openagent",
+          "download_url": "https://github.com/junlin-233/oh-my-lite-openagent/archive/refs/heads/main.tar.gz",
+          "resource": {
+            "type": "editor_plugin",
+            "provider": "opencode",
+            "package_format": "tar",
+            "entry": ".claude-plugin/marketplace.json",
+            "ref": "main"
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "eugenejahn.oh-my-openagent-copilot",
+          "kind": "editor_plugin",
+          "name": "oh-my-openagent-copilot",
+          "display_name": "omO for Copilot CLI",
+          "summary": "GitHub Copilot CLI 多智能体编排（omO 移植）。",
+          "publisher": "eugenejahn",
+          "category": "orchestration",
+          "tags": [
+            "omo",
+            "copilot"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/eugenejahn/oh-my-openagent-copilot",
+          "download_url": "https://github.com/eugenejahn/oh-my-openagent-copilot/archive/refs/heads/main.tar.gz",
+          "resource": {
+            "type": "editor_plugin",
+            "provider": "copilot",
+            "package_format": "tar",
+            "entry": ".claude-plugin/marketplace.json",
+            "ref": "main"
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "mihazs.oh-my-grok",
+          "kind": "editor_plugin",
+          "name": "oh-my-grok",
+          "display_name": "Oh My Grok",
+          "summary": "Grok Build CLI 的 omO 系插件（技能+子智能体）。",
+          "publisher": "mihazs",
+          "category": "harness",
+          "tags": [
+            "omo",
+            "grok"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/mihazs/oh-my-grok",
+          "download_url": "https://github.com/mihazs/oh-my-grok/archive/refs/heads/main.tar.gz",
+          "resource": {
+            "type": "editor_plugin",
+            "provider": "grok",
+            "package_format": "tar",
+            "entry": ".claude-plugin/marketplace.json",
+            "ref": "main"
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "oneforce.oh-my-openagent-gemini",
+          "kind": "editor_plugin",
+          "name": "oh-my-openagent-gemini",
+          "display_name": "omO for Gemini CLI",
+          "summary": "面向 Gemini CLI 的 omO 调整版。",
+          "publisher": "oneforce",
+          "category": "harness",
+          "tags": [
+            "omo",
+            "gemini"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/oneforce/oh-my-openagent-gemini",
+          "download_url": "https://github.com/oneforce/oh-my-openagent-gemini/archive/refs/heads/gemini-cli.tar.gz",
+          "resource": {
+            "type": "editor_plugin",
+            "provider": "gemini",
+            "package_format": "tar",
+            "entry": ".claude-plugin/marketplace.json",
+            "ref": "gemini-cli"
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "wshobson.agents",
+          "kind": "editor_plugin",
+          "name": "agents",
+          "display_name": "Agents Marketplace",
+          "summary": "38k star 多 harness 智能体插件市场。",
+          "publisher": "wshobson",
+          "category": "agents",
+          "tags": [
+            "agents",
+            "marketplace"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/wshobson/agents",
+          "download_url": "https://github.com/wshobson/agents/archive/refs/heads/main.tar.gz",
+          "resource": {
+            "type": "editor_plugin",
+            "provider": "claude",
+            "package_format": "tar",
+            "entry": ".claude-plugin/marketplace.json",
+            "ref": "main"
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "jarrodwatts.claude-hud",
+          "kind": "editor_plugin",
+          "name": "claude-hud",
+          "display_name": "Claude HUD",
+          "summary": "27k star 显示上下文用量等运行时状态。",
+          "publisher": "jarrodwatts",
+          "category": "productivity",
+          "tags": [
+            "hud"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/jarrodwatts/claude-hud",
+          "download_url": "https://github.com/jarrodwatts/claude-hud/archive/refs/heads/main.tar.gz",
+          "resource": {
+            "type": "editor_plugin",
+            "provider": "claude",
+            "package_format": "tar",
+            "entry": ".claude-plugin/marketplace.json",
+            "ref": "main"
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "everyinc.compound-engineering",
+          "kind": "editor_plugin",
+          "name": "compound-engineering-plugin",
+          "display_name": "Compound Engineering",
+          "summary": "24k star 跨编辑器复合工程官方插件。",
+          "publisher": "EveryInc",
+          "category": "workflow",
+          "tags": [
+            "engineering"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/EveryInc/compound-engineering-plugin",
+          "download_url": "https://github.com/EveryInc/compound-engineering-plugin/archive/refs/heads/main.tar.gz",
+          "resource": {
+            "type": "editor_plugin",
+            "provider": "claude",
+            "package_format": "tar",
+            "entry": ".claude-plugin/marketplace.json",
+            "ref": "main"
+          }
+        },
+        {
+          "schema": "ai-lubricant.market.item.v1",
+          "id": "obra.superpowers-marketplace",
+          "kind": "editor_plugin",
+          "name": "superpowers-marketplace",
+          "display_name": "Superpowers Marketplace",
+          "summary": "精选的 Claude Code 插件市场。",
+          "publisher": "obra",
+          "category": "marketplace",
+          "tags": [
+            "curated"
+          ],
+          "version": "latest",
+          "status": "published",
+          "source_url": "https://github.com/obra/superpowers-marketplace",
+          "download_url": "https://github.com/obra/superpowers-marketplace/archive/refs/heads/main.tar.gz",
+          "resource": {
+            "type": "editor_plugin",
+            "provider": "claude",
+            "package_format": "tar",
+            "entry": ".claude-plugin/marketplace.json",
+            "ref": "main"
+          }
+        }
+      ]
+    }
+  }
+}

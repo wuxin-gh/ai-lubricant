@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Ai Lubricant 节点管理员手册：节点角色、onboard、主动连接、无需 SSH、终端、文件与节点代理。">
+  <title>节点管理员手册 · Ai Lubricant</title>
+  <link rel="stylesheet" href="assets/docs.css?v=20260831-3"><script src="assets/docs.js?v=20260831-3" defer></script>
+</head>
+<body>
+<button class="nav-toggle" id="nav-toggle" aria-expanded="false">☰ 打开文档导航</button>
+<div class="wrap">
+<aside class="sidebar">
+  <div class="brand"><span class="dot">A</span> Ai Lubricant</div>
+  <div class="nav-group">产品</div><nav>
+    <a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a>
+  </nav>
+  <div class="nav-group">能力详解</div><nav>
+    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
+  </nav>
+  <div class="nav-group">操作手册</div><nav>
+    <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
+  </nav>
+  <div class="nav-group">部署与接入</div><nav>
+    <a href="users-api.html"><span class="ic">↔</span>API 接入</a><a href="governance.html"><span class="ic">◈</span>安全与治理</a><a href="deploy.html"><span class="ic">⇩</span>生产部署</a><a href="desktop.html"><span class="ic">▭</span>Windows 桌面版</a><a href="architecture.html"><span class="ic">⚖</span>技术白皮书</a><a href="env-vars.html"><span class="ic">⊧</span>环境变量</a><a href="local-debug.html"><span class="ic">⚙</span>本地调试</a>
+  </nav>
+</aside>
+<main class="main"><div class="topbar"><button id="theme-toggle" type="button">☾ 深色</button><button id="print-page" type="button">⎙ 打印</button></div>
+<article class="content">
+<header class="hero"><h1>节点管理员手册</h1><p class="desc">将 Ai Lubricant 的执行能力安全延伸到客户自己的机器与网络。节点主动连接平台，日常终端、文件与代理无需 SSH。</p></header>
+<div class="toc"><strong>本页目录</strong><a href="#principle">工作原理</a><a href="#roles">三种角色</a><a href="#prepare">准备控制面</a><a href="#onboard">Onboard</a><a href="#approve">审批/状态</a><a href="#terminal">终端</a><a href="#files">文件/代理</a><a href="#upgrade">升级/撤销</a><a href="#troubleshoot">排错</a><a href="#security">安全</a></div>
+
+<h2 id="principle">1. 为什么可以不准备 SSH</h2>
+<p>Ai Lubricant 不是替用户托管 SSH，而是让节点主动出站连接平台，从根本上避免中心服务反向拨入客户机器。</p>
+<div class="chain">
+<div class="chain-step"><span class="num">1</span><div class="body"><h4>Server Hello</h4><p>节点发起 NodeConnect 双向流；服务端先发送当前时间，避免节点本地时钟偏差直接影响首次认证。</p></div></div>
+<div class="chain-step"><span class="num">2</span><div class="body"><h4>TOTP 注册</h4><p>节点用 onboard 时签发的 secret 和服务端时间生成 TOTP，提交 node_id、角色和能力信息。</p></div></div>
+<div class="chain-step"><span class="num">3</span><div class="body"><h4>长期主动连接</h4><p>认证成功后保持 NodeConnect；心跳携带活跃会话，断线以 1–30 秒退避主动重连。</p></div></div>
+<div class="chain-step"><span class="num">4</span><div class="body"><h4>受控命令帧</h4><p>创建会话、PTY、host exec、文件/工作区配置和节点 HTTP 代理通过现有流下发并回传结果。</p></div></div>
+</div>
+<div class="info"><strong>准确边界</strong>平台日常链路不使用 22 端口、SSH Key 或 SFTP。节点机器仍需安装客户端、赋予合适的 OS 权限，并允许其主动访问 <code>AGENT_COMPOSE_NODE_SERVER_PUBLIC_URL</code>。</div>
+
+<h2 id="roles">2. 三种节点角色</h2>
+<div class="table-wrap"><table><thead><tr><th>角色</th><th>运行客户端</th><th>凭据</th><th>用途</th></tr></thead><tbody>
+<tr><td><code>execution</code></td><td>是</td><td>TOTP secret</td><td>执行 provider CLI 会话、任务、工作区、终端、文件与节点代理。默认 standalone 启动。</td></tr>
+<tr><td><code>management</code></td><td>是</td><td>TOTP secret</td><td>管理 execution 节点并在宿主机创建/删除它们；自身也支持 host terminal/exec。默认 docker 启动。</td></tr>
+<tr><td><code>passive_management</code></td><td>否</td><td>无</td><td>纯分组与授权容器；创建后直接 approved，不连接、不执行、不提供终端。</td></tr>
+</tbody></table></div>
+<div class="warn"><strong>角色不能混淆</strong>execution 与 management 是两个独立 Go 二进制，没有 <code>--role</code> 参数；passive_management 没有二进制。只有 execution 节点可移动到管理分组下。</div>
+
+<h2 id="prepare">3. 准备控制面</h2>
+<p><strong>前置条件：</strong>数据服务已启用兼容层；节点控制服务可运行；二者共享数据库和内部 token。四项都写在仓库根 <code>.env</code>（纯 <code>KEY=VALUE</code>，无节头），两个进程读同一份文件。</p>
+<pre><code>AI_LUBRICANT_COMPAT_ENABLED=true
+AGENT_COMPOSE_BASE_URL=http://127.0.0.1:8003
+NODE_CONTROL_TOKEN=&lt;高强度随机值&gt;
+AGENT_COMPOSE_NODE_SERVER_PUBLIC_URL=https://nodes.example.com
+NODE_CREDENTIAL_ENCRYPTION_KEY=&lt;持久化 AES-256 主密钥&gt;</code></pre>
+<pre><code># 单独进程启动；Hypercorn 提供 h2/h2c
+python -m node_server
+
+# 健康检查
+curl http://127.0.0.1:8003/health</code></pre>
+<ul>
+<li><code>AGENT_COMPOSE_BASE_URL</code>：数据服务访问控制服务的内部地址。</li>
+<li><code>AGENT_COMPOSE_NODE_SERVER_PUBLIC_URL</code>：目标节点实际能访问的公开地址，含端口与协议。</li>
+<li><code>NODE_CONTROL_TOKEN</code>：数据服务调用控制服务内部 API 的共享 Bearer token。</li>
+<li><code>NODE_CREDENTIAL_ENCRYPTION_KEY</code>：加密所有节点 TOTP secret；丢失或更换会使既有凭据不可解密。</li>
+</ul>
+<div class="danger"><strong>.env 必须可写且持久化</strong>控制服务在缺少 token/主密钥时会自动生成并写回 .env；写入失败会拒绝启动。容器场景必须挂载持久化文件或 Secret，不能只烘焙进一次性镜像。</div>
+
+<h2 id="onboard">4. Onboard 节点</h2>
+<h3>4.1 创建管理分组</h3>
+<ol>
+<li>进入 <code>/manager/nodes</code>，新增角色为 <code>passive_management</code> 的节点。</li>
+<li>填写分组名称与标签。该记录创建后直接 approved，不生成 secret 或安装命令。</li>
+<li>后续可把 execution 节点归到该分组，用于授权与资源组织。</li>
+</ol>
+<h3>4.2 创建有客户端的节点</h3>
+<ol>
+<li>在节点页面点击 Onboard，选择 <code>execution</code> 或 <code>management</code>。</li>
+<li>填写节点名、启动方式和标签。execution 必须选择一个 management/passive_management 父节点。</li>
+<li>系统生成 <code>node_id</code>、TOTP <code>secret</code>、安装脚本 URL、install command 和 otpauth URI。</li>
+<li>立即把 secret 保存到受控 Secret 管理系统；平台不会把明文 secret 长期显示。</li>
+<li>在目标机器执行安装命令，或使用 30 分钟有效的一键 bootstrap 脚本自动识别 OS/arch、下载二进制并启动。</li>
+</ol>
+<div class="danger"><strong>安装命令不可外传</strong>命令中含完整 node_id 和 secret，等价于节点身份凭据。不要贴到文档、工单、聊天或截图；泄露后应 revoke 并重新 onboard。</div>
+<h3>4.3 二进制与参数</h3>
+<p>仓库可构建 Linux/macOS/Windows × amd64/arm64 的两类二进制：</p>
+<ul>
+<li>execution：<code>node-execution-&lt;os&gt;-&lt;arch&gt;</code></li>
+<li>management：<code>agent-compose-node-management-&lt;os&gt;-&lt;arch&gt;</code></li>
+</ul>
+<p>共同必需参数/环境变量：</p>
+<div class="table-wrap"><table><thead><tr><th>参数</th><th>环境变量</th><th>说明</th></tr></thead><tbody>
+<tr><td><code>--server</code></td><td><code>AGENT_COMPOSE_SERVER</code></td><td>控制服务公开 URL。</td></tr>
+<tr><td><code>--node-id</code></td><td><code>AGENT_COMPOSE_NODE_ID</code></td><td>onboard 生成的 durable ID。</td></tr>
+<tr><td><code>--secret</code></td><td><code>AGENT_COMPOSE_NODE_SECRET</code></td><td>base32 TOTP secret。</td></tr>
+<tr><td><code>--name</code></td><td><code>AGENT_COMPOSE_NODE_NAME</code></td><td>显示名称；默认主机名。</td></tr>
+<tr><td><code>--labels</code></td><td><code>AGENT_COMPOSE_NODE_LABELS</code></td><td><code>k=v,k=v</code> 能力标签。</td></tr>
+<tr><td><code>--tls-insecure</code></td><td><code>AGENT_COMPOSE_NODE_TLS_INSECURE=1</code></td><td>跳过 TLS 验证，仅限本地调试。</td></tr>
+</tbody></table></div>
+
+<h2 id="approve">5. 审批、在线与容量</h2>
+<ol>
+<li>节点第一次成功注册后会显示在线，但 credentialed 节点初始状态为 pending。</li>
+<li>管理员确认节点 ID、角色、名称、OS/arch、IP/标签和客户端版本，点击 Approve。</li>
+<li>只有 approved、在线、具备能力且满足 CPU/内存/会话容量的 execution 节点参与调度。</li>
+<li>按业务需要设置节点 capacity，避免单节点过载。</li>
+<li>查看心跳和活跃会话；超过 60 秒无心跳，控制服务 reaper 会移除该连接。</li>
+</ol>
+<figure class="shot" data-shot="nodes/node-detail.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">节点详情</span></div><button class="shot-open" type="button"><img src="assets/screenshots/nodes/node-detail.png" alt="Ai Lubricant 节点状态与容量" loading="lazy"></button><div class="pending"><span class="tag">截图加载失败</span><br>审批、角色、能力、版本、容量与会话<br><code>nodes/node-detail.png</code></div></div><figcaption><b>审批后才能调度：</b>在线不等于可执行，管理员先核对身份和能力，再开放生产任务。</figcaption></figure>
+
+<h2 id="terminal">6. 浏览器节点终端</h2>
+<ol>
+<li>从节点详情点击“终端”，进入 <code>/manager/nodes/:nodeId/terminal</code>。</li>
+<li>浏览器以 WebSocket 连接数据服务；数据服务带内部 token 代理到控制服务。</li>
+<li>控制服务创建 terminal_id，通过 NodeConnect 下发 open 帧。</li>
+<li>节点在本机创建 PTY（Unix 使用 pty，Windows 使用 ConPTY），流式回传输出。</li>
+<li>键盘输入与窗口 resize 通过帧下发；关闭页面/终端后节点结束 shell 并释放 PTY。</li>
+</ol>
+<p>终端默认从节点用户 home 目录启动；可指定 shell/cwd。节点断开时会 CloseAll，避免遗留 orphan shell。</p>
+
+<h2 id="files">7. 文件、Host Exec 与节点代理</h2>
+<h3>文件/工作区</h3>
+<p>用户通过 <code>/console/files</code> 或项目编辑器浏览工作区文件。数据服务将请求代理到控制面，再通过节点连接操作目标环境。限制可访问根目录，不要给 Agent 无关的系统路径。</p>
+<h3>Host Exec</h3>
+<ul>
+<li>仅 approved、在线且声明 <code>host_exec=true</code> 的节点可执行。</li>
+<li>Unix 使用 <code>/bin/sh -c</code>，Windows 使用 <code>cmd.exe /D /S /C</code>。</li>
+<li>默认超时 2 分钟、最大 10 分钟；默认输出上限 1 MiB、最大 16 MiB；超出会标记 truncated。</li>
+<li>适合管理动作和诊断，不应替代长期任务会话。</li>
+</ul>
+<h3>节点 HTTP 代理</h3>
+<p>数据服务可通过控制服务把 HTTP 请求下发给 execution 节点，由节点使用自身网络出口访问上游，再把响应流式回传。适用于需要使用节点 IP、NAT 后网络或内网资源的 Provider。</p>
+<div class="warn"><strong>不是任意 SSRF 通道</strong>节点代理应受节点权限、渠道配置和调用身份控制；不要把控制面内部代理端点暴露给普通公网用户。</div>
+
+<h2 id="upgrade">8. 升级、移动与撤销</h2>
+<ul>
+<li><strong>自升级：</strong>控制服务可向在线节点下发升级，节点下载对应 OS/arch 二进制并校验版本/校验和。</li>
+<li><strong>管理节点启动 execution：</strong>connected management 可通过 Docker 或 standalone child process 创建 execution 节点。</li>
+<li><strong>移动分组：</strong>仅 execution 节点可移动到 management/passive_management 父节点下。</li>
+<li><strong>Revoke：</strong>发现泄露、未知主机或离职资产时立即撤销；节点后续注册将失败。</li>
+<li><strong>Delete：</strong>删除拥有子节点的 management 时需要先迁移/删除子节点；在线节点需谨慎强制删除。</li>
+</ul>
+<div class="danger"><strong>控制面切换铁律</strong>先停止旧控制进程，再启动新进程。绝不能让两个 Registry 同时对同一批节点下发命令。迁移时同步数据库、<code>NODE_CONTROL_TOKEN</code>、<code>NODE_CREDENTIAL_ENCRYPTION_KEY</code> 和公开 URL。</div>
+
+<h2 id="troubleshoot">9. 常见故障</h2>
+<div class="table-wrap"><table><thead><tr><th>现象</th><th>检查</th><th>处理</th></tr></thead><tbody>
+<tr><td>节点无法连接</td><td>public URL、DNS/TLS、出站防火墙、控制服务健康</td><td>从节点 curl 公开地址；核对协议/端口；不要用 uvicorn 启控制服务。</td></tr>
+<tr><td>permission_denied</td><td>node_id、secret、状态、TOTP/时间</td><td>确认使用正确凭据；同步系统时间；泄露时 revoke 后重新 onboard。</td></tr>
+<tr><td>在线但不参与调度</td><td>是否 approved、角色是否 execution、容量、能力标签</td><td>Approve 节点；释放会话/调整容量；检查 provider 能力。</td></tr>
+<tr><td>终端打开失败</td><td>节点在线、terminal 能力、shell/cwd、WebSocket 代理</td><td>先看节点状态，再看控制服务日志和前端 WS；验证反向代理支持 Upgrade。</td></tr>
+<tr><td>终端有窗口但无输出</td><td>PTY 是否创建、窗口是否 0×0、输出帧</td><td>当前实现会把 0×0 clamp 到 80×24；检查节点日志与 terminal output 帧。</td></tr>
+<tr><td>控制服务启动失败</td><td>.env 是否可写、主密钥/token 是否有效</td><td>修复持久化权限；从备份恢复原主密钥，不要随意生成新值。</td></tr>
+<tr><td>重连后命令混乱</td><td>是否同时运行两个控制 Registry</td><td>立即停掉旧控制面，只保留一个；检查节点连接到哪个公开地址。</td></tr>
+</tbody></table></div>
+
+<h2 id="security">10. 节点安全基线</h2>
+<ul>
+<li>控制服务只向节点或数据服务开放；内部 unary/terminal/proxy 端点必须验证 <code>NODE_CONTROL_TOKEN</code>。</li>
+<li>节点使用专用 OS 用户或容器，限制文件、网络、Docker socket 与 sudo 权限。</li>
+<li>management 节点可创建/删除 execution 并执行 host exec，按高权限基础设施管理。</li>
+<li>不把 TOTP secret、安装命令、master key、control token 写入 Git/文档/日志。</li>
+<li>生产 TLS 不使用 <code>--tls-insecure</code>；定期检查证书、节点版本与异常连接。</li>
+<li>定期审计 approved 节点、角色、分组、容量、活跃会话和最后心跳；撤销闲置节点。</li>
+<li>节点代理只允许访问业务所需目标；限制内网敏感地址和 metadata endpoints。</li>
+</ul>
+
+<footer class="footer"><span><a href="users-admin.html">← 上一篇：平台管理员手册</a></span><span><a href="users-mobile.html">下一篇：移动端 →</a></span></footer>
+</article></main></div>
+</body></html>

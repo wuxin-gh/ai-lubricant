@@ -1,0 +1,311 @@
+{
+  "schema": 2,
+  "name": "mail",
+  "display_name": "邮件读取",
+  "description": "读取已配置上游邮箱的当前邮件；支持以真实邮箱或转发别名查询，并明确标注邮件来源。",
+  "icon": "📮",
+  "category": "media",
+  "builtin_rules": {
+    "default_installed": true,
+    "removable": false,
+    "editable_fields": [
+      "display_name",
+      "description",
+      "enabled"
+    ]
+  },
+  "help": {
+    "title": "邮件 MCP 使用说明",
+    "sections": [
+      {
+        "heading": "1. 服务端配置",
+        "body": "在「服务端配置」维护每个上游邮箱服务及其真实邮箱、重定向/别名邮箱。密码和签名密钥只在保存时写入。"
+      },
+      {
+        "heading": "2. 查询邮件",
+        "body": "在「邮件列表」输入可选邮箱地址后实时查询。别名会替换为实际来源邮箱。"
+      },
+      {
+        "heading": "3. MCP 用户",
+        "body": "从 MCP 市场右上角「MCP 设置」创建共享 MCP 用户并分配服务。"
+      }
+    ]
+  },
+  "config": {
+    "resources": {
+      "upstream_accounts": {
+        "title": "上游邮箱配置",
+        "cardinality": "collection",
+        "binding": "shared",
+        "capabilities": [
+          "list",
+          "read",
+          "create",
+          "update",
+          "delete",
+          "runtime-apply"
+        ],
+        "schema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "integer",
+              "title": "ID",
+              "readOnly": true
+            },
+            "display_name": {
+              "type": "string",
+              "title": "服务名称"
+            },
+            "user_ids": {
+              "type": "array",
+              "title": "可操作用户",
+              "items": { "type": "integer" },
+              "x-reference": "mcp_users"
+            },
+            "mailbox_type": {
+              "type": "string",
+              "title": "邮箱服务类型",
+              "enum": ["TempMail"],
+              "default": "TempMail"
+            },
+            "base_url": {
+              "type": "string",
+              "title": "服务器地址",
+              "format": "uri"
+            },
+            "mail_suffix": {
+              "type": "string",
+              "title": "邮箱后缀",
+              "description": "该邮箱服务生成地址时使用的域名后缀，如 example.com；供 mail_info 工具返回给模型。"
+            },
+            "username": {
+              "type": "string",
+              "title": "用户名",
+              "format": "email"
+            },
+            "password": {
+              "type": "string",
+              "title": "密码",
+              "writeOnly": true,
+              "x-secret": true
+            },
+            "secret_key": {
+              "type": "string",
+              "title": "jwt",
+              "writeOnly": true,
+              "x-secret": true
+            },
+            "enabled": {
+              "type": "boolean",
+              "title": "启用",
+              "default": true
+            }
+          },
+          "required": [
+            "display_name",
+            "user_ids",
+            "username",
+            "base_url"
+          ]
+        },
+        "ui": {
+          "renderer": "mail_accounts",
+          "idField": "id",
+          "displayField": "display_name",
+          "columns": [
+            "display_name",
+            "username",
+            "base_url",
+            "enabled"
+          ],
+          "order": [
+            "display_name",
+            "user_ids",
+            "enabled",
+            "mailbox_type",
+            "base_url",
+            "mail_suffix",
+            "username",
+            "password",
+            "secret_key"
+          ]
+        },
+        "storage": {
+          "configType": "mail_account",
+          "handler": "mail-account",
+          "embed": {
+            "configType": "mail_address",
+            "field": "addresses"
+          }
+        }
+      },
+      "address_mappings": {
+        "title": "可查询邮箱",
+        "cardinality": "collection",
+        "binding": "shared",
+        "capabilities": [
+          "list",
+          "read",
+          "create",
+          "update",
+          "delete",
+          "filter",
+          "relate",
+          "runtime-apply"
+        ],
+        "relation": {
+          "parentResource": "upstream_accounts",
+          "parentId": "parent_id",
+          "foreignKey": "mail_config_id",
+          "display": "nested"
+        },
+        "schema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "integer",
+              "title": "ID",
+              "readOnly": true
+            },
+            "address": {
+              "type": "string",
+              "title": "可查询邮箱",
+              "format": "email"
+            },
+            "source_address": {
+              "type": "string",
+              "title": "实际来源邮箱",
+              "format": "email"
+            },
+            "is_primary": {
+              "type": "boolean",
+              "title": "主地址",
+              "default": false
+            }
+          },
+          "required": [
+            "address",
+            "source_address"
+          ]
+        },
+        "ui": {
+          "idField": "id",
+          "displayField": "address",
+          "columns": [
+            "address",
+            "source_address",
+            "is_primary"
+          ],
+          "order": [
+            "address",
+            "source_address",
+            "is_primary"
+          ]
+        },
+        "storage": {
+          "configType": "mail_address",
+          "handler": "mail-address",
+          "parentConfigType": "mail_account"
+        }
+      }
+    },
+    "actions": {
+      "query_messages": {
+        "title": "实时查询邮件",
+        "binding": "mail.query_messages",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "config_id": {
+              "type": "integer",
+              "title": "邮箱服务"
+            },
+            "address": {
+              "type": "string",
+              "title": "邮箱地址（留空查全部）"
+            },
+            "keyword": {
+              "type": "string",
+              "title": "关键词"
+            },
+            "limit": {
+              "type": "integer",
+              "default": 20,
+              "minimum": 1,
+              "maximum": 100
+            },
+            "offset": {
+              "type": "integer",
+              "default": 0,
+              "minimum": 0
+            }
+          },
+          "required": [
+            "config_id"
+          ]
+        },
+        "ui": {
+          "renderer": "mail_messages",
+          "resources": {
+            "accounts": "upstream_accounts",
+            "addresses": "address_mappings"
+          },
+          "scrollY": 420
+        }
+      }
+    }
+  },
+  "home_actions": [
+    {
+      "id": "server_config",
+      "label": "服务端配置",
+      "icon": "⚙",
+      "panel": "configuration"
+    },
+    {
+      "id": "mail_messages",
+      "label": "邮件列表",
+      "icon": "📬",
+      "panel": "messages"
+    },
+    {
+      "id": "tools",
+      "label": "工具列表",
+      "icon": "🛠",
+      "panel": "tools"
+    },
+    {
+      "id": "config",
+      "label": "连接配置",
+      "icon": "🔗",
+      "panel": "config"
+    }
+  ],
+  "panels": {
+    "configuration": {
+      "kind": "resource",
+      "resources": [
+        "upstream_accounts"
+      ],
+      "read_only": false
+    },
+    "messages": {
+      "kind": "action",
+      "action": "query_messages",
+      "read_only": true,
+      "ui": {
+        "renderer": "mail_messages"
+      }
+    },
+    "tools": {
+      "kind": "tools",
+      "read_only": true
+    },
+    "config": {
+      "kind": "config",
+      "read_only": true,
+      "copyable": true
+    }
+  }
+}

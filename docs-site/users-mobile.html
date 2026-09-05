@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Ai Lubricant 移动端使用与发布：登录私有化服务、项目、任务、模型、节点、EAS 构建与下载升级。">
+  <title>移动端 · Ai Lubricant</title>
+  <link rel="stylesheet" href="assets/docs.css?v=20260831-3"><script src="assets/docs.js?v=20260831-3" defer></script>
+</head>
+<body>
+<button class="nav-toggle" id="nav-toggle" aria-expanded="false">☰ 打开文档导航</button>
+<div class="wrap">
+<aside class="sidebar">
+  <div class="brand"><span class="dot">A</span> Ai Lubricant</div>
+  <div class="nav-group">产品</div><nav>
+    <a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a>
+  </nav>
+  <div class="nav-group">能力详解</div><nav>
+    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
+  </nav>
+  <div class="nav-group">操作手册</div><nav>
+    <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
+  </nav>
+  <div class="nav-group">部署与接入</div><nav>
+    <a href="users-api.html"><span class="ic">↔</span>API 接入</a><a href="governance.html"><span class="ic">◈</span>安全与治理</a><a href="deploy.html"><span class="ic">⇩</span>生产部署</a><a href="desktop.html"><span class="ic">▭</span>Windows 桌面版</a><a href="architecture.html"><span class="ic">⚖</span>技术白皮书</a><a href="env-vars.html"><span class="ic">⊧</span>环境变量</a><a href="local-debug.html"><span class="ic">⚙</span>本地调试</a>
+  </nav>
+</aside>
+<main class="main"><div class="topbar"><button id="theme-toggle" type="button">☾ 深色</button><button id="print-page" type="button">⎙ 打印</button></div>
+<article class="content">
+<header class="hero"><h1>移动端使用与发布</h1><p class="desc">在手机上登录公有或私有 Ai Lubricant，查看项目和任务、发起新任务、选择模型与节点，并跟踪 Agent 执行结果。</p></header>
+<div class="toc"><strong>本页目录</strong><a href="#experience">移动体验</a><a href="#login">登录</a><a href="#tasks">任务</a><a href="#projects">项目</a><a href="#models">模型/节点</a><a href="#dev">本地开发</a><a href="#eas">EAS 发布</a><a href="#ota">版本升级</a><a href="#security">安全</a></div>
+
+<h2 id="experience">1. 移动端提供什么</h2>
+<p>移动端位于 <code>mobile/</code>（独立仓库 <code>ai-lubricant-mobile</code>，以 git submodule 挂在主仓该路径），基于 Expo SDK、React Native 与 Expo Router。它使用与 Web 门户相同的用户账号和后端 API，登录时可填写任意私有化部署域名。</p>
+<div class="cards">
+<div class="card"><h3>任务</h3><p>查看任务列表、状态、执行详情、Agent 输出与 Token 统计。</p></div>
+<div class="card"><h3>项目</h3><p>查看项目概况与相关任务，在移动场景中掌握工作进度。</p></div>
+<div class="card"><h3>新建任务</h3><p>选择项目、模型和节点，在手机上发起新的 AI 开发任务。</p></div>
+<div class="card"><h3>我的</h3><p>查看账号、服务地址、模型、Git identity 与应用版本。</p></div>
+</div>
+<p>移动端适合发起、跟踪和复核任务，不替代桌面编辑器与完整终端。高风险代码审查、节点管理和 Secret 配置应在受控桌面环境完成。</p>
+
+<h2 id="login">2. 登录私有化服务</h2>
+<ol>
+<li>打开 App，在登录页填写<strong>服务器域名</strong>，例如 <code>https://ai.example.com</code>。不要填写控制服务 8003 或数据库地址。</li>
+<li>输入平台用户邮箱与密码，完成登录。</li>
+<li>App 通过 <code>ai_lubricant_session</code> session cookie 访问 <code>/api/v1/users/*</code>；原生网络层持久化 cookie。</li>
+<li>登录后默认进入“任务”Tab；如果服务器地址不可达，返回登录页检查域名、HTTPS 和后端状态。</li>
+</ol>
+<div class="warn"><strong>生产必须使用 HTTPS</strong>自签名证书可能被 iOS/Android 拒绝；不要在生产包关闭证书验证。HTTP Basic Auth 透传只用于受控测试环境。</div>
+
+<h2 id="tasks">3. 查看与创建任务</h2>
+<h3>任务列表</h3>
+<ul>
+<li>底部“任务”显示当前用户任务，按后端状态更新。</li>
+<li>进入详情查看任务目标、Agent 消息/事件、执行结果和 Token 统计。</li>
+<li>失败任务先查看错误和节点/模型状态，不要连续重复提交同一目标。</li>
+</ul>
+<h3>新建任务</h3>
+<ol>
+<li>点击底部中央“+”，进入 <code>/new-task</code>。</li>
+<li>选择项目；描述清晰目标、范围和验收标准。</li>
+<li>选择有权限的模型/API Key；如任务需要自有机器，选择在线且获授权的 execution 节点。</li>
+<li>确认提示词不包含密码、Token、客户个人数据或不必要源码。</li>
+<li>提交后进入任务详情跟踪执行。</li>
+</ol>
+<h3 id="input">手机上更快地把目标说清楚</h3>
+<p>在手机上打字描述一个开发任务很费劲，所以新建任务和任务会话页支持语音与附件输入。</p>
+<div class="table-wrap"><table><thead><tr><th>输入方式</th><th>怎么用</th><th>限制</th></tr></thead><tbody>
+<tr><td><strong>实时语音转写</strong></td><td>按住麦克风说话，文字边说边出现（流式返回中间结果与最终结果），可继续手动修改后提交。</td><td>需要麦克风权限。依赖原生模块，<strong>Expo Go 里不可用</strong>，须使用 Dev Client 或正式构建；不支持时界面不显示该入口。</td></tr>
+<tr><td><strong>图片附件</strong></td><td>从相册或拍照选择截图/设计图，随任务描述一起提交，供模型作为视觉上下文。</td><td>单张 ≤ 2&nbsp;MB，最多 3 张；超限会在客户端压缩或提示。</td></tr>
+<tr><td><strong>zip 文件</strong></td><td>选择打包好的代码或资料一起上传。</td><td>单个 ≤ 10&nbsp;MB。</td></tr>
+</tbody></table></div>
+<p>附件走<strong>预签名直传</strong>：客户端先向平台申请一次性上传地址，再把文件字节直接 PUT 到该地址，提交任务时只带回可访问 URL 和文件名。限制与 Web 端一致，两端行为不会分叉。</p>
+<div class="note"><strong>iOS 首次会请求 AI 数据处理同意</strong>为满足 App Store 审核要求，iOS 上首次进入「即将把内容发给 AI」的页面（新建任务、任务会话）会弹出同意确认；点「同意并继续」后才发起 AI 交互，选择结果保存在本机，之后不再询问。选「暂不使用」则退出该页，不进行任何 AI 交互。Android 不弹此确认。</div>
+
+<h2 id="projects">4. 项目与工作上下文</h2>
+<ul>
+<li>“项目”Tab 显示当前用户可访问项目；进入详情查看项目概况与任务。</li>
+<li>新建项目前确认名称、仓库与成员边界；敏感 Git 凭据通过专用配置录入。</li>
+<li>复杂编辑器、文件和浏览器终端操作建议回到 Web 端；移动端主要用于概览、发起和跟踪。</li>
+</ul>
+
+<h2 id="models">5. 模型、Git identity 与节点</h2>
+<ul>
+<li>用户模型来自平台授权的 API Key 与模型列表；移动端不保存上游模型 Token。</li>
+<li>“模型”页可查看/配置用户可用模型（具体能力由后端权限决定）。</li>
+<li>Git identity 用于 Agent 提交身份，按用户维护，不从设备账号自动推断。</li>
+<li>新建任务选择节点时，只应看到获授权、approved 且可用的 execution 节点。</li>
+<li>节点 onboard、审批、终端和容量管理在 Web 管理端完成，详见 <a href="guide-node.html">节点管理员手册</a>。</li>
+</ul>
+
+<h2 id="dev">6. 移动端本地开发</h2>
+<pre><code>cd mobile
+npm install
+
+# Expo 开发服务
+npm start
+
+# 本地原生运行（需要 Android/iOS 工具链）
+npm run android
+npm run ios
+
+# Web 预览（不能替代原生验收）
+npm run web
+
+# 代码检查与测试
+npm run lint
+npm test</code></pre>
+<p>App 默认 API 地址为项目代码配置的在线域名，但登录页允许覆盖服务器域名。开发/截图使用独立演示账号，不把密码写进脚本、日志或文档。</p>
+
+<h2 id="eas">7. EAS 构建与商店发布</h2>
+<div class="table-wrap"><table><thead><tr><th>Profile</th><th>用途</th><th>分发</th><th>Android</th></tr></thead><tbody>
+<tr><td><code>development</code></td><td>开发客户端</td><td>internal</td><td>Development Client</td></tr>
+<tr><td><code>preview</code></td><td>内测</td><td>internal；channel=preview</td><td>APK</td></tr>
+<tr><td><code>production</code></td><td>生产商店</td><td>channel=production；autoIncrement</td><td>AAB</td></tr>
+</tbody></table></div>
+<pre><code>cd mobile
+eas login
+
+# 内测 APK
+eas build --profile preview --platform android
+
+# 生产 AAB
+eas build --profile production --platform android
+
+# 提交 Google Play（需受控的 service account key）
+eas submit --profile production --platform android</code></pre>
+<ul>
+<li>发布前核对 <code>app.json</code> 的 name、slug、scheme、bundleIdentifier/package。</li>
+<li><code>google-service-account.json</code> 是高敏感凭据，不提交 Git，不打入公开构建产物。</li>
+<li>开发、preview、production 使用不同后端环境；不要让内测包访问生产数据。</li>
+</ul>
+
+<h2 id="ota">8. 版本发布与下载升级</h2>
+<p>移动端升级与节点下载升级同构、共用同一个市场 GitHub 仓库：管理员在市场管理页「移动端」Tab 上传 APK，服务端写 <code>mobile-releases/version.json</code> 并缓存进 PG；App「我的 → 检查更新」从后端拿最新版本与 APK 直链，下载、校验 sha256、调起系统安装器。</p>
+<pre><code># 出包（mobile 是 submodule，首次需 git submodule update --init mobile）
+cd mobile &amp;&amp; bash scripts/pack-release.sh         # 产出 dist/ai-lubricant-<version>-android.apk</code></pre>
+<p>随后把产物拖进市场管理页「移动端 → 上传新版本」弹框，填版本号（与 <code>app.json</code> 的 <code>version</code> 一致，数字/日期串如 <code>260608</code>）、版本说明与 iOS App Store 链接。上传后服务端自动写 <code>mobile-releases/version.json</code>，无需手动提交。</p>
+<ul>
+<li><strong>仅 Android 走下载升级</strong>：App 内下载 APK + 调起系统安装（需 <code>REQUEST_INSTALL_PACKAGES</code> 权限与 FileProvider，<code>app.json</code> 已配）。系统会弹安装确认，App 不静默装。</li>
+<li><strong>iOS 只跳 App Store</strong>：iOS 装不了自下载的包，检查更新只展示版本并跳商店链接，不自检。</li>
+<li>版本号用可比较的数字/日期串（与 <code>app.json</code> <code>version</code> 一致），App 据此判断是否需要升级。</li>
+<li>APK 直链来自 GitHub Release，公开可读；App 端按 <code>sha256</code> 校验下载完整性后才调起安装。</li>
+</ul>
+
+<h2 id="security">9. 移动端安全清单</h2>
+<ul>
+<li>☐ 生产服务器地址使用 HTTPS，证书链在目标设备正常。</li>
+<li>☐ App 不包含上游 API Key、管理员密码、node secret 或内部 token。</li>
+<li>☐ Session cookie 为 HttpOnly，并按部署设置 SameSite/Secure。</li>
+<li>☐ 相机、相册、麦克风等权限只在实际使用时请求，并在隐私政策说明。</li>
+<li>☐ EAS service account、签名证书和 Apple/Google 凭据由 Secret 管理。</li>
+<li>☐ APK 下载升级按 sha256 校验；GitHub 写入 token 只在服务端，前端与 App 从不接触。</li>
+<li>☐ 截图、崩溃报告和遥测不包含任务提示词、代码、Token 或客户数据。</li>
+</ul>
+
+<footer class="footer"><span><a href="guide-node.html">← 上一篇：节点管理员手册</a></span><span><a href="users-api.html">下一篇：API 接入 →</a></span></footer>
+</article></main></div>
+</body></html>

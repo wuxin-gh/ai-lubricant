@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>生产部署 · Ai Lubricant</title>
+  <link rel="stylesheet" href="assets/docs.css?v=20260831-3"><script src="assets/docs.js?v=20260831-3" defer></script>
+</head>
+<body>
+<button class="nav-toggle" id="nav-toggle" aria-expanded="false">☰ 打开文档导航</button>
+<div class="wrap">
+<aside class="sidebar">
+  <div class="brand"><span class="dot">A</span> Ai Lubricant</div>
+  <div class="nav-group">产品</div><nav>
+    <a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a>
+  </nav>
+  <div class="nav-group">能力详解</div><nav>
+    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
+  </nav>
+  <div class="nav-group">操作手册</div><nav>
+    <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
+  </nav>
+  <div class="nav-group">部署与接入</div><nav>
+    <a href="users-api.html"><span class="ic">↔</span>API 接入</a><a href="governance.html"><span class="ic">◈</span>安全与治理</a><a href="deploy.html"><span class="ic">⇩</span>生产部署</a><a href="desktop.html"><span class="ic">▭</span>Windows 桌面版</a><a href="architecture.html"><span class="ic">⚖</span>技术白皮书</a><a href="env-vars.html"><span class="ic">⊧</span>环境变量</a><a href="local-debug.html"><span class="ic">⚙</span>本地调试</a>
+  </nav>
+</aside>
+<main class="main"><div class="topbar"><button id="theme-toggle" type="button">☾ 深色</button><button id="print-page" type="button">⎙ 打印</button></div>
+<article class="content">
+<header class="hero"><h1>部署文档</h1><p class="desc">拉代码 → 配 <code>.env</code> → <code>docker compose up</code>，三步把平台跑起来。数据库不用单独安装，Compose 自带 PostgreSQL 和 Redis。每个配置字段的完整说明见 <a href="env-vars.html">环境变量清单</a>，本页不重复。</p></header>
+
+<h2 id="reqs">1. 准备要求</h2>
+<ul>
+<li>Docker 20+ 与 Docker Compose v2。</li>
+<li>2 核 4G 内存起步；磁盘预留 10G+（镜像 + 数据卷）。</li>
+<li>端口：<code>3006</code>（Web 入口，可自行改映射）、<code>8003</code>（节点控制服务，只对节点和内网开放，不是网页）、<code>8004</code>（Tunnel Runtime，仅容器内网，不对外）。</li>
+<li>PostgreSQL 16 与 Redis 7 由 Compose 自动创建，无需预装。</li>
+</ul>
+
+<h2 id="clone">2. 拉取代码与子模块</h2>
+<p>克隆时带 <code>--recurse-submodules</code>，一条命令连主仓和五个子仓一起拉下来。不要只看主仓页面上的“关联仓库”——Git 实际拉取的是主仓 <code>.gitmodules</code> 记录的五个子仓。</p>
+<pre><code># 1. 主仓 + 全部子模块
+git clone --recurse-submodules https://gitee.com/xiongrun/ai-lubricant.git
+cd ai-lubricant
+
+# 2. 确认五项前面没有 “-”
+git submodule status</code></pre>
+<p>主仓使用相对 submodule URL，从 Gitee 克隆时会按当前组织解析为以下仓库：</p>
+<div class="table-wrap"><table><thead><tr><th>目录</th><th>Gitee 仓库</th><th>构建用途</th></tr></thead><tbody>
+<tr><td><code>node_server</code></td><td><code>xiongrun/ai-lubricant-node-server</code></td><td>节点控制服务</td></tr>
+<tr><td><code>nodes</code></td><td><code>xiongrun/ai-lubricant-nodes</code></td><td>节点二进制与 Agent 运行时</td></tr>
+<tr><td><code>user-frontend</code></td><td><code>xiongrun/ai-lubricant-user-frontend</code></td><td>Web 管理端与用户门户</td></tr>
+<tr><td><code>mobile</code></td><td><code>xiongrun/ai-lubricant-mobile</code></td><td>手机客户端（服务端部署本身可不构建）</td></tr>
+<tr><td><code>device-control</code></td><td><code>xiongrun/ai-lubricant-device-control</code></td><td>Android/iOS 控制组件</td></tr>
+</tbody></table></div>
+<div class="warn"><strong>“关联仓库”不等于 Git 自动拉取</strong>这五个子仓必须在 Gitee 上真实存在，且当前账号有读取权限；否则 <code>git submodule update</code> 仍会失败。失败时先看命令输出的是哪个仓库 404/无权限，不要直接继续构建。</div>
+
+<h2 id="env">3. 配置 .env</h2>
+<pre><code>cp .env.example .env</code></pre>
+<p>最小必改项（其余字段保持默认即可启动）：</p>
+<div class="table-wrap"><table><thead><tr><th>变量</th><th>说明</th></tr></thead><tbody>
+<tr><td><code>POSTGRES_USER</code> / <code>POSTGRES_PASSWORD</code> / <code>POSTGRES_DATABASE</code></td><td>同时是 Compose 建库参数和应用连接参数，一处改两边生效。密码必须换成强密码。</td></tr>
+<tr><td><code>AI_LUBRICANT_COMPAT_ENABLED</code></td><td>要用 Web 管理端（<code>/manager</code>）和用户门户（<code>/console</code>）必须设 <code>true</code>。</td></tr>
+<tr><td><code>AI_LUBRICANT_BOOTSTRAP_ADMIN_EMAIL</code> / <code>_PASSWORD</code></td><td>首次启动幂等创建平台管理员；创建完成后从 .env 移除明文密码。</td></tr>
+</tbody></table></div>
+<div class="warn"><strong>不要提交 .env</strong>里面有数据库密码、内部 token 和管理员密码。生产环境敏感值走 Secret 注入，全量字段见 <a href="env-vars.html">环境变量清单</a>。</div>
+<div class="info"><strong>Compose 暴露的调试端口</strong>PostgreSQL 映射到宿主 <code>15432</code>、Redis 到 <code>6479</code>，仅本机调试用；生产环境把它们从对外映射里去掉，只留内网。</div>
+
+<h2 id="start">4. 启动</h2>
+<pre><code>docker compose up -d --build
+
+# 五个服务应为 running / healthy
+docker compose ps
+
+# 看数据服务日志
+docker compose logs -f ai-lubricant</code></pre>
+<p>首次启动要构建应用镜像，需要几分钟。应用自动通过 <code>postgres</code>、<code>redis</code> 服务名连依赖，不需要手工填容器 IP。</p>
+<div class="table-wrap"><table><thead><tr><th>服务</th><th>角色</th><th>端口</th></tr></thead><tbody>
+<tr><td><code>postgres</code></td><td>业务数据库（渠道、账号、Key、任务、日志元数据）</td><td>宿主 <code>15432</code> → 容器 5432，仅调试</td></tr>
+<tr><td><code>redis</code></td><td>运行态真相源（限流、配额、冷却、会话）</td><td>宿主 <code>6479</code> → 容器 6379，仅调试</td></tr>
+<tr><td><code>ai-lubricant</code></td><td>数据服务：对外 API、管理端、用户门户、Agent 运行时、MCP</td><td>宿主 <code>3006</code> → 容器 8001</td></tr>
+<tr><td><code>node-server</code></td><td>节点控制面，接收节点 h2c 主动连接</td><td>宿主 <code>8003</code> → 容器 8003</td></tr>
+<tr><td><code>tunnel-server</code></td><td>Tunnel Runtime：管理 frpc / cloudflared / npc 子进程</td><td>容器 <code>8004</code>，<strong>不对外发布</strong></td></tr>
+</tbody></table></div>
+<p>三个应用服务<strong>共享同一个镜像</strong>（build 一次，靠 <code>command</code> 区分入口），并读同一份 <code>.env</code>。启动顺序由 <code>depends_on</code> + 健康检查串起来：postgres/redis → node-server → ai-lubricant / tunnel-server。</p>
+<div class="note"><strong>不用内网穿透可以不起 tunnel-server</strong><code>docker compose up -d postgres redis node-server ai-lubricant</code> 即可，隧道方案管理页与任务预览端口对外暴露会不可用，其余功能不受影响。也可以用 <code>TUNNEL_RUNTIME_ENABLED=false</code> 让它空转。</div>
+
+<h2 id="init">5. 初始化数据库</h2>
+<pre><code>docker compose exec ai-lubricant python server/init_db.py</code></pre>
+<p>脚本幂等，重复运行安全。它只建表结构；如果启动日志提示「缺少必填主配置」，先完成管理员引导和基础配置，不要用反复重启解决。<strong>路径带 <code>server/</code></strong>，脚本不在仓库根。</p>
+
+<h2 id="access">6. 访问</h2>
+<ul>
+<li>Web 入口：<code>http://127.0.0.1:3006</code>；管理端 <code>/manager</code>，用户门户 <code>/console</code>。</li>
+<li><code>8003</code> 是节点控制服务，只接受节点连接和内部调用，不要当网页访问。</li>
+<li>生产部署用 HTTPS 反向代理指向 <code>3006</code>，并按 <a href="governance.html#checklist">生产安全清单</a>收敛其余端口。</li>
+</ul>
+
+<h2 id="ops">7. 日常运维</h2>
+<pre><code># 升级到最新版
+git pull
+git submodule sync --recursive
+git submodule update --init --recursive
+docker compose up -d --build
+
+# 备份数据库（逻辑备份）
+docker compose exec -T postgres \
+  pg_dump -U ai_lubricant -d ai-lubricant -Fc &gt; ai-lubricant.dump
+
+# 停止（保留数据卷）
+docker compose down</code></pre>
+<div class="danger"><strong>down -v 会删除数据卷</strong>除非已确认备份完成，否则不要执行 <code>docker compose down -v</code>。</div>
+
+<h2 id="clickhouse">8. 可选：ClickHouse</h2>
+<pre><code>export CLICKHOUSE_REQUEST_PAYLOAD_ENABLED=true
+docker compose --profile clickhouse up -d</code></pre>
+<p>不开也不影响模型代理主链路；开了才有请求大字段双写和对话存储。捕获请求正文前先完成隐私评估。</p>
+
+<h2 id="image">9. 替代方式：手动构建镜像</h2>
+<p>已有外部 PostgreSQL / Redis，或需要单独控制两个进程时才用这种方式；一般部署用上面的 Compose 即可。</p>
+<pre><code># 构建镜像（python:3.11-slim + requirements.txt）
+docker build -t ai-lubricant-api .
+
+# 数据服务：外部 PG/Redis 地址用 -e 注入
+docker run -d --name ai-lubricant \
+  -p 8001:8001 --env-file .env \
+  -e POSTGRES_HOST=10.x.x.x -e POSTGRES_PORT=5432 \
+  -e POSTGRES_USER=... -e POSTGRES_PASSWORD=... -e POSTGRES_DATABASE=ai-lubricant \
+  -e REDIS_HOST=10.x.x.x -e REDIS_PORT=6379 \
+  ai-lubricant-api
+
+# 节点控制服务：同一镜像换启动命令
+docker run -d --name ai-lubricant-node-server \
+  -p 8003:8003 --env-file .env \
+  -e POSTGRES_HOST=10.x.x.x -e POSTGRES_PORT=5432 \
+  -e POSTGRES_USER=... -e POSTGRES_PASSWORD=... -e POSTGRES_DATABASE=ai-lubricant \
+  -e REDIS_HOST=10.x.x.x -e REDIS_PORT=6379 \
+  -e NODE_CONTROL_HOST=0.0.0.0 -e NODE_CONTROL_PORT=8003 \
+  ai-lubricant-api python -m node_server
+
+# Tunnel Runtime：同一镜像再换启动命令
+docker run -d --name ai-lubricant-tunnel-server \
+  -p 8004:8004 --env-file .env \
+  -e POSTGRES_HOST=10.x.x.x -e POSTGRES_PORT=5432 \
+  -e POSTGRES_USER=... -e POSTGRES_PASSWORD=... -e POSTGRES_DATABASE=ai-lubricant \
+  -e REDIS_HOST=10.x.x.x -e REDIS_PORT=6379 \
+  -e AGENT_COMPOSE_BASE_URL=http://ai-lubricant-node-server:8003 \
+  -e TUNNEL_RUNTIME_HOST=0.0.0.0 -e TUNNEL_RUNTIME_PORT=8004 \
+  -e TUNNEL_RUNTIME_ENABLED=true \
+  ai-lubricant-api python -m tunnel_server</code></pre>
+<div class="danger"><strong>两个容器必须读同一份 .env</strong><code>NODE_CONTROL_TOKEN</code> 是数据服务→控制服务的内部 Bearer，两边必须完全一致；控制服务缺 token/密钥时会回写 .env，所以挂载的 .env 必须可写且持久化。Tunnel Runtime 经 <code>AGENT_COMPOSE_BASE_URL</code> 调控制服务，URL 错就启停不了隧道。</div>
+<p>完整 Web 前端需要先构建产物：<code>cd user-frontend &amp;&amp; pnpm install &amp;&amp; pnpm build</code>，再把 <code>/api</code>、<code>/admin</code>、<code>/v1</code>、<code>/agent</code>、<code>/mcp</code> 前缀反代到数据服务（支持 WebSocket 与 SSE）。仓库用 pnpm（<code>pnpm-lock.yaml</code> 锁定），不要换成 npm。</p>
+
+<h2 id="checklist">10. 生产上线清单</h2>
+<ul>
+<li>只公开 HTTPS 入口；PG、Redis、ClickHouse 和 8003 放内网或限制来源。</li>
+<li>启用 API Key 鉴权，创建最小权限 key，并定期轮换。</li>
+<li>为 PostgreSQL、Redis 数据、.env/Secrets、节点主密钥制定备份与恢复演练。</li>
+<li>升级前备份数据库；先在预发布环境验证流式 API、管理端、MCP、WebSocket、节点连接。</li>
+<li>保留前一版本镜像和前端 dist；回滚时判断数据库变更是否向后兼容，不能只回滚容器。</li>
+<li>数据服务日志按日写入 <code>logs/</code> 并保留 30 天；生产同步到集中日志平台并控制访问权限。</li>
+<li>切换控制服务：先停旧控制进程再启新进程，绝不让两个 Registry 同时对同一批节点下发命令。</li>
+<li>不要把请求 payload 捕获当默认选项；开启前评估隐私、脱敏、保留期和访问审计。</li>
+</ul>
+
+<footer class="footer"><span><a href="governance.html">← 上一篇：安全与治理</a></span><span><a href="desktop.html">下一篇：Windows 桌面版 →</a></span></footer>
+</article></main></div>
+</body></html>

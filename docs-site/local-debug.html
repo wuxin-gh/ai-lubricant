@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>本地调试启动 · Ai Lubricant</title>
+  <link rel="stylesheet" href="assets/docs.css?v=20260831-3"><script src="assets/docs.js?v=20260831-3" defer></script>
+</head>
+<body>
+<button class="nav-toggle" id="nav-toggle" aria-expanded="false">☰ 打开文档导航</button>
+<div class="wrap">
+<aside class="sidebar">
+  <div class="brand"><span class="dot">A</span> Ai Lubricant</div>
+  <div class="nav-group">产品</div><nav>
+    <a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a>
+  </nav>
+  <div class="nav-group">能力详解</div><nav>
+    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
+  </nav>
+  <div class="nav-group">操作手册</div><nav>
+    <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
+  </nav>
+  <div class="nav-group">部署与接入</div><nav>
+    <a href="users-api.html"><span class="ic">↔</span>API 接入</a><a href="governance.html"><span class="ic">◈</span>安全与治理</a><a href="deploy.html"><span class="ic">⇩</span>生产部署</a><a href="desktop.html"><span class="ic">▭</span>Windows 桌面版</a><a href="architecture.html"><span class="ic">⚖</span>技术白皮书</a><a href="env-vars.html"><span class="ic">⊧</span>环境变量</a><a href="local-debug.html"><span class="ic">⚙</span>本地调试</a>
+  </nav>
+</aside>
+<main class="main"><div class="topbar"><button id="theme-toggle" type="button">☾ 深色</button><button id="print-page" type="button">⎙ 打印</button></div>
+<article class="content">
+<header class="hero"><h1>本地调试与启动</h1><p class="desc">在开发机上把数据服务、节点控制服务、Tunnel Runtime 和 Web 前端逐个拉起来，并用日志与接口探针定位问题。生产部署走 Docker Compose，见 <a href="deploy.html">部署文档</a>。</p></header>
+
+<h2 id="services">0. 四个进程与端口</h2>
+<p>本地调试是<strong>手工拉起多个进程</strong>，不是一个命令。先记住谁监听哪个端口、谁是可选的：</p>
+<div class="table-wrap"><table><thead><tr><th>进程</th><th>启动命令</th><th>默认端口</th><th>必需性</th></tr></thead><tbody>
+<tr><td>数据服务</td><td><code>python main.py</code></td><td><code>8001</code></td><td><strong>必需</strong>。API、管理端、用户门户、Agent 运行时、MCP 都在这里。</td></tr>
+<tr><td>节点控制服务</td><td><code>python -m node_server</code></td><td><code>8003</code></td><td>用节点/编辑器/任务/终端时必需。<strong>不是网页</strong>，只接节点连接和数据服务的内部调用。</td></tr>
+<tr><td>Tunnel Runtime</td><td><code>python -m tunnel_server</code></td><td><code>8004</code></td><td>用内网穿透（frp / cloudflared / nps）时必需。</td></tr>
+<tr><td>Web 前端 Vite</td><td><code>pnpm dev:offline</code></td><td><code>11180</code></td><td>调前端页面时用；只调 API 可以不启，直接打 <code>8001</code>。</td></tr>
+</tbody></table></div>
+<div class="note"><strong>三个 Python 进程共享同一份 <code>.env</code> 和同一个 PostgreSQL/Redis。</strong>它们各自独立解析配置（数据服务读 <code>server/bootstrap_config.py</code>，控制服务读 <code>node_server/config.py</code>），字段含义见 <a href="env-vars.html">环境变量清单</a>。Compose 里这三个进程是三个容器跑同一个镜像、换 <code>command</code>。</div>
+
+<div class="toc"><strong>本页目录</strong><a href="#services">四个进程与端口</a><a href="#prereq">环境准备</a><a href="#db">启动 PostgreSQL/Redis</a><a href="#init">初始化数据库</a><a href="#backend">启动数据服务</a><a href="#node">启动节点控制服务</a><a href="#tunnel">启动 Tunnel Runtime</a><a href="#frontend">启动 Web 前端</a><a href="#mobile">移动端本地调试</a><a href="#probe">接口探针</a><a href="#logs">日志</a><a href="#troubleshoot">故障排查</a></div>
+
+<h2 id="prereq">1. 环境准备</h2>
+<div class="note"><strong>还没有代码？</strong>先完成部署文档的<a href="deploy.html#clone">「拉取代码与子模块」</a>一步——五个子模块必须显式拉取，否则前端和节点二进制都不在。</div>
+<ul>
+  <li>Python 3.11（推荐 venv）+ <code>requirements.txt</code> 依赖。这一份依赖同时覆盖三个 Python 进程，不需要分别装。</li>
+  <li>PostgreSQL 与 Redis（本机、Docker 或远程均可）。Redis <strong>必须 ≥ 6.0</strong>：客户端强制 <code>HELLO 3</code> 握手，早期版本没有这个命令。</li>
+  <li>前端：Node.js 18+ 与 <strong>pnpm</strong>（仓库锁文件是 <code>pnpm-lock.yaml</code>）。</li>
+  <li>（可选）Go 工具链用于重新构建节点二进制；调试后端通常不需要。</li>
+</ul>
+<pre><code>python -m venv .venv
+# Linux/macOS
+source .venv/bin/activate
+# Windows Git Bash
+# source .venv/Scripts/activate
+pip install -r requirements.txt
+
+cp .env.example .env</code></pre>
+
+<h2 id="db">2. 启动 PostgreSQL 与 Redis</h2>
+<p>最简单的方式是只启动 Compose 中的依赖，不启动应用：</p>
+<pre><code>docker compose up -d postgres redis
+docker compose ps</code></pre>
+<p>这会把 PostgreSQL 映射到宿主 <code>127.0.0.1:15432</code>、Redis 映射到 <code>127.0.0.1:6479</code>（不是容器内的 5432/6379）。此时把 <code>.env</code> 指到这两个宿主端口：</p>
+<pre><code>POSTGRES_HOST=127.0.0.1
+POSTGRES_PORT=15432
+POSTGRES_USER=ai_lubricant
+POSTGRES_PASSWORD=ai_lubricant
+POSTGRES_DATABASE=ai-lubricant
+
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6479
+REDIS_DB=0
+REDIS_PREFIX_KEY=marsview</code></pre>
+<div class="note"><strong><code>.env</code> 是扁平的 <code>KEY=VALUE</code>，没有 <code>[section]</code> 节头。</strong><code>.env.example</code> 里的 <code>#&nbsp;[postgres]</code> 只是分组注释。当前代码不解析任何 INI/JSON 配置文件——启动配置只有「环境变量 → <code>.env</code> → 内置默认值」三层，写成 <code>host = 127.0.0.1</code> 这种 INI 风格不会生效。</div>
+<div class="note"><strong>也可以直接用系统安装的服务</strong>在 macOS/Windows 上手动安装 PostgreSQL/Redis，然后把 <code>.env</code> 的 host/port 指过去（通常是默认的 5432/6379）。Docker Compose 只负责依赖，不负责前端和节点控制服务。</div>
+
+<h2 id="init">3. 初始化数据库</h2>
+<pre><code>python server/init_db.py</code></pre>
+<p>脚本连接到默认 postgres 库，若不存在则创建 <code>ai-lubricant</code> 数据库，然后执行 <code>sql/init.sql</code> 建表。重复运行是安全的（存在则跳过）。<strong>注意路径带 <code>server/</code></strong>，脚本不在仓库根。</p>
+<div class="warn"><strong>主配置与引导</strong>建表和写业务配置是两回事。若数据服务启动时提示缺少 <code>app_config['main']</code> 主配置，需要从既有环境导入配置，或在管理端完成初始化引导（取决于部署流程）。不要用“反复重启”解决配置缺失。</div>
+
+<h2 id="backend">4. 启动数据服务</h2>
+<pre><code># 常规
+python main.py
+
+# 调试开发模式：自动重载
+uvicorn main:app --host 0.0.0.0 --port 8001 --reload
+
+# 只监听本机
+uvicorn main:app --host 127.0.0.1 --port 8001</code></pre>
+<p><code>python main.py</code> 固定监听 <code>8001</code>（端口写在 <code>main.py</code> 末尾，<code>.env</code> 里的 <code>SERVER_HOST</code>/<code>SERVER_PORT</code> 不生效）。要换地址或端口就用 <code>uvicorn main:app --host ... --port ...</code>。<code>python main.py</code> 没有热重载；日常改代码调试用 <code>uvicorn ... --reload</code>。</p>
+<div class="note"><strong>直跑 <code>main.py</code> 会建双栈监听</strong>Windows 上 <code>localhost</code> 先解析 <code>::1</code>，只绑 <code>0.0.0.0</code> 会让客户端先等一次 IPv6 连接失败（本机约 2 秒）。<code>main.py</code> 显式创建 IPv4/IPv6 双栈 socket 规避；用 <code>uvicorn --host</code> 时没有这层处理，排障统一用 <code>127.0.0.1</code> 而不是 <code>localhost</code>。</div>
+<div class="note"><strong>DEBUG 环境变量</strong>缺省时 <code>DEBUG</code> 视为 <strong>true</strong>（<code>server/config.py</code>），所以本地直跑默认就是调试行为。Compose 的数据服务显式设了 <code>DEBUG=false</code>，生产部署保持这样。</div>
+
+<h2 id="node">5. 启动节点控制服务</h2>
+<pre><code>python -m node_server</code></pre>
+<p>默认监听 <code>0.0.0.0:8003</code>（<code>NODE_CONTROL_HOST</code> / <code>NODE_CONTROL_PORT</code> 可调）。它用 Hypercorn 而非 uvicorn，因为节点的 NodeConnect 走 h2c（明文 HTTP/2），uvicorn 不支持。</p>
+<p>仅调试模型网关 API、前端页面或 MCP 时可以先不启动它；数据服务要用到编辑器、任务、终端、文件、节点出口时才会去调 <code>AGENT_COMPOSE_BASE_URL</code>（本地填 <code>http://127.0.0.1:8003</code>）。</p>
+<div class="warn"><strong>缺 token/密钥时会回写 <code>.env</code></strong>控制服务启动时若发现没有 <code>NODE_CONTROL_TOKEN</code> 或 <code>NODE_CREDENTIAL_ENCRYPTION_KEY</code>，会生成并写回 <code>.env</code>，因此 <code>.env</code> 必须是可写文件。<code>NODE_CONTROL_TOKEN</code> 是数据服务→控制服务的内部 Bearer，<strong>两个进程必须读到同一个值</strong>；生成后重启数据服务让它读到新值。</div>
+<div class="warn"><strong>控制面切换铁律</strong>先停旧控制进程再启新进程，绝不让两个 Registry 对同一批节点下发命令。本地调试多次重启无妨，但不要在两台机器上同时运行控制服务管理同一节点集。</div>
+
+<h2 id="tunnel">6. 启动 Tunnel Runtime（可选）</h2>
+<pre><code>python -m tunnel_server</code></pre>
+<p>默认监听 <code>0.0.0.0:8004</code>（<code>TUNNEL_RUNTIME_HOST</code> / <code>TUNNEL_RUNTIME_PORT</code> 可调）。它负责管理 frpc / cloudflared / npc 客户端子进程——隧道方案管理页和任务预览端口对外暴露都依赖它。不用内网穿透时可以完全不启动，其余功能不受影响。</p>
+<p>它自己不直连节点：启停命令都经 <code>AGENT_COMPOSE_BASE_URL</code> 转给节点控制服务，所以要先有 <code>8003</code> 在跑。穿透客户端二进制不随代码分发，首次使用时联网下载并缓存到 <code>MC_TUNNEL_BIN_DIR</code>。</p>
+<div class="warn"><strong>不要和数据服务并发首启</strong>数据服务与 Tunnel Runtime 会各自对同一批穿透表做增量列对账，同时启动有小概率撞车。本地按 <code>main.py</code> → <code>node_server</code> → <code>tunnel_server</code> 的顺序起，Compose 里靠 <code>depends_on</code> + 健康检查达到同样效果。多实例还有单写者租约（<code>TUNNEL_RUNTIME_LEASE_TTL_SECONDS</code>），同一库不要同时跑两个。</div>
+
+<h2 id="frontend">7. 启动 Web 前端</h2>
+<pre><code>cd user-frontend
+pnpm install
+
+# 离线/私有化版（默认首页跳到登录），开发端口 11180
+pnpm dev:offline
+
+# 在线版
+# pnpm dev:online</code></pre>
+<p>Vite 默认监听 <code>0.0.0.0:11180</code>。开发服务器把 <code>/api</code>、<code>/admin</code>、<code>/v1</code>、<code>/agent</code>、<code>/mcp</code> 转发到 <code>TARGET</code>（<code>.env.offline</code> 指向 <code>http://localhost:8001</code>；<code>.env.online</code> 使用 <code>VITE_APP_EDITION=online</code> 并默认不设 TARGET）。如果数据服务不在本机 8001，用环境变量或对应 env 文件覆盖 TARGET。</p>
+<div class="note"><strong>/admin 双用途</strong>Vite 对 <code>/admin</code> 做了按 Accept 头分流：浏览器 HTML 导航回到 SPA 的 index.html，XHR/fetch 才转发后端。调试管理页面登录时若只见 HTML 不见接口响应，先确认数据服务是否在 TARGET 上运行。</div>
+<p>管理端在 <code>http://localhost:11180/manager</code>，用户门户在 <code>http://localhost:11180/console</code>。</p>
+
+<h2 id="mobile">8. 移动端本地调试</h2>
+<p>移动端位于 <code>mobile/</code>（独立仓库，以 git submodule 挂在主仓该路径；首次需 <code>git submodule update --init mobile</code>），使用 Expo Router + React Native。它通过 Cookie 会话或 Basic Auth 访问同一套数据服务接口；本地调试时通常先按上文启动数据服务（8001），再让 App 指向该后端。</p>
+<pre><code>cd mobile
+npm install
+
+# 启动 Metro / Expo 开发服务
+npm start
+
+# 真机或模拟器调试
+npm run android
+npm run ios</code></pre>
+<p>启动后在登录页填写后端地址（例如 <code>http://127.0.0.1:8001</code> 或局域网 IP）。Android 模拟器访问宿主机后端时，部分环境需要用 <code>http://10.0.2.2:8001</code> 代替 <code>127.0.0.1</code>。</p>
+
+<h3>本地校验</h3>
+<pre><code>cd mobile
+
+# TypeScript 类型检查（当前仓库必须通过）
+npx tsc --noEmit
+
+# ESLint（expo 配置）
+npx eslint . --no-cache
+
+# Jest（当前 mobile/ 下暂无 *.test.ts(x) 用例，命令可用但通常没有测试可跑）
+npm test -- --runInBand --silent</code></pre>
+<div class="note"><strong>当前校验基线</strong>移动端改动至少应通过 <code>npx tsc --noEmit</code>。仓库目前未在 <code>mobile/</code> 内置 Jest 用例，因此“测试通过”主要依赖类型检查、ESLint 和真机/模拟器手测。</div>
+
+<h2 id="probe">9. 接口探针</h2>
+<h3>数据服务（8001）</h3>
+<pre><code># 存活
+curl -s http://127.0.0.1:8001/ | head -20
+
+# MCP 运行时健康
+curl -s http://127.0.0.1:8001/mcp/health
+
+# 模型列表（无需鉴权）
+curl -s http://127.0.0.1:8001/v1/models | head -c 400; echo</code></pre>
+<h3>节点控制服务（8003）</h3>
+<pre><code># 健康：包含已连接节点数
+curl -s http://127.0.0.1:8003/health</code></pre>
+<h3>Tunnel Runtime（8004）</h3>
+<pre><code># 就绪：包含 running / notifier 状态
+curl -s http://127.0.0.1:8004/ready</code></pre>
+<h3>前端开发代理（11180）</h3>
+<pre><code># 经 Vite 代理访问后端，验证 /api 与 /admin 转发
+curl -s http://127.0.0.1:11180/v1/models | head -c 200; echo
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:11180/manager</code></pre>
+<div class="ok"><strong>期望结果</strong><code>GET /</code> 返回 HTML 首页；<code>GET /v1/models</code> 返回包含 <code>data</code> 的 JSON；<code>/mcp/health</code> 返回 <code>{"ok": true, ...}</code>；<code>/manager</code> 返回 200（SPA 页面）。</div>
+
+<h2 id="logs">10. 日志</h2>
+<ul>
+  <li>数据服务文件日志：项目根 <code>logs/ai-lubricant-YYYY-MM-DD.log</code>，按天轮转、保留 30 天并压缩。首次启动时自动创建。</li>
+  <li>标准输出：启动时 loguru 也会输出到控制台。</li>
+  <li>日志级别：文件 sink 固定 DEBUG；<code>system.debug</code> 与 <code>logging.level</code> 影响业务日志细节。可在管理端主配置页面调整。</li>
+  <li>敏感字段：文件 sink 使用 <code>diagnose=False</code>，异常堆栈不打印变量值，避免把请求密钥写进日志。</li>
+</ul>
+<pre><code># 跟随日志
+tail -f logs/ai-lubricant-$(date +%F).log
+
+# 只看最近错误
+grep -iE 'error|traceback|exception' logs/ai-lubricant-$(date +%F).log | tail -30</code></pre>
+
+<h2 id="troubleshoot">11. 常见故障排查</h2>
+<div class="table-wrap"><table><thead><tr><th>现象</th><th>原因</th><th>排查/解决</th></tr></thead><tbody>
+<tr><td>启动即失败，提示连接 PostgreSQL 失败</td><td>host/port/凭据错误或服务未启动</td><td>核对 .env 或环境变量；确认 Compose 依赖已 up；从应用容器或宿主机测试端口连通。</td></tr>
+<tr><td>启动失败，提示 Redis ping 失败</td><td>Redis 未启动/地址错误/前缀错误</td><td><code>redis-cli ping</code> 验证；检查 prefix_key、db 和 max_connections。</td></tr>
+<tr><td>“缺少必填主配置 app_config['main']”</td><td>空库只有表结构，没有业务主配置</td><td>补齐/导入主配置，或完成初始化引导；不要反复重启。</td></tr>
+<tr><td>前端页面能打开，但 API 请求 404/502</td><td>Vite TARGET 指向不对或后端没起</td><td>确认 <code>curl http://127.0.0.1:8001/v1/models</code>；检查 .env 的 TARGET；看 Vite 控制台代理日志。</td></tr>
+<tr><td>/manager 打开空白或一直加载</td><td>管理会话过期或后端 /admin 不可达</td><td>先访问 <code>/manager/login</code> 应急登录；确认后端 <code>curl http://127.0.0.1:8001/admin/...</code>。</td></tr>
+<tr><td>节点控制服务拒绝启动，提示无法回写 .env</td><td>.env 只读或目录不可写</td><td>授予进程写权限；检查属主；容器场景确保卷可写。</td></tr>
+<tr><td>Tunnel Runtime 起不来 / 一直 not ready</td><td>8003 没起，或 8004 被占，或穿透客户端二进制下载失败</td><td>先确认 <code>curl http://127.0.0.1:8003/health</code> 通；看 <code>MC_TUNNEL_BIN_DIR</code> 是否可写、是否联网下载了 frpc/cloudflared/npc。</td></tr>
+<tr><td>节点连不上 / 校验失败</td><td>public_url、token 或主密钥不一致，TOTP 时钟偏差</td><td>核对节点拨号 URL 与 <code>AGENT_COMPOSE_NODE_SERVER_PUBLIC_URL</code>；确认节点时间与服务器时间偏差在 TOTP 窗口内；核对共享 token 和 <code>NODE_CONTROL_TOKEN</code> / <code>NODE_CREDENTIAL_ENCRYPTION_KEY</code>。</td></tr>
+<tr><td>ClickHouse 相关对话/统计不可用</td><td>未启用 ClickHouse 或地址错误</td><td>主模型代理链路仍可用；确认是否真的需要该特性，再按部署文档启用。</td></tr>
+<tr><td>请求日志出现但响应体为空</td><td>payload 双写未启用或保留策略</td><td>若需要 payload，开启 ClickHouse capture 并完成隐私/保留评估；普通日志与主链路不依赖它。</td></tr>
+</tbody></table></div>
+
+<footer class="footer"><span><a href="env-vars.html">← 上一篇：环境变量</a></span><span><a href="index.html">下一篇：产品首页 →</a></span></footer>
+</article></main></div>
+</body></html>

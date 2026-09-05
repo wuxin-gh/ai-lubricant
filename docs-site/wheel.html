@@ -1,0 +1,808 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Ai Lubricant 幸运转盘 —— 转一下，看看今天平台送你什么。纯前端实现，无外部依赖。">
+  <title>幸运转盘 · Ai Lubricant</title>
+  <link rel="stylesheet" href="assets/docs.css">
+  <script src="assets/docs.js" defer></script>
+  <style>
+    /* ============ 转盘页专属样式 ============ */
+    .wheel-stage {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 24px;
+      padding: 26px 0 10px;
+    }
+
+    .wheel-frame {
+      position: relative;
+      width: min(440px, 88vw);
+      aspect-ratio: 1 / 1;
+      user-select: none;
+      filter: drop-shadow(0 22px 34px rgba(20, 24, 38, .28));
+    }
+
+    /* 外圈柔和光晕 */
+    .wheel-frame::before {
+      content: "";
+      position: absolute;
+      inset: -18px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 50% 42%,
+        rgba(99, 102, 241, .30), rgba(139, 92, 246, .14) 58%, transparent 72%);
+      filter: blur(8px);
+      z-index: 0;
+    }
+
+    .wheel-canvas {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      height: 100%;
+      display: block;
+      border-radius: 50%;
+    }
+
+    /* 指针：水滴形，朝下 */
+    .wheel-pointer {
+      position: absolute;
+      top: -14px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 4;
+      width: 42px;
+      height: 58px;
+      filter: drop-shadow(0 4px 5px rgba(0, 0, 0, .35));
+      transition: transform .08s ease;
+    }
+    .wheel-frame.spinning .wheel-pointer { animation: ptr-tick .12s linear infinite; }
+    @keyframes ptr-tick {
+      0% { transform: translateX(-50%) rotate(0); }
+      50% { transform: translateX(-50%) rotate(-2.5deg); }
+      100% { transform: translateX(-50%) rotate(0); }
+    }
+
+    /* 中心 hub */
+    .wheel-hub {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 3;
+      width: 24%;
+      aspect-ratio: 1 / 1;
+      border-radius: 50%;
+      border: none;
+      cursor: pointer;
+      background:
+        radial-gradient(circle at 38% 32%, rgba(255,255,255,.55), rgba(255,255,255,0) 42%),
+        linear-gradient(145deg, #5b6cff 0%, #6d4ef5 55%, #4b3fd0 100%);
+      color: #fff;
+      font-family: var(--font-sans);
+      font-weight: 800;
+      font-size: clamp(15px, 4.2vw, 21px);
+      letter-spacing: 2px;
+      box-shadow:
+        0 0 0 4px rgba(255, 255, 255, .9),
+        0 0 0 6px rgba(99, 102, 241, .45),
+        inset 0 2px 4px rgba(255, 255, 255, .4),
+        inset 0 -6px 12px rgba(40, 30, 90, .5),
+        0 10px 22px rgba(67, 56, 202, .5);
+      transition: transform .12s ease;
+    }
+    .wheel-hub:hover:not(:disabled) { transform: translate(-50%, -50%) scale(1.06); }
+    .wheel-hub:active:not(:disabled) { transform: translate(-50%, -50%) scale(.95); }
+    .wheel-hub:disabled { cursor: not-allowed; opacity: .75; }
+    .wheel-hub small {
+      display: block;
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      opacity: .8;
+      margin-top: 2px;
+    }
+
+    .wheel-counter {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+      justify-content: center;
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+    .wheel-counter b {
+      color: var(--accent);
+      font-size: 19px;
+      font-variant-numeric: tabular-nums;
+    }
+    .wheel-reset {
+      border: 1px solid var(--border);
+      background: var(--bg-card);
+      color: var(--text-muted);
+      border-radius: 8px;
+      padding: 6px 14px;
+      font-size: 13px;
+      cursor: pointer;
+      font-family: var(--font-sans);
+      transition: all .15s ease;
+    }
+    .wheel-reset:hover { color: var(--accent); border-color: var(--accent); }
+
+    .wheel-legend {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 8px;
+      margin-top: 6px;
+      width: 100%;
+      max-width: 620px;
+    }
+    .wheel-legend .item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      font-size: 13px;
+    }
+    .wheel-legend .swatch {
+      width: 14px; height: 14px; border-radius: 4px; flex-shrink: 0;
+      box-shadow: 0 0 0 1px rgba(0,0,0,.06);
+    }
+
+    .wheel-tip {
+      max-width: 520px;
+      margin: 0 auto;
+      font-size: 13px;
+      color: var(--text-muted);
+      text-align: center;
+    }
+
+    /* 结果弹窗 */
+    .prize-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(10, 14, 22, .6);
+      backdrop-filter: blur(3px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .25s ease;
+      padding: 20px;
+    }
+    .prize-modal.show { opacity: 1; pointer-events: auto; }
+    .prize-card {
+      position: relative;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 38px 32px 28px;
+      max-width: 380px;
+      width: 100%;
+      text-align: center;
+      transform: scale(.85) translateY(10px);
+      transition: transform .35s cubic-bezier(.2, 1.3, .4, 1);
+      box-shadow: 0 28px 70px rgba(0, 0, 0, .4);
+      overflow: hidden;
+    }
+    .prize-modal.show .prize-card { transform: scale(1) translateY(0); }
+    .prize-card::before {
+      content: "";
+      position: absolute;
+      top: -60px; left: 50%;
+      transform: translateX(-50%);
+      width: 160px; height: 120px;
+      background: radial-gradient(circle, rgba(255, 214, 107, .45), transparent 70%);
+      filter: blur(8px);
+    }
+    .prize-emoji {
+      position: relative;
+      font-size: 60px;
+      line-height: 1;
+      margin-bottom: 12px;
+      animation: prize-pop .55s cubic-bezier(.2, 1.5, .4, 1) both;
+    }
+    @keyframes prize-pop {
+      0% { transform: scale(0) rotate(-30deg); opacity: 0; }
+      100% { transform: scale(1) rotate(0); opacity: 1; }
+    }
+    .prize-title {
+      position: relative;
+      font-size: 23px;
+      font-weight: 800;
+      margin: 4px 0 6px;
+      color: var(--text);
+    }
+    .prize-sub {
+      position: relative;
+      color: var(--text-muted);
+      font-size: 14px;
+      margin: 0 0 24px;
+    }
+    .prize-actions { display: flex; gap: 10px; justify-content: center; position: relative; }
+    .prize-btn {
+      border: none;
+      border-radius: 11px;
+      padding: 11px 22px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: var(--font-sans);
+      transition: transform .12s ease, box-shadow .2s ease;
+    }
+    .prize-btn.primary {
+      background: linear-gradient(135deg, #5b6cff, #7c5cf5);
+      color: #fff;
+      box-shadow: 0 6px 16px rgba(99, 102, 241, .4);
+    }
+    .prize-btn.primary:hover { transform: translateY(-1px); box-shadow: 0 9px 22px rgba(99, 102, 241, .5); }
+    .prize-btn.ghost {
+      background: transparent;
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+    }
+    .prize-btn.ghost:hover { color: var(--text); border-color: var(--text-muted); }
+
+    /* 彩带画布 */
+    #confetti {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 999;
+    }
+
+    @media (max-width: 520px) {
+      .wheel-hub { letter-spacing: 1px; }
+      .prize-card { padding: 32px 22px 24px; }
+    }
+  </style>
+</head>
+<body>
+  <button class="nav-toggle" id="nav-toggle" aria-expanded="false">☰ 打开文档导航</button>
+  <div class="wrap">
+    <aside class="sidebar">
+      <div class="brand"><span class="dot">A</span> Ai Lubricant</div>
+      <div class="nav-group">产品</div>
+      <nav>
+        <a href="index.html"><span class="ic">⌂</span>产品首页</a>
+        <a href="capabilities.html"><span class="ic">✦</span>能力中心</a>
+        <a href="solutions.html"><span class="ic">◎</span>场景方案</a>
+        <a href="screenshots.html"><span class="ic">▧</span>实机界面</a>
+        <a href="wheel.html" class="is-active"><span class="ic">◉</span>幸运转盘</a>
+      </nav>
+      <div class="nav-group">能力详解</div>
+      <nav>
+        <a href="cap-llm-server.html"><span class="ic">⚖</span>LLM Server</a>
+        <a href="cap-agent.html"><span class="ic">⌘</span>Agent</a>
+        <a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a>
+        <a href="cap-node.html"><span class="ic">◇</span>节点</a>
+        <a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a>
+        <a href="cap-browser.html"><span class="ic">🌐</span>浏览器插件</a>
+        <a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a>
+        <a href="cap-mail.html"><span class="ic">✉</span>邮箱</a>
+        <a href="cap-security.html"><span class="ic">🛡</span>安全防护</a>
+      </nav>
+      <div class="nav-group">操作手册</div>
+      <nav>
+        <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a>
+        <a href="users-admin.html"><span class="ic">♙</span>平台管理员</a>
+        <a href="guide-node.html"><span class="ic">◇</span>节点管理员</a>
+        <a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
+      </nav>
+      <div class="nav-group">技术与运维</div>
+      <nav>
+        <a href="users-api.html"><span class="ic">↔</span>API 接入</a>
+        <a href="architecture.html"><span class="ic">⚖</span>技术白皮书</a>
+        <a href="governance.html"><span class="ic">◈</span>安全与治理</a>
+        <a href="deploy.html"><span class="ic">⇩</span>生产部署</a><a href="desktop.html"><span class="ic">▭</span>Windows 桌面版</a>
+        <a href="env-vars.html"><span class="ic">⊧</span>环境变量</a>
+        <a href="local-debug.html"><span class="ic">⚙</span>本地调试</a>
+      </nav>
+    </aside>
+    <main class="main">
+      <div class="topbar"><button id="theme-toggle" type="button">☾ 深色</button><button id="print-page" type="button">⎙ 打印</button></div>
+      <article class="content">
+        <header class="hero">
+          <h1>幸运转盘 🎡</h1>
+          <p class="desc">转一下，看看今天 Ai Lubricant 平台送你什么。纯前端实现，没有后端、没有接口、没有外部依赖——公平权重随机，缓动停下，中奖自动撒彩带。</p>
+        </header>
+
+        <div class="wheel-stage">
+          <div class="wheel-frame" id="wheelFrame">
+            <svg class="wheel-pointer" viewBox="0 0 42 58" aria-hidden="true">
+              <defs>
+                <linearGradient id="ptrGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#ffd66b"/>
+                  <stop offset=".55" stop-color="#f59e0b"/>
+                  <stop offset="1" stop-color="#b45309"/>
+                </linearGradient>
+              </defs>
+              <path d="M21 56 C 4 34, 4 14, 21 2 C 38 14, 38 34, 21 56 Z"
+                    fill="url(#ptrGrad)" stroke="#fff" stroke-width="2.5" stroke-linejoin="round"/>
+              <circle cx="21" cy="16" r="5.5" fill="#fff" opacity=".75"/>
+            </svg>
+            <canvas id="wheel" class="wheel-canvas" width="640" height="640" role="img" aria-label="奖品转盘"></canvas>
+            <button id="spinBtn" class="wheel-hub" type="button">GO<small>开始抽奖</small></button>
+          </div>
+
+          <div class="wheel-counter">
+            <span>今日剩余 <b id="chances">5</b> 次</span>
+            <span>已抽 <b id="drawn">0</b> 次</span>
+            <button id="resetBtn" class="wheel-reset" type="button">重置次数</button>
+          </div>
+
+          <p class="wheel-tip">点击中心 <strong>GO</strong> 或直接点转盘即可开始。每次抽完自动结算，中奖会弹窗并撒彩带。</p>
+
+          <div class="wheel-legend" id="legend"></div>
+        </div>
+
+        <h2 id="prizes">奖品说明</h2>
+        <p>转盘共 8 格，每格对应一个结果。并不是均匀概率——<strong>谢谢参与</strong>与<strong>小额 Token</strong>概率较高，<strong>终极大奖</strong>稀有。所有概率仅在本页前端按权重计算，与平台任何真实配额、计费无关。</p>
+        <div class="table-wrap"><table><thead><tr><th>奖品</th><th>内容</th><th>权重</th><th>大致概率</th></tr></thead><tbody id="probTable"></tbody></table></div>
+
+        <div class="info"><strong>关于“中奖”</strong>这里只是一个演示用转盘页面：所谓“奖品”不会真实发放，也不会写入任何账户或数据库。它只用来展示文档站也能承载交互式前端组件。真实用量、额度与 Token 请以平台控制台为准。</div>
+
+        <h2 id="how">实现要点</h2>
+        <ul>
+          <li><strong>绘制</strong>：Canvas 2D 绘制金属外环、灯泡圈与 8 个扇形；扇形用径向渐变（中心浅、外缘深）增加立体感，配色取自文档站主题变量，浅/深色自适应。</li>
+          <li><strong>旋转</strong>：点击 GO 后，先按权重抽取目标扇形，再算出最终角度，用 <code>requestAnimationFrame</code> + <code>easeOutCubic</code> 缓动 4.5 秒停下，指针恒定在正上方。</li>
+          <li><strong>彩带</strong>：中奖时在覆盖层 Canvas 上撒粒子，物理衰减下落，2.5 秒后清理。</li>
+          <li><strong>次数</strong>：剩余次数存 <code>localStorage</code>，刷新不丢；抽完或手动重置可再来。</li>
+        </ul>
+
+        <p><a href="index.html">← 返回产品首页</a> · <a href="capabilities.html">看平台真实能力 →</a></p>
+
+        <footer class="footer"><span>Ai Lubricant 智能开发平台 · 演示页</span><span><a href="capabilities.html">下一篇：能力中心 →</a></span></footer>
+      </article>
+    </main>
+  </div>
+
+  <!-- 结果弹窗 -->
+  <div class="prize-modal" id="prizeModal" role="dialog" aria-modal="true" aria-hidden="true">
+    <div class="prize-card">
+      <div class="prize-emoji" id="prizeEmoji">🎉</div>
+      <div class="prize-title" id="prizeTitle">中奖了</div>
+      <p class="prize-sub" id="prizeSub"></p>
+      <div class="prize-actions">
+        <button class="prize-btn primary" id="prizeAgain" type="button">再抽一次</button>
+        <button class="prize-btn ghost" id="prizeClose" type="button">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <canvas id="confetti"></canvas>
+
+  <script>
+  (function () {
+    "use strict";
+
+    // ============ 奖品配置 ============
+    // weight 越大越容易抽中；color=扇形外缘深色，light=中心浅色（径向渐变）。
+    var SEGMENTS = [
+      { label: "100万 Token", emoji: "🎁", sub: "送你 100 万 Token 额度",     color: "#4338ca", light: "#6366f1", weight: 14 },
+      { label: "终极大奖",    emoji: "🏆", sub: "平台全家桶一年使用权",         color: "#b45309", light: "#f59e0b", weight: 2  },
+      { label: "5 折券",      emoji: "🎫", sub: "任意渠道请求 5 折",            color: "#6d28d9", light: "#8b5cf6", weight: 8  },
+      { label: "谢谢参与",    emoji: "💝", sub: "没中，但明天再来呀",           color: "#64748b", light: "#cbd5e1", weight: 24 },
+      { label: "Agent 1h",   emoji: "🚀", sub: "Agent 算力 1 小时",           color: "#4338ca", light: "#818cf8", weight: 10 },
+      { label: "50万 Token", emoji: "🎁", sub: "送你 50 万 Token 额度",         color: "#6d28d9", light: "#a78bfa", weight: 16 },
+      { label: "优先体验",    emoji: "📱", sub: "移动端新功能优先体验",         color: "#475569", light: "#94a3b8", weight: 6  },
+      { label: "谢谢参与",    emoji: "💝", sub: "没中，但明天再来呀",           color: "#64748b", light: "#cbd5e1", weight: 20 }
+    ];
+    var N = SEGMENTS.length;
+    var SEG = (Math.PI * 2) / N;
+    var TOTAL_WEIGHT = SEGMENTS.reduce(function (s, x) { return s + x.weight; }, 0);
+
+    // ============ 几何参数 ============
+    var SIZE = 640, cx = SIZE / 2, cy = SIZE / 2;
+    var R_OUTER = 318;     // 金属外环外缘
+    var R_RING_IN = 292;   // 金属环内缘（灯泡带在此之间）
+    var R_LAMP = 305;      // 灯泡中心半径
+    var R_SECTOR = 288;    // 扇形外缘
+    var R_HUB = 70;        // 中心圆盘半径
+    var LAMP_COUNT = 24;
+
+    // ============ Canvas 初始化 ============
+    var canvas = document.getElementById("wheel");
+    var ctx = canvas.getContext("2d");
+    var DPR = window.devicePixelRatio || 1;
+    canvas.width = SIZE * DPR;
+    canvas.height = SIZE * DPR;
+    ctx.scale(DPR, DPR);
+
+    var rotation = 0;
+    var spinning = false;
+    var TOP = -Math.PI / 2;            // 指针方向（12 点）
+    var lampPhase = 0;                 // 灯泡追逐相位
+
+    function themeColors() {
+      var st = getComputedStyle(document.documentElement);
+      var dark = document.documentElement.getAttribute("data-theme") === "dark";
+      return {
+        text:  st.getPropertyValue("--text").trim() || "#24292f",
+        card:  st.getPropertyValue("--bg-card").trim() || "#ffffff",
+        metalA: dark ? "#3a4255" : "#d7dbe3",
+        metalB: dark ? "#222938" : "#aeb6c4",
+        metalC: dark ? "#4a5269" : "#eef1f6",
+        metalD: dark ? "#15191f" : "#8b94a5"
+      };
+    }
+
+    // ============ 绘制 ============
+    function drawWheel() {
+      var tc = themeColors();
+      ctx.clearRect(0, 0, SIZE, SIZE);
+
+      // 1) 金属外环（径向渐变模拟金属反光）
+      var ringGrad = ctx.createRadialGradient(cx, cy - 40, R_RING_IN, cx, cy, R_OUTER + 6);
+      ringGrad.addColorStop(0, tc.metalC);
+      ringGrad.addColorStop(0.45, tc.metalA);
+      ringGrad.addColorStop(0.7, tc.metalD);
+      ringGrad.addColorStop(1, tc.metalB);
+      ctx.beginPath();
+      ctx.arc(cx, cy, R_OUTER, 0, Math.PI * 2);
+      ctx.arc(cx, cy, R_RING_IN, 0, Math.PI * 2, true);
+      ctx.fillStyle = ringGrad;
+      ctx.fill();
+
+      // 内/外缘高光线
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = "rgba(255,255,255,.5)";
+      ctx.beginPath(); ctx.arc(cx, cy, R_OUTER - 1, 0, Math.PI * 2); ctx.stroke();
+      ctx.strokeStyle = "rgba(0,0,0,.25)";
+      ctx.beginPath(); ctx.arc(cx, cy, R_RING_IN + 1, 0, Math.PI * 2); ctx.stroke();
+
+      // 2) 灯泡圈（静止装饰 + 追逐亮带）
+      drawLamps(tc);
+
+      // 3) 扇形（随 rotation 旋转）
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(rotation);
+      for (var i = 0; i < N; i++) {
+        var a0 = i * SEG;
+        var a1 = a0 + SEG;
+        var seg = SEGMENTS[i];
+
+        // 径向渐变：中心浅 → 外缘深
+        var g = ctx.createRadialGradient(0, 0, R_HUB, 0, 0, R_SECTOR);
+        g.addColorStop(0, seg.light);
+        g.addColorStop(1, seg.color);
+
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.arc(0, 0, R_SECTOR, a0, a1);
+        ctx.closePath();
+        ctx.fillStyle = g;
+        ctx.fill();
+
+        // 扇形分隔线（金色细线）
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "rgba(255, 214, 107, .55)";
+        ctx.stroke();
+
+        // 文字（径向，带描边）
+        ctx.save();
+        ctx.rotate(a0 + SEG / 2);
+        ctx.textAlign = "right";
+        ctx.textBaseline = "middle";
+        ctx.font = "800 19px " + "Segoe UI, PingFang SC, Microsoft YaHei, sans-serif";
+        ctx.lineJoin = "round";
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = "rgba(0,0,0,.32)";
+        ctx.strokeText(seg.label, R_SECTOR * 0.80, 0);
+        ctx.fillStyle = "#ffffff";
+        ctx.fillText(seg.label, R_SECTOR * 0.80, 0);
+        ctx.restore();
+      }
+      ctx.restore();
+
+      // 4) 中心圆盘（金属凹陷感）
+      var hubGrad = ctx.createRadialGradient(cx - 18, cy - 22, 4, cx, cy, R_HUB + 6);
+      hubGrad.addColorStop(0, tc.metalC);
+      hubGrad.addColorStop(0.6, tc.metalA);
+      hubGrad.addColorStop(1, tc.metalD);
+      ctx.beginPath();
+      ctx.arc(cx, cy, R_HUB + 4, 0, Math.PI * 2);
+      ctx.fillStyle = hubGrad;
+      ctx.fill();
+      // 内圈暗边
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = "rgba(0,0,0,.3)";
+      ctx.beginPath(); ctx.arc(cx, cy, R_HUB + 4, 0, Math.PI * 2); ctx.stroke();
+    }
+
+    function drawLamps(tc) {
+      for (var i = 0; i < LAMP_COUNT; i++) {
+        var ang = TOP + i * (Math.PI * 2 / LAMP_COUNT);
+        var x = cx + Math.cos(ang) * R_LAMP;
+        var y = cy + Math.sin(ang) * R_LAMP;
+        // 亮带：与 lampPhase 对齐的那圈最亮
+        var d = Math.abs(((ang - lampPhase - TOP) % (Math.PI * 2) + Math.PI * 3) % (Math.PI * 2));
+        d = Math.min(d, Math.PI * 2 - d);
+        var bright = Math.max(0, 1 - d / (Math.PI * 0.6));
+
+        // 底座（暗）
+        ctx.beginPath();
+        ctx.arc(x, y, 5.5, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(40,44,58,.85)";
+        ctx.fill();
+
+        // 灯泡
+        var lg = ctx.createRadialGradient(x - 1.2, y - 1.4, 0.5, x, y, 4.5);
+        if (bright > 0.08) {
+          lg.addColorStop(0, "rgba(255,255,235," + (0.85 * bright + 0.15) + ")");
+          lg.addColorStop(0.5, "rgba(255,214,107," + (0.7 * bright + 0.1) + ")");
+          lg.addColorStop(1, "rgba(217,119,6," + (0.5 * bright) + ")");
+          // 光晕
+          ctx.beginPath();
+          ctx.arc(x, y, 7 + bright * 3, 0, Math.PI * 2);
+          ctx.fillStyle = "rgba(255,214,107," + (0.18 * bright) + ")";
+          ctx.fill();
+        } else {
+          lg.addColorStop(0, "rgba(120,124,138,.7)");
+          lg.addColorStop(1, "rgba(60,64,76,.6)");
+        }
+        ctx.beginPath();
+        ctx.arc(x, y, 4, 0, Math.PI * 2);
+        ctx.fillStyle = lg;
+        ctx.fill();
+      }
+    }
+
+    // ============ 权重抽取 ============
+    function pickSegment() {
+      var r = Math.random() * TOTAL_WEIGHT;
+      var acc = 0;
+      for (var i = 0; i < N; i++) {
+        acc += SEGMENTS[i].weight;
+        if (r < acc) return i;
+      }
+      return N - 1;
+    }
+
+    // ============ 旋转 ============
+    function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+
+    var wheelFrame = document.getElementById("wheelFrame");
+
+    function spin() {
+      if (spinning) return;
+      if (getChances() <= 0) {
+        showToast("今日次数已用完，点“重置次数”可再来。");
+        return;
+      }
+      spinning = true;
+      wheelFrame.classList.add("spinning");
+      setChances(getChances() - 1);
+      setDrawn(getDrawn() + 1);
+
+      var target = pickSegment();
+      var segCenter = target * SEG + SEG / 2;
+      var desired = TOP - segCenter;                 // 期望 rotation（mod 2π）
+      var TWO_PI = Math.PI * 2;
+      var base = rotation;
+      var norm = desired - Math.floor((desired - base) / TWO_PI) * TWO_PI;
+      if (norm <= base + 0.0001) norm += TWO_PI;
+      var turns = 5;
+      var endRot = norm + turns * TWO_PI;
+      endRot += (Math.random() - 0.5) * (SEG * 0.7); // 扇形内抖动
+
+      var start = performance.now();
+      var dur = 4500;
+      var from = rotation;
+      var lampStart = lampPhase;
+
+      function frame(now) {
+        var t = Math.min((now - start) / dur, 1);
+        var e = easeOutCubic(t);
+        rotation = from + (endRot - from) * e;
+        lampPhase = lampStart + t * Math.PI * 2 * 3;  // 灯泡亮带转 3 圈，随旋转减速观感上同步
+        drawWheel();
+        if (t < 1) {
+          requestAnimationFrame(frame);
+        } else {
+          rotation = endRot;
+          drawWheel();
+          spinning = false;
+          wheelFrame.classList.remove("spinning");
+          onResult(target);
+        }
+      }
+      requestAnimationFrame(frame);
+    }
+
+    // ============ 结果 ============
+    function onResult(idx) {
+      var seg = SEGMENTS[idx];
+      var isWin = seg.label !== "谢谢参与";
+      showModal(seg, isWin);
+      if (isWin) launchConfetti();
+    }
+
+    // ============ 弹窗 ============
+    var modal = document.getElementById("prizeModal");
+    var elEmoji = document.getElementById("prizeEmoji");
+    var elTitle = document.getElementById("prizeTitle");
+    var elSub = document.getElementById("prizeSub");
+
+    function showModal(seg, isWin) {
+      elEmoji.textContent = seg.emoji;
+      elTitle.textContent = isWin ? "🎉 恭喜中奖！" : seg.label;
+      elSub.textContent = seg.sub;
+      modal.classList.add("show");
+      modal.setAttribute("aria-hidden", "false");
+    }
+    function hideModal() {
+      modal.classList.remove("show");
+      modal.setAttribute("aria-hidden", "true");
+    }
+    document.getElementById("prizeClose").addEventListener("click", hideModal);
+    document.getElementById("prizeAgain").addEventListener("click", function () {
+      hideModal();
+      spin();
+    });
+    modal.addEventListener("click", function (e) { if (e.target === modal) hideModal(); });
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape") hideModal(); });
+
+    // ============ 轻量 toast ============
+    function showToast(msg) {
+      var t = document.createElement("div");
+      t.textContent = msg;
+      Object.assign(t.style, {
+        position: "fixed", left: "50%", bottom: "40px", transform: "translateX(-50%)",
+        background: "var(--bg-card)", color: "var(--text)",
+        border: "1px solid var(--border)", borderRadius: "10px",
+        padding: "10px 18px", fontSize: "14px", zIndex: "2000",
+        boxShadow: "0 8px 24px rgba(0,0,0,.2)"
+      });
+      document.body.appendChild(t);
+      setTimeout(function () { t.style.transition = "opacity .3s"; t.style.opacity = "0"; }, 1800);
+      setTimeout(function () { t.remove(); }, 2200);
+    }
+
+    // ============ 彩带 ============
+    var cf = document.getElementById("confetti");
+    var cfx = cf.getContext("2d");
+    var cfParticles = [];
+    var cfRunning = false;
+
+    function sizeConfetti() {
+      cf.width = window.innerWidth * DPR;
+      cf.height = window.innerHeight * DPR;
+      cf.style.width = window.innerWidth + "px";
+      cf.style.height = window.innerHeight + "px";
+      cfx.setTransform(1, 0, 0, 1, 0, 0);
+      cfx.scale(DPR, DPR);
+    }
+    sizeConfetti();
+    window.addEventListener("resize", sizeConfetti);
+
+    function launchConfetti() {
+      var colors = ["#6366f1", "#8b5cf6", "#f59e0b", "#2ec6a0", "#e06bb0", "#ffffff", "#ffd66b"];
+      var W = window.innerWidth, H = window.innerHeight;
+      for (var i = 0; i < 160; i++) {
+        cfParticles.push({
+          x: W / 2 + (Math.random() - 0.5) * 140,
+          y: H / 3 + (Math.random() - 0.5) * 60,
+          vx: (Math.random() - 0.5) * 10,
+          vy: (Math.random() * -11) - 3,
+          g: 0.28 + Math.random() * 0.12,
+          size: 5 + Math.random() * 7,
+          color: colors[(Math.random() * colors.length) | 0],
+          rot: Math.random() * Math.PI,
+          vr: (Math.random() - 0.5) * 0.3,
+          life: 0,
+          maxLife: 150 + Math.random() * 60
+        });
+      }
+      if (!cfRunning) { cfRunning = true; requestAnimationFrame(confettiFrame); }
+    }
+
+    function confettiFrame() {
+      var W = window.innerWidth, H = window.innerHeight;
+      cfx.clearRect(0, 0, W, H);
+      for (var i = cfParticles.length - 1; i >= 0; i--) {
+        var p = cfParticles[i];
+        p.vy += p.g;
+        p.x += p.vx;
+        p.y += p.vy;
+        p.rot += p.vr;
+        p.life++;
+        var alpha = 1 - p.life / p.maxLife;
+        if (alpha <= 0 || p.y > H + 40) { cfParticles.splice(i, 1); continue; }
+        cfx.save();
+        cfx.translate(p.x, p.y);
+        cfx.rotate(p.rot);
+        cfx.globalAlpha = Math.max(0, alpha);
+        cfx.fillStyle = p.color;
+        cfx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size * 0.6);
+        cfx.restore();
+      }
+      if (cfParticles.length > 0) {
+        requestAnimationFrame(confettiFrame);
+      } else {
+        cfRunning = false;
+        cfx.clearRect(0, 0, W, H);
+      }
+    }
+
+    // ============ 次数持久化 ============
+    var KEY_CHANCE = "wheel_chances";
+    var KEY_DRAWN = "wheel_drawn";
+    var DAILY = 5;
+    function getChances() { return parseInt(localStorage.getItem(KEY_CHANCE) !== null ? localStorage.getItem(KEY_CHANCE) : String(DAILY), 10); }
+    function setChances(v) { localStorage.setItem(KEY_CHANCE, String(v)); document.getElementById("chances").textContent = v; }
+    function getDrawn() { return parseInt(localStorage.getItem(KEY_DRAWN) || "0", 10); }
+    function setDrawn(v) { localStorage.setItem(KEY_DRAWN, String(v)); document.getElementById("drawn").textContent = v; }
+
+    document.getElementById("resetBtn").addEventListener("click", function () {
+      setChances(DAILY);
+      setDrawn(0);
+      showToast("已重置：5 次抽奖机会。");
+    });
+
+    // ============ 图例 & 概率表 ============
+    function buildLegend() {
+      var wrap = document.getElementById("legend");
+      var frag = document.createDocumentFragment();
+      SEGMENTS.forEach(function (s) {
+        var d = document.createElement("div");
+        d.className = "item";
+        d.innerHTML = '<span class="swatch" style="background:linear-gradient(135deg,' + s.light + ',' + s.color + ')"></span>' +
+                      s.emoji + " " + s.label;
+        frag.appendChild(d);
+      });
+      wrap.appendChild(frag);
+    }
+    function buildProbTable() {
+      var tb = document.getElementById("probTable");
+      var frag = document.createDocumentFragment();
+      var map = {};
+      SEGMENTS.forEach(function (s) {
+        if (!map[s.label]) map[s.label] = { label: s.label, sub: s.sub, emoji: s.emoji, w: 0, n: 0 };
+        map[s.label].w += s.weight;
+        map[s.label].n += 1;
+      });
+      Object.keys(map).forEach(function (k) {
+        var m = map[k];
+        var pct = (m.w / TOTAL_WEIGHT * 100).toFixed(1) + "%";
+        var tr = document.createElement("tr");
+        tr.innerHTML = "<td>" + m.emoji + " " + m.label + (m.n > 1 ? " ×" + m.n : "") + "</td>" +
+                       "<td>" + m.sub + "</td>" +
+                       "<td>" + m.w + "</td>" +
+                       "<td>" + pct + "</td>";
+        frag.appendChild(tr);
+      });
+      tb.appendChild(frag);
+    }
+
+    // ============ 事件 ============
+    document.getElementById("spinBtn").addEventListener("click", spin);
+    canvas.addEventListener("click", spin);
+
+    // 主题切换时重绘以适配金属色
+    var themeBtn = document.getElementById("theme-toggle");
+    if (themeBtn) {
+      var observer = new MutationObserver(function () { drawWheel(); });
+      observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    }
+
+    // ============ 启动 ============
+    buildLegend();
+    buildProbTable();
+    setChances(getChances());
+    setDrawn(getDrawn());
+    lampPhase = TOP;
+    drawWheel();
+  })();
+  </script>
+</body>
+</html>

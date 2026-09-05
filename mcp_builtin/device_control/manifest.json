@@ -1,0 +1,87 @@
+{
+  "schema": 2,
+  "name": "device-control",
+  "display_name": "设备控制",
+  "description": "把 Android 手机或 iOS 设备接入 MCP：读取屏幕树/截图，并下发点击、输入、滚动、打开应用等命令。",
+  "icon": "📱",
+  "category": "device",
+  "builtin_rules": {
+    "default_installed": true,
+    "removable": false,
+    "editable_fields": [
+      "display_name",
+      "description",
+      "enabled"
+    ]
+  },
+  "help": {
+    "title": "设备控制使用说明",
+    "sections": [
+      {
+        "heading": "1. 创建设备实例",
+        "body": "在用户侧「我的工具」中新建设备控制实例，点击「生成配对码」。配对码 10 分钟内有效且只能使用一次。"
+      },
+      {
+        "heading": "2. 手机端配对",
+        "body": "Android：在控制 App 中输入服务器地址和配对码。服务器地址可填域名（如 https://host），也可填完整路径（https://host/mcp/device-control）。App 会先试原地址，不通时再补 /mcp/device-control。iOS：不装 App，由连着 iPhone 的主机跑 node-ios 驱动（node-ios pair 填同一份配对码，之后 node-ios run 常驻），线上与 Android 完全同构；详见设备控制文档的 iOS 章节。"
+      },
+      {
+        "heading": "3. 授权给 Agent",
+        "body": "把该实例授权给需要用手机的 MCP principal / Agent。设备 token 与 MCP 访问 token 是两回事：手机端只用配对后返回的设备 token，Agent 通过资源授权获得 device_id。"
+      },
+      {
+        "heading": "4. 解除配对",
+        "body": "解除配对会清除服务端 token_hash 并停用设备；在线设备会收到 close 4003，App 擦除凭据并停止重连。"
+      }
+    ]
+  },
+  "config": {
+    "resources": {
+      "driver_settings": {
+        "title": "驱动配置",
+        "cardinality": "singleton",
+        "binding": "shared",
+        "capabilities": [
+          "read",
+          "runtime-apply"
+        ],
+        "schema": {
+          "type": "object",
+          "properties": {
+            "external_ws": {
+              "type": "boolean",
+              "title": "Runtime 托管设备 WebSocket",
+              "readOnly": true
+            },
+            "pair_path": {
+              "type": "string",
+              "title": "配对路径",
+              "readOnly": true
+            },
+            "ws_path": {
+              "type": "string",
+              "title": "长连接路径",
+              "readOnly": true
+            }
+          }
+        },
+        "ui": {
+          "order": [
+            "external_ws",
+            "pair_path",
+            "ws_path"
+          ]
+        },
+        "storage": {
+          "configType": "device_driver",
+          "handler": "object",
+          "defaults": {
+            "external_ws": true,
+            "pair_path": "/mcp/device-control/pair",
+            "ws_path": "/mcp/device-control/ws/device"
+          }
+        }
+      }
+    }
+  }
+}

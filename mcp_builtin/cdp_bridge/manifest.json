@@ -1,0 +1,237 @@
+{
+  "schema": 2,
+  "name": "cdp-bridge",
+  "display_name": "浏览器桥接",
+  "description": "通过 Chrome 扩展把本地浏览器接入 MCP，按用户与客户端隔离浏览器页面。",
+  "icon": "🌐",
+  "category": "browser",
+  "builtin_rules": {
+    "default_installed": true,
+    "removable": false,
+    "editable_fields": [
+      "display_name",
+      "description",
+      "enabled"
+    ]
+  },
+  "assets": [
+    {
+      "id": "chrome-extension",
+      "label": "Chrome 扩展",
+      "file_name": "cdp-bridge-extension.zip",
+      "description": "下载后解压，并在 Chrome 扩展管理页加载为已解压扩展。",
+      "kind": "directory_zip",
+      "source": "tmwd_cdp_bridge",
+      "mime": "application/zip"
+    }
+  ],
+  "help": {
+    "title": "CDP Bridge 使用说明",
+    "sections": [
+      {
+        "heading": "1. 下载扩展",
+        "body": "点击 [cdp-bridge-extension.zip](asset:chrome-extension) 下载扩展，解压后在 Chrome 扩展管理页加载。"
+      },
+      {
+        "heading": "2. 创建用户并授权",
+        "body": "先在右上角「MCP 设置」把浏览器桥接服务授权给目标 MCP 用户，再到「驱动配置」创建 CDP 客户端：选择该用户并填写客户端别名。创建或轮换后会一次性显示完整 CDP token；列表只保留提示，无法找回明文。"
+      },
+      {
+        "heading": "3. 连接浏览器",
+        "body": "在「连接配置」复制桥接 WebSocket 地址，在扩展 popup 中只填写该地址和创建时取得的独立 CDP 客户端 token。客户端 ID 由服务端根据 token 对应配置的 instance_key 确定，无需也不能在扩展中填写。旧版 bridgeToken 不会迁移为客户端 token；扩展会删除旧值并提示重新创建或轮换。CDP token 不是 MCP 用户 token；扩展按 auth protocol 2 认证。"
+      },
+      {
+        "heading": "4. 会话控制权",
+        "body": "「客户端列表」按客户端与网页两级折叠展示 Runtime 实时状态。会话控制权不再由管理员跨用户分配；页面只归创建该 CDP 客户端时选择的 MCP 用户所有。"
+      }
+    ]
+  },
+  "config": {
+    "resources": {
+      "driver_settings": {
+        "title": "驱动配置",
+        "cardinality": "singleton",
+        "binding": "shared",
+        "capabilities": [
+          "read",
+          "update",
+          "runtime-apply"
+        ],
+        "schema": {
+          "type": "object",
+          "properties": {
+            "external_ws": {
+              "type": "boolean",
+              "title": "Runtime 托管 WebSocket",
+              "readOnly": true
+            }
+          }
+        },
+        "ui": {
+          "order": [
+            "external_ws"
+          ]
+        },
+        "storage": {
+          "configType": "cdp_driver",
+          "handler": "object",
+          "defaults": {
+            "external_ws": true
+          }
+        }
+      },
+      "clients": {
+        "title": "CDP 客户端",
+        "cardinality": "collection",
+        "binding": "shared",
+        "capabilities": [
+          "list",
+          "read",
+          "create",
+          "update",
+          "delete",
+          "runtime-apply"
+        ],
+        "schema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "title": "客户端名称"
+            },
+            "user_ids": {
+              "type": "array",
+              "title": "可操作用户",
+              "items": { "type": "integer" },
+              "x-reference": "mcp_users"
+            },
+            "agent_ids": {
+              "type": "array",
+              "title": "可操作 agent 列表",
+              "items": { "type": "integer" },
+              "x-reference": "agents"
+            },
+            "enabled": {
+              "type": "boolean",
+              "title": "启用",
+              "default": true
+            },
+            "token_hint": {
+              "type": "string",
+              "title": "Token 提示",
+              "readOnly": true
+            },
+            "client_id": {
+              "type": "string",
+              "title": "客户端 ID",
+              "readOnly": true
+            }
+          },
+          "required": [
+            "name",
+            "user_ids"
+          ]
+        },
+        "ui": {
+          "renderer": "cdp_clients",
+          "idField": "id",
+          "displayField": "name",
+          "columns": [
+            "name",
+            "enabled",
+            "token_hint",
+            "client_id"
+          ]
+        },
+        "storage": {
+          "configType": "cdp_client",
+          "handler": "cdp-client"
+        }
+      }
+    },
+    "views": {
+      "sessions": {
+        "title": "实时浏览器会话",
+        "binding": "cdp.sessions",
+        "capabilities": [
+          "read",
+          "list",
+          "refresh"
+        ],
+        "refresh": {
+          "manual": true,
+          "interval_seconds": 5
+        },
+        "ui": {
+          "renderer": "cdp_sessions"
+        }
+      }
+    },
+    "actions": {
+      "rotate_client_token": {
+        "title": "轮换客户端 Token",
+        "resource": "clients",
+        "operation": "rotate-token",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "integer", "title": "客户端 ID" },
+            "expected_revision": { "type": "integer", "title": "配置版本" }
+          },
+          "required": ["id", "expected_revision"]
+        }
+      },
+      "revoke_client": {
+        "title": "撤销客户端",
+        "resource": "clients",
+        "operation": "revoke",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "integer", "title": "客户端 ID" },
+            "expected_revision": { "type": "integer", "title": "配置版本" }
+          },
+          "required": ["id", "expected_revision"]
+        }
+      }
+    }
+  },
+  "home_actions": [
+    {
+      "id": "clients",
+      "label": "客户端列表",
+      "icon": "🖥",
+      "panel": "clients"
+    },
+    {
+      "id": "tools",
+      "label": "工具列表",
+      "icon": "🛠",
+      "panel": "tools"
+    },
+    {
+      "id": "config",
+      "label": "连接配置",
+      "icon": "🔗",
+      "panel": "config"
+    }
+  ],
+  "panels": {
+    "clients": {
+      "kind": "resource",
+      "resources": [
+        "clients"
+      ],
+      "read_only": false
+    },
+    "tools": {
+      "kind": "tools",
+      "read_only": true
+    },
+    "config": {
+      "kind": "config",
+      "read_only": true,
+      "copyable": true
+    }
+  }
+}
