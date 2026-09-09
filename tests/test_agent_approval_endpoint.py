@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 import agent.api as agent_api
 from agent import conversation_store as real_store
-from monkeycode_compat.node_client.approvals import ApprovalRegistry
+from user_platform.node_client.approvals import ApprovalRegistry
 
 
 class _Store:
@@ -54,7 +54,7 @@ def env(monkeypatch):
     _Store.conversations = {"conv-1": {"id": "conv-1", "user_id": "u1"}}
 
     registry = ApprovalRegistry()
-    import monkeycode_compat.node_client.approvals as approvals_mod
+    import user_platform.node_client.approvals as approvals_mod
 
     monkeypatch.setattr(approvals_mod, "approval_registry", registry)
     yield registry

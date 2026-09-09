@@ -7,8 +7,8 @@
 """
 from __future__ import annotations
 
-from monkeycode_compat.marketplace.validator import validate_manifest
-from monkeycode_compat.resource_reference_service import should_skip_mirror
+from user_platform.marketplace.validator import validate_manifest
+from user_platform.resource_reference_service import should_skip_mirror
 
 
 def _skill(**overrides) -> dict:

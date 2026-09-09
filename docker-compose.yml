@@ -84,7 +84,7 @@ services:
       - ai-lubricant-net
 
   # 可选：ClickHouse — ai-lubricant 主链路请求日志改造用（PG 存元数据、大字段 payload 双写到此）。
-  # 与 MonkeyCode 兼容层无关：mc_* 表全在 postgres 里。默认不启动。
+  # 与 upstream 兼容层无关：mc_* 表全在 postgres 里。默认不启动。
   # 启用：设置 CLICKHOUSE_REQUEST_PAYLOAD_ENABLED=true 后 docker compose --profile clickhouse up -d
   clickhouse:
     image: clickhouse/clickhouse-server:24-alpine
@@ -122,10 +122,16 @@ services:
     container_name: ai-lubricant
     ports:
       - "${AI_LUBRICANT_HOST_PORT:-3006}:8001"
+      # 局域网发现（UDP 广播应答，docs/lan-discovery.md）。注意：published UDP 端口
+      # 下广播穿透在部分内核/网络栈不可靠（Windows Docker Desktop 必失效），生产
+      # 环境建议裸跑或 network_mode: host。
+      - "${LAN_DISCOVERY_PORT:-58160}:58160/udp"
     environment:
       <<: *db-env
       DEBUG: "false"
-      # 主服务调用节点控制面（编辑器工作区、终端、任务下发等 monkeycode_compat 路由都走它）。
+      # 局域网发现通告的 HTTP 端口 = 宿主映射端口（手机从容器外连，不是容器内 8001）。
+      LAN_DISCOVERY_HTTP_PORT: "${AI_LUBRICANT_HOST_PORT:-3006}"
+      # 主服务调用节点控制面（编辑器工作区、终端、任务下发等 user_platform 路由都走它）。
       AGENT_COMPOSE_BASE_URL: http://node-server:8003
       NODE_CONTROL_TOKEN: "${NODE_CONTROL_TOKEN:-}"
       # ClickHouse 数据源（可选；未启用时主链路照常运行，仅跳过 payload 双写）。
@@ -216,7 +222,7 @@ services:
       TUNNEL_RUNTIME_RECONCILE_POLL_SECONDS: "${TUNNEL_RUNTIME_RECONCILE_POLL_SECONDS:-30}"
       TUNNEL_RUNTIME_LEASE_TTL_SECONDS: "${TUNNEL_RUNTIME_LEASE_TTL_SECONDS:-60}"
       TUNNEL_RUNTIME_INSTANCE_ID: "${TUNNEL_RUNTIME_INSTANCE_ID:-}"
-      # frpc/cloudflared/npc 二进制下载缓存，跨重建复用（monkeycode_compat/tunnel_binaries.py）。
+      # frpc/cloudflared/npc 二进制下载缓存，跨重建复用（user_platform/tunnel_binaries.py）。
       MC_TUNNEL_BIN_DIR: /data/mc-tunnel-bins
     volumes:
       - ai_tunnel_bins:/data/mc-tunnel-bins

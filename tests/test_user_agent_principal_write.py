@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastapi import HTTPException
 
-import monkeycode_compat.routes_mcp_principals as routes
+import user_platform.routes_mcp_principals as routes
 
 
 class _FakeUser:

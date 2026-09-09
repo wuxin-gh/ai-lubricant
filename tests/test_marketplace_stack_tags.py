@@ -18,7 +18,7 @@ if _proj not in sys.path:
     sys.path.insert(0, _proj)
 sys.path.insert(0, _proj + "/server")
 
-import monkeycode_compat.marketplace.leaderboard_probe as probe_mod  # noqa: E402
+import user_platform.marketplace.leaderboard_probe as probe_mod  # noqa: E402
 
 
 # ── attach_probe：stack 识别随探针顺带产出 ──────────────────────────────────
@@ -37,7 +37,7 @@ def _base_item(**kw):
 
 
 async def _fake_probe(result):
-    async def fake(full_name, ref="main"):
+    async def fake(full_name, ref="main", *, proxy_id=""):
         return result
     return fake
 
@@ -106,7 +106,7 @@ async def test_attach_probe_stack_failure_does_not_break_probe(monkeypatch):
     async def boom(*_a, **_k):
         raise RuntimeError("engine exploded")
 
-    import monkeycode_compat.stack_detector as sd
+    import user_platform.stack_detector as sd
     monkeypatch.setattr(sd, "detect_stack", boom)
     # attach_probe 里是函数内 import，改模块属性即可命中。
     item = await probe_mod.attach_probe(_base_item())

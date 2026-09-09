@@ -463,7 +463,7 @@ class PostgresClient:
             await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS model_whitelist JSONB NOT NULL DEFAULT '[]'::jsonb")
             await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS model_blacklist JSONB NOT NULL DEFAULT '[]'::jsonb")
             await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS selection_strategy TEXT NOT NULL DEFAULT 'intelligent'")
-            # MonkeyCode 平台归属（可空）：user_id 绑定 C 端用户；vm_id 绑定临时下发 key 的虚拟机。
+            # upstream 平台归属（可空）：user_id 绑定 C 端用户；vm_id 绑定临时下发 key 的虚拟机。
             # 仅作归属/审计标记，不参与路由/限流/预占；未绑定的存量 key 全部为 NULL，行为不变。
             await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS user_id TEXT")
             await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS vm_id TEXT")
@@ -488,7 +488,7 @@ class PostgresClient:
             # 父 Key 选择器里。
             #
             # group_id 无外键：本表由 PostgresClient.init 建立，而 mc_team_groups 由稍后的
-            # monkeycode_compat.init 建（compat 关闭时根本不存在），跨层硬外键无法成立。
+            # user_platform.init 建（compat 关闭时根本不存在），跨层硬外键无法成立。
             # 分组删除时的级联由 team_users_service.delete_group 显式调用清理。
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS api_key_groups (
@@ -939,6 +939,34 @@ class PostgresClient:
             await conn.execute("ALTER TABLE agent_scheduled_tasks ADD COLUMN IF NOT EXISTS model VARCHAR(200)")
             # 脚本型任务没有 prompt：放宽 NOT NULL，让 task_kind='script' 也能建。
             await conn.execute("ALTER TABLE agent_scheduled_tasks ALTER COLUMN task_prompt DROP NOT NULL")
+            # ── 定时任务执行记录：每次执行一行（历史），不再只有 last_* 单快照 ──
+            # triggered_by: scheduler（APScheduler 到点）| manual（立即运行）| heal（脚本报错后的 AI 自愈）。
+            # status: running | completed | failed | blocked（未授权拒跑）| aborted。
+            # conversation_id: prompt/heal 执行落 ClickHouse 的对话 id（前端回放 Agent 对话）；
+            #   脚本任务、CH 未启用时为 NULL。stdout/stderr 写入时截断，防止长输出撑爆。
+            # 保留策略：每任务保留最近 200 条（scheduler 启动清理 + 每日一次）。
+            # job_id 级联删除：删任务连执行记录一起删。
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS agent_scheduled_task_runs (
+                    id BIGSERIAL PRIMARY KEY,
+                    job_id INT NOT NULL REFERENCES agent_scheduled_tasks(id) ON DELETE CASCADE,
+                    run_at TIMESTAMPTZ DEFAULT now(),
+                    task_kind TEXT,
+                    triggered_by TEXT,
+                    status TEXT,
+                    exit_code INT,
+                    stdout TEXT,
+                    stderr TEXT,
+                    result_text TEXT,
+                    conversation_id TEXT,
+                    duration_ms INT,
+                    error TEXT,
+                    created_at TIMESTAMPTZ DEFAULT now()
+                )
+            """)
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_scheduled_runs_job ON agent_scheduled_task_runs(job_id, run_at DESC)"
+            )
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS agent_config (
                     key TEXT PRIMARY KEY,
@@ -1119,6 +1147,11 @@ class PostgresClient:
             await conn.execute("ALTER TABLE mcp_services ADD COLUMN IF NOT EXISTS runtime_restarts INTEGER NOT NULL DEFAULT 0")
             await conn.execute("ALTER TABLE mcp_services ADD COLUMN IF NOT EXISTS runtime_last_ping TIMESTAMPTZ")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_mcp_services_kind ON mcp_services(kind)")
+            # required_param：该服务鉴权所需的 principal param key（cdp-bridge→cdp_client_id
+            # 等）。空 = 不需 param 的服务（sse/custom 走 service grant；marketplace-status
+            # 等走 identity 特判）。声明源在 mcp_builtin.catalog.BuiltinServiceSpec，seed 时
+            # 落库，sse_gateway / 派发器 / 前端编辑器都读这列，不再各处手写映射。
+            await conn.execute("ALTER TABLE mcp_services ADD COLUMN IF NOT EXISTS required_param VARCHAR(64) DEFAULT ''")
 
             # ── 部署形态与安装编排（Phase 2）──
             # deploy_scope 是「这个 MCP 的进程在哪里跑、谁能连它」，由 transport 客观推导，
@@ -1395,6 +1428,111 @@ class PostgresClient:
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_mlb_rank ON marketplace_leaderboard_items(display_rank)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_mlb_repo ON marketplace_leaderboard_items(repo_full_name)")
 
+            # ── resources / resource_references：统一资源本体与团队引用 ──
+            # resources 只描述「资源是什么、来自哪里、如何交付」；团队参数与授权
+            # 不放在资源本体，避免同一资源被不同团队引用时互相覆盖。
+            # 先建空的新 schema，业务切换与旧数据清理在后续迁移阶段单独进行。
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS resources (
+                    id BIGSERIAL PRIMARY KEY,
+                    resource_type VARCHAR(20) NOT NULL,
+                    resource_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    association JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    editors JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    source_type VARCHAR(30) NOT NULL,
+                    source_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    name VARCHAR(255) NOT NULL,
+                    display_name VARCHAR(255) NOT NULL DEFAULT '',
+                    description TEXT NOT NULL DEFAULT '',
+                    version VARCHAR(64) NOT NULL DEFAULT '',
+                    status VARCHAR(20) NOT NULL DEFAULT 'active',
+                    published_at TIMESTAMPTZ,
+                    published_by VARCHAR(100) NOT NULL DEFAULT '',
+                    sort_order INTEGER,
+                    probe_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    CONSTRAINT resources_resource_type_check CHECK (
+                        resource_type IN ('skills', 'skill', 'plugin', 'mcp', 'prompt', 'unknown')
+                    ),
+                    CONSTRAINT resources_source_type_check CHECK (
+                        source_type IN (
+                            'leaderboard_sync', 'manual', 'github_recognize',
+                            'personal_upload', 'market_mirror'
+                        )
+                    ),
+                    CONSTRAINT resources_status_check CHECK (
+                        status IN ('draft', 'published', 'active')
+                    )
+                )
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS resource_references (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    team_id UUID NOT NULL,
+                    resource_id BIGINT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+                    params JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    display_name VARCHAR(255) NOT NULL DEFAULT '',
+                    description TEXT NOT NULL DEFAULT '',
+                    version VARCHAR(64) NOT NULL DEFAULT '',
+                    enabled BOOLEAN NOT NULL DEFAULT true,
+                    created_by UUID,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    UNIQUE (team_id, resource_id)
+                )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_resources_type ON resources(resource_type)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_resources_source ON resources(source_type)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_resources_status ON resources(status)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_resources_sort ON resources(sort_order)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_resources_association ON resources USING GIN (association jsonb_path_ops)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_resources_source_data ON resources USING GIN (source_data jsonb_path_ops)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_resource_references_team ON resource_references(team_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_resource_references_resource ON resource_references(resource_id)")
+            # 榜单迁入统一资源池后 resource_type 允许 'unknown'（仅浏览/未定类条目——
+            # 外部榜单 frameworks/research/awesome 目录无安装形态）。旧库 CHECK 已建，
+            # drop 重加保证扩容生效（幂等）。
+            await conn.execute("ALTER TABLE resources DROP CONSTRAINT IF EXISTS resources_resource_type_check")
+            await conn.execute(
+                "ALTER TABLE resources ADD CONSTRAINT resources_resource_type_check"
+                " CHECK (resource_type IN ('skills','skill','plugin','mcp','prompt','unknown'))"
+            )
+            # 分组授权（新 schema 版）：旧 mc_resource_grants 的 FK 指向旧引用表，
+            # 新引用 UUID 无法插入；新表 FK resource_references，语义不变
+            # （reference_id → group_id，一个引用可授权多个分组）。
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS resource_grants (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    team_id UUID NOT NULL,
+                    group_id UUID NOT NULL,
+                    reference_id UUID NOT NULL REFERENCES resource_references(id) ON DELETE CASCADE,
+                    created_by UUID,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    UNIQUE (group_id, reference_id)
+                )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_resource_grants_team ON resource_grants(team_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_resource_grants_group ON resource_grants(group_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_resource_grants_reference ON resource_grants(reference_id)")
+
+            # ── marketplace_sync_runs：各内容源同步任务的执行记录（每次运行一行）──
+            # 解决三件事：重启后 last-sync 回显有据可查（不再只有内存）、最新同步时间
+            # 随配置一起展示、执行日志跨重启保留最近一份。source 一源一行Upsert（
+            # ON CONFLICT (source) DO UPDATE），只留最新一次，不无限增长。
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS marketplace_sync_runs (
+                    source VARCHAR(40) PRIMARY KEY,  -- agent-leaderboard|agency-agents|agency-agents-zh|agentscope
+                    started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    finished_at TIMESTAMPTZ,
+                    ok BOOLEAN,                     -- NULL=进行中
+                    detail TEXT NOT NULL DEFAULT '',
+                    logs JSONB NOT NULL DEFAULT '[]'::jsonb,  -- [{ts,phase,detail}] 最近一次执行日志
+                    run_by VARCHAR(20) NOT NULL DEFAULT 'schedule',  -- schedule|manual
+                    counts JSONB NOT NULL DEFAULT '{}'::jsonb      -- converted/written/failed 等摘要
+                )
+            """)
+
             # ── marketplace_items / marketplace_publish_jobs：市场条目编辑真相源 + 发布 outbox ──
             # 市场管理页的 CRUD 不再同步写 GitHub（每次 write = GET sha + PUT，经代理
             # 单次 RTT 1-3s，保存一条模板要 7-9 次串行 RTT），改为事务写 PG 立即返回，
@@ -1660,6 +1798,17 @@ class PostgresClient:
                 await conn.execute("UPDATE mcp_services SET auth_enabled=TRUE WHERE auth_enabled=FALSE")
                 await conn.execute("INSERT INTO _mcp_migration_flags(key) VALUES('auth_default_enabled')")
 
+            # 鉴权一律强制：网关不再按 auth_enabled 放行匿名访问（该开关曾让拿到
+            # SSE 地址的任何人直连资源，且造成 agent 侧/网关两侧口径不一致致 401）。
+            # 再回填一次存量（上一段只跑一次，之后管理员可能又关过个别服务），把
+            # 被 admin 关成 FALSE 的行全部拉回 TRUE——admin 端点自此拒绝关闭。
+            _auth_forced = await conn.fetchval(
+                "SELECT key FROM _mcp_migration_flags WHERE key='auth_force_enabled'"
+            )
+            if not _auth_forced:
+                await conn.execute("UPDATE mcp_services SET auth_enabled=TRUE WHERE auth_enabled=FALSE")
+                await conn.execute("INSERT INTO _mcp_migration_flags(key) VALUES('auth_force_enabled')")
+
             # ── MCP principal（mcp_users）token 哈希化与归属 ──
             # mcp_users 升级为 canonical MCP principal：保留 plaintext token 做过渡，
             # 运行时以 token_hash 为准；owner_user_id 标识所属平台用户（C 端用户 UUID）。
@@ -1810,6 +1959,77 @@ class PostgresClient:
             # 旧表删除。新建库不会再建这两张表。
             await conn.execute("DROP TABLE IF EXISTS mcp_principal_grant_children")
             await conn.execute("DROP TABLE IF EXISTS mcp_principal_grants")
+
+            # ── MCP principal 统一授权表（mcp_grants）──
+            # 合并 mcp_user_params（param 行）与 mcp_service_users（service 行）为单一授权形态：
+            #   grant_key='service'          → 服务级授权，grant_value=mcp_services.id（sse/custom
+            #                                类经网关判权、任务/agent 派发推导 spec 的依据）。
+            #   grant_key=param_key          → 实例绑定（cdp_client_id/mail_account_id/device_id），
+            #                                grant_value=builtin_tool_resources.id。
+            # 表是纯存储：UNIQUE 三列只防完全重复行，一个 principal 绑多个实例 = 多行，合法。
+            # 「绑几个 / 够不够 / 默认全量」是工具插件侧的校验语义，数据层不管。
+            # 注：表名避开历史 grant 树表（mcp_principal_grants，上方刚 DROP）。
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS mcp_grants (
+                    id BIGSERIAL PRIMARY KEY,
+                    principal_id INTEGER NOT NULL REFERENCES mcp_users(id) ON DELETE CASCADE,
+                    grant_key VARCHAR(64) NOT NULL,
+                    grant_value VARCHAR(128) NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    UNIQUE (principal_id, grant_key, grant_value)
+                )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_mcp_grants_principal ON mcp_grants(principal_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_mcp_grants_key ON mcp_grants(grant_key)")
+
+            # 一次性投影（幂等）：旧两表 → mcp_grants。此后旧表冻结（只读不写），Phase 2
+            # 把所有读写切到 mcp_grants 后删表。
+            _mcp_grants_v1 = await conn.fetchval(
+                "SELECT key FROM _mcp_migration_flags WHERE key='mcp_grants_v1'"
+            )
+            if not _mcp_grants_v1:
+                async with conn.transaction():
+                    # ① param 行直拷（grant_key=param_key）。
+                    await conn.execute("""
+                        INSERT INTO mcp_grants(principal_id, grant_key, grant_value)
+                        SELECT principal_id, param_key, param_value FROM mcp_user_params
+                        ON CONFLICT (principal_id, grant_key, grant_value) DO NOTHING
+                    """)
+                    # ② service 行全拷（grant_key='service'，值=mcp_services.id）。含 builtin
+                    # 行：统一语义为「principal 挂了这个服务」，实例范围由 param 行另行收窄。
+                    await conn.execute("""
+                        INSERT INTO mcp_grants(principal_id, grant_key, grant_value)
+                        SELECT user_id, 'service', service_id::text FROM mcp_service_users
+                        ON CONFLICT (principal_id, grant_key, grant_value) DO NOTHING
+                    """)
+                    # ③ agent/task principal 的 param 行回填对应 builtin 服务的 service 行：
+                    # 旧模型里「有 cdp_client_id param」隐含「能用 cdp-bridge」，新模型把
+                    # 这层隐含显式化（param 只收窄实例，不隐含服务授权）。
+                    await conn.execute("""
+                        INSERT INTO mcp_grants(principal_id, grant_key, grant_value)
+                        SELECT g.principal_id, 'service', s.id::text
+                        FROM mcp_grants g
+                        JOIN mcp_services s
+                          ON s.required_param = g.grant_key AND s.builtin = TRUE
+                        WHERE g.grant_key <> 'service'
+                        ON CONFLICT (principal_id, grant_key, grant_value) DO NOTHING
+                    """)
+                await conn.execute(
+                    "INSERT INTO _mcp_migration_flags(key) VALUES('mcp_grants_v1') ON CONFLICT DO NOTHING"
+                )
+
+            # 旧 MCP 授权表退役（Phase 4）：读写已全切 mcp_grants（统一授权表），
+            # 数据已在 mcp_grants_v1 迁移中投影完毕，删表。tasks.mcp_config 列保留
+            # 一版（历史 wire spec 里可能有旧密钥，等下版连列一起清）。
+            _mcp_old_tables_dropped = await conn.fetchval(
+                "SELECT key FROM _mcp_migration_flags WHERE key='mcp_old_tables_dropped'"
+            )
+            if not _mcp_old_tables_dropped:
+                await conn.execute("DROP TABLE IF EXISTS mcp_user_params")
+                await conn.execute("DROP TABLE IF EXISTS mcp_service_users")
+                await conn.execute(
+                    "INSERT INTO _mcp_migration_flags(key) VALUES('mcp_old_tables_dropped') ON CONFLICT DO NOTHING"
+                )
 
 
             # ── agent_goal_states 表 ──
@@ -2061,13 +2281,14 @@ class PostgresClient:
                 (
                     spec.name, spec.display_name, spec.description,
                     spec.category, spec.version, spec.author, spec.docs_url,
+                    spec.required_param,
                 )
                 for spec in PERSISTED_BUILTIN_SERVICE_SPECS
             ]
-            for name, display_name, description, category, version, author, docs_url in builtin_services:
+            for name, display_name, description, category, version, author, docs_url, required_param in builtin_services:
                 await conn.execute("""
-                    INSERT INTO mcp_services(name, display_name, description, category, transport, command, builtin, template, source, version, author, install_command, docs_url, kind)
-                    VALUES($1, $2, $3, $4, 'sse', '', true, false, 'system', $5, $6, '', $7, 'builtin')
+                    INSERT INTO mcp_services(name, display_name, description, category, transport, command, builtin, template, source, version, author, install_command, docs_url, kind, required_param)
+                    VALUES($1, $2, $3, $4, 'sse', '', true, false, 'system', $5, $6, '', $7, 'builtin', $8)
                     ON CONFLICT(name) DO UPDATE SET
                         display_name=EXCLUDED.display_name,
                         description=EXCLUDED.description,
@@ -2082,8 +2303,9 @@ class PostgresClient:
                         version=EXCLUDED.version,
                         author=EXCLUDED.author,
                         docs_url=EXCLUDED.docs_url,
+                        required_param=EXCLUDED.required_param,
                         updated_at=now()
-                """, name, display_name, description, category, version, author, docs_url)
+                """, name, display_name, description, category, version, author, docs_url, required_param)
 
             # ── 插入 MCP 市场精选目录（template=true，仅作为安装模板，需用户主动安装） ──
             catalog = [
@@ -2381,8 +2603,31 @@ class PostgresClient:
                     kind VARCHAR(16) NOT NULL,
                     secret_data JSONB NOT NULL DEFAULT '{}'::jsonb,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                    CHECK (kind IN ('asc', 'p12'))
+                    CHECK (kind IN ('asc', 'p12', 'presigned', 'apple_id'))
                 )
+            """)
+            # 已部署库的 CHECK 约束还是旧列表——CREATE IF NOT EXISTS 不会更新它，
+            # 新 kind 会被旧约束拒绝。幂等地换成最新版本（apple_id = 免费 Apple ID
+            # 全自动签名，2026-09 移植 iPASide 引擎）。
+            await conn.execute("""
+                DO $$ BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints
+                        WHERE table_name = 'ios_signing_profiles'
+                          AND constraint_name = 'ios_signing_profiles_kind_check'
+                          AND pg_get_constraintdef(
+                                (SELECT oid FROM pg_constraint
+                                 WHERE conrelid = 'ios_signing_profiles'::regclass
+                                   AND conname = 'ios_signing_profiles_kind_check')
+                              ) NOT LIKE '%apple_id%'
+                    ) THEN
+                        ALTER TABLE ios_signing_profiles
+                            DROP CONSTRAINT ios_signing_profiles_kind_check;
+                        ALTER TABLE ios_signing_profiles
+                            ADD CONSTRAINT ios_signing_profiles_kind_check
+                            CHECK (kind IN ('asc', 'p12', 'presigned', 'apple_id'));
+                    END IF;
+                END $$;
             """)
             await conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_ios_signing_profiles_owner "
@@ -4203,7 +4448,7 @@ class PostgresClient:
         cls, task_id: str, *, limit: int = 100, offset: int = 0
     ) -> dict:
         """List request history written against a Task. Ownership is verified by the
-        caller (the Task joins live on the monkeycode_compat connection, not here)."""
+        caller (the Task joins live on the user_platform connection, not here)."""
         limit = max(1, min(int(limit), 200))
         offset = max(0, int(offset))
         async with cls.pool.acquire() as conn:
@@ -4230,6 +4475,45 @@ class PostgresClient:
                 offset,
             )
         return {"total": int(total or 0), "rows": [dict(row) for row in rows]}
+
+    @classmethod
+    async def task_request_token_stats(cls, task_id: str) -> dict:
+        """Aggregate billing tokens across the request_logs attributed to a Task.
+
+        request_logs is where the model gateway actually persists per-request
+        usage (prompt/completion/total + model). The mc_task_usage_stats table
+        the stats endpoint used to read was an aggregate nobody ever wrote, so
+        totals were 0 forever; this reads the same source as the 请求日志 panel.
+        The per-model breakdown lets the header show which model burned what.
+        """
+        async with cls.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """SELECT coalesce(sum(prompt_tokens), 0) AS input_tokens,
+                    coalesce(sum(completion_tokens), 0) AS output_tokens,
+                    coalesce(sum(total_tokens), 0) AS total_tokens
+                    FROM request_logs WHERE task_id=$1""",
+                task_id,
+            )
+            models = await conn.fetch(
+                """SELECT coalesce(nullif(model, ''), 'unknown') AS model,
+                    coalesce(sum(total_tokens), 0) AS total_tokens, count(*) AS requests
+                    FROM request_logs WHERE task_id=$1
+                    GROUP BY 1 ORDER BY 2 DESC""",
+                task_id,
+            )
+        return {
+            "input_tokens": int(row["input_tokens"] or 0),
+            "output_tokens": int(row["output_tokens"] or 0),
+            "total_tokens": int(row["total_tokens"] or 0),
+            "by_model": [
+                {
+                    "model": m["model"],
+                    "total_tokens": int(m["total_tokens"]),
+                    "requests": int(m["requests"]),
+                }
+                for m in models
+            ],
+        }
 
     @classmethod
     async def get_task_request_log_detail(
@@ -5331,7 +5615,7 @@ class PostgresClient:
         """删除某分组的全部 Key 授权。分组被删时调用。
 
         没有真外键可依赖（api_keys 由 PostgresClient 建表，mc_team_groups 由
-        monkeycode_compat 的 Tortoise 建表，且 compat 关闭时根本不存在——跨库
+        user_platform 的 Tortoise 建表，且 compat 关闭时根本不存在——跨库
         DDL 顺序不可控），所以孤儿清理必须显式做。
         """
         gid = str(group_id).strip()
@@ -6960,7 +7244,7 @@ class PostgresClient:
 
     @classmethod
     async def issue_runtime_api_key(cls, data: dict) -> dict:
-        """签发一枚绑定 user_id / vm_id 的运行时 Key（对应 MonkeyCode 的 ModelApiKey）。
+        """签发一枚绑定 user_id / vm_id 的运行时 Key（对应 upstream 的 ModelApiKey）。
 
         复用 api_keys 表：主链路把它当普通 Key 处理，只是额外带上 user/vm 归属。
         既有筛选/限流字段沿用 add_api_key 默认值，可由入参覆盖。VM 侧下发的临时 Key

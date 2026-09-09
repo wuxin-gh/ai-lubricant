@@ -14,7 +14,7 @@ import json
 
 import pytest
 
-from monkeycode_compat.node_client import proxy as npg
+from user_platform.node_client import proxy as npg
 from node_server import node_proxy_gateway as control_npg
 
 

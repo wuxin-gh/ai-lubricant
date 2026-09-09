@@ -118,34 +118,60 @@ _INSTALL_NOT_READY_STATES = frozenset({"configuring", "starting", "testing", "er
 
 
 async def resolve_effective_services(principal_id: int | None) -> list[dict]:
-    """解析 agent 的有效 MCP 服务集——完全由绑定 principal 的授权推导。
+    """解析 agent 的有效 MCP 服务集——完全由绑定 principal 的 service 授权推导。
 
     agent 不再自带 MCP 服务清单（原 agents.mcp_servers 已删）：它只关联一个 MCP
-    principal（agents.mcp_user_id），挂哪些服务由该 principal 被授权了什么决定。
-    与网关判权（sse_gateway._check_service_auth）同源，避免「列表里有工具但调用被 403」。
+    principal（agents.mcp_user_id），挂哪些服务由该 principal 的 mcp_grants service
+    行决定。与网关判权（sse_gateway._check_service_auth）同源——网关也只看 service
+    grant，内置工具的实例范围（哪个浏览器/邮箱/设备）由插件 driver 读 param grant
+    收窄，不再在列表过滤这一层做「有没有 param」的前置拦截。
 
     规则：
       - principal_id 为 None（未绑定）→ 无 MCP 工具。
-      - 内置工具服务按 param 判权：cdp-bridge 需 principal 有 cdp_client_id param，
-        mail 需有 mail_account_id param（param 值即它能操作的那个客户端/账户）。
-      - 其余服务（含内置 marketplace-status 与普通 custom/sse/stdio）按服务级授权
-        判权：principal 在 mcp_service_users 里被授权该服务才挂。
-      - 服务本身必须 enabled，且过就绪门（安装中/失败、node_hosted 宿主已死均排除）。
+      - principal 在 mcp_grants 里被授权该服务（service 行）→ 挂。
+      - 服务必须 enabled，且已加载进 registry（非 session 形态：registry.get(name)
+        is not None——未加载的服务调了也是 plugin not loaded；session 形态不经
+        服务端 registry，跳过此门）。stdio 在执行器实装前不在 registry → 自然不出现，
+        将来落地自动获得，无需 kind 分支。
+      - node_hosted 宿主已死也排除（host_status=dead）。
 
-    返回项直接复用 mcp_plugin_store 的 service dict（含 tools_cache/id/auth/headers 等）；
-    kind 由 DB 行自带（builtin/custom/sse/stdio），MCPManager 不再分派，全部过 _gateway_rpc。
+    返回项直接复用 mcp_plugin_store 的 service dict；kind 由 DB 行自带，MCPManager
+    不再分派，全部过 _gateway_rpc。
     """
     import mcp_plugin_store
-    # 判权 param 映射的规范来源在网关；函数内惰性导入，避免模块加载期循环依赖。
-    from mcp_runtime.sse_gateway import _BUILTIN_SERVICE_PARAM_KEY
+    # registry 在 agent 同进程内，惰性导入避免模块加载期循环依赖。用模块属性引用
+    # （而非 from import 绑定），便于测试 monkeypatch mcp_runtime.registry.registry 生效。
+    try:
+        import mcp_runtime.registry as _regmod
+    except Exception:  # noqa: BLE001 — 测试环境无 runtime 时退化为不滤 registry
+        _regmod = None
+
+    _REGISTRY_UNAVAILABLE = object()  # 哨兵：registry 不可用（测试环境/启动期）→ 不滤
+
+    def _registry_get(name: str):
+        """返回 plugin / None(未加载) / _REGISTRY_UNAVAILABLE(不可用→放过)。
+
+        registry 不可用（测试环境无 runtime / 启动早期未初始化）→ 不滤。判断
+        「未初始化」用 _plugins 为空：startup 加载过任何插件就非空；测试环境
+        导入 mcp_runtime.registry 成功但单例空 → 视作不可用放过，避免误杀全部服务。
+        """
+        if _regmod is None:
+            return _REGISTRY_UNAVAILABLE
+        try:
+            reg = _regmod.registry
+            if not getattr(reg, "_plugins", None):
+                return _REGISTRY_UNAVAILABLE  # 未初始化，放过
+            return reg.get(name)
+        except Exception:  # noqa: BLE001 — registry 异常时退化为不滤，避免误杀可用服务
+            return _REGISTRY_UNAVAILABLE
 
     if principal_id is None:
         return []
 
     try:
-        # 三个独立维度各自 try/except 退化为「该维度无授权」，但彼此并发：agent
-        # 启动每次展开都走这里，串行会把三段 Redis/DB 往返叠成 sum。
-        services_result, params_result, granted_result = await asyncio.gather(
+        # 三段并发：service 目录 / principal 的 param grants / principal 的 service grants。
+        # params 不再参与判权（实例范围归插件），但仍取回用于 diagnostics。
+        services_result, _params_result, granted_result = await asyncio.gather(
             mcp_plugin_store.list_services(),
             mcp_plugin_store.list_principal_params(int(principal_id)),
             mcp_plugin_store.list_services_for_mcp_user(int(principal_id)),
@@ -159,55 +185,39 @@ async def resolve_effective_services(principal_id: int | None) -> list[dict]:
         logger.warning("[mcp] list_services failed, no MCP tools attached: %s", services_result)
         return []
     all_services = services_result
-    if isinstance(params_result, Exception):
-        logger.warning("[mcp] list_principal_params failed principal=%s: %s", principal_id, params_result)
-        params = []
-    else:
-        params = params_result
     if isinstance(granted_result, Exception):
         logger.warning("[mcp] list_services_for_mcp_user failed principal=%s: %s", principal_id, granted_result)
-        granted_ids = set()
+        granted_ids: set[int] = set()
     else:
         granted_ids = set(granted_result)
-
-    param_keys = {str(p.get("param_key") or "") for p in params if p.get("param_key")}
 
     effective: list[dict] = []
     for svc in all_services:
         if not svc.get("enabled"):
             continue
-        name = svc.get("name") or ""
-        required_param = _BUILTIN_SERVICE_PARAM_KEY.get(name)
-        if required_param is not None:
-            # 内置工具服务：有对应 param 才代表这个 principal 能操作某个具体资源。
-            if required_param not in param_keys:
-                continue
-            effective.append(svc)
-            continue
-
         sid = svc.get("id")
         if sid is None or sid not in granted_ids:
             continue
-        # 就绪门：挡住「明确处于安装中或安装失败」的服务，避免 agent 拿到装了一半的
-        # MCP 在 registry.call_tool 抛 KeyError("plugin not loaded")。
-        #
-        # 注意是黑名单而非白名单：存量服务（本功能上线前建的）没有 install_state，
-        # DB 默认 'created'，若要求必须等于 ready 会让现有可用服务突然对 agent 消失。
-        # session 形态不经服务端 registry（编辑器 CLI 自己在节点拉起），不受此门约束。
+        name = svc.get("name") or ""
         scope = svc.get("deploy_scope") or "server"
-        state = svc.get("install_state")
-        if scope != "session" and state in _INSTALL_NOT_READY_STATES:
-            logger.info(
-                "[mcp] service %s install_state=%s, not ready for agent",
-                svc.get("name"), state,
-            )
-            continue
-        # node_hosted（形态 C）多一道门：进程在节点上，节点掉线后 install_state
-        # 可能还停在 ready，但隧道已经不通。host_status 是那个真相源。
+        # session 形态不经服务端 registry（编辑器 CLI 自己在节点拉起），不受 registry 门约束。
+        if scope != "session":
+            loaded = _registry_get(name)
+            if loaded is _REGISTRY_UNAVAILABLE:
+                # registry 不可用（测试/启动期）→ 不滤，放过。
+                pass
+            elif loaded is None:
+                # 未加载进 registry（stdio 未实装执行器、加载失败、node_hosted 掉线等）。
+                # 不挂给 agent——挂了也是 plugin not loaded。
+                logger.info(
+                    "[mcp] service %s not loaded in registry, not ready for agent", name,
+                )
+                continue
+        # node_hosted（形态 C）多一道门：进程在节点上，节点掉线后可能仍 registry-loaded，
+        # 但隧道已经不通。host_status 是那个真相源。
         if scope == "node_hosted" and svc.get("host_status") == "dead":
             logger.info(
-                "[mcp] node-hosted service %s host is dead, not ready for agent",
-                svc.get("name"),
+                "[mcp] node-hosted service %s host is dead, not ready for agent", name,
             )
             continue
         effective.append(svc)

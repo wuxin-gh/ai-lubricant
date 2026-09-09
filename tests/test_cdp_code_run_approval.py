@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 
 from agent import cdp_chat_service
 from agent import conversation_store as real_store
-from monkeycode_compat.node_client.approvals import ApprovalRegistry
+from user_platform.node_client.approvals import ApprovalRegistry
 
 
 CLIENT_ID = "7"
@@ -59,7 +59,7 @@ def env(monkeypatch):
     monkeypatch.setattr(real_store, "get_conversation", _get_conversation)
 
     registry = ApprovalRegistry()
-    import monkeycode_compat.node_client.approvals as approvals_mod
+    import user_platform.node_client.approvals as approvals_mod
 
     monkeypatch.setattr(approvals_mod, "approval_registry", registry)
     yield registry, conversations

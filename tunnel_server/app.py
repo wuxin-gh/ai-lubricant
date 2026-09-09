@@ -22,11 +22,11 @@ async def _init_database() -> None:
 
     await Tortoise.init(
         config={
-            "connections": {"monkeycode_compat": settings.database_url},
+            "connections": {"user_platform": settings.database_url},
             "apps": {
-                "monkeycode_compat": {
-                    "models": ["monkeycode_compat.models_tunnel"],
-                    "default_connection": "monkeycode_compat",
+                "user_platform": {
+                    "models": ["user_platform.models_tunnel"],
+                    "default_connection": "user_platform",
                 }
             },
         },
@@ -37,10 +37,10 @@ async def _init_database() -> None:
     # Reconcile the new tunnel models with their declarations so additive columns
     # added since the table was first created exist (same contract as the main
     # service's _ensure_additive_columns, scoped here to the tunnel models).
-    from monkeycode_compat.database import _ensure_additive_columns
+    from user_platform.database import _ensure_additive_columns
 
     await _ensure_additive_columns()
-    from monkeycode_compat.database import _migrate_tunnel_runtime
+    from user_platform.database import _migrate_tunnel_runtime
 
     await _migrate_tunnel_runtime()
 

@@ -14,20 +14,20 @@ import pytest
 import pytest_asyncio
 from tortoise import Tortoise
 
-from monkeycode_compat import task_service as module
-from monkeycode_compat.models_review import ReviewNodeLease
-from monkeycode_compat.models_task import TaskNodeBinding
+from user_platform import task_service as module
+from user_platform.models_review import ReviewNodeLease
+from user_platform.models_task import TaskNodeBinding
 
 _MODULES = [
-    "monkeycode_compat.models_task",
-    "monkeycode_compat.models_review",
+    "user_platform.models_task",
+    "user_platform.models_review",
 ]
 
 
 @pytest_asyncio.fixture
 async def db():
     await Tortoise.init(
-        db_url="sqlite://:memory:", modules={"monkeycode_compat": _MODULES}
+        db_url="sqlite://:memory:", modules={"user_platform": _MODULES}
     )
     await Tortoise.generate_schemas()
     try:

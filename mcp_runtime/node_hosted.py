@@ -99,7 +99,7 @@ async def deploy_to_node(service_id: int, node_id: str) -> dict:
     port = await mcp_plugin_store.allocate_host_port(node_id)
     command = build_launch_command(service, port)
 
-    from monkeycode_compat.node_client.client import get_local_node_client
+    from user_platform.node_client.client import get_local_node_client
 
     client = get_local_node_client()
     # nohup + & ：HostExec 是一次性调用，返回后进程要继续活着
@@ -136,7 +136,7 @@ async def stop_on_node(service_id: int) -> bool:
     pid = int(service.get("host_pid") or 0)
     if not node_id or not pid:
         return False
-    from monkeycode_compat.node_client.client import get_local_node_client
+    from user_platform.node_client.client import get_local_node_client
 
     try:
         await get_local_node_client().host_exec(node_id, f"kill {pid}")

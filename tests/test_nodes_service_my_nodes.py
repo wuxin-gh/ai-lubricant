@@ -7,10 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 
-import monkeycode_compat.nodes_service as nodes_service_module
-from monkeycode_compat.node_client import NodeServerUnavailable
-from monkeycode_compat.node_client.normalization import normalize_node_info
-from monkeycode_compat.nodes_service import NodesService
+import user_platform.nodes_service as nodes_service_module
+from user_platform.node_client import NodeServerUnavailable
+from user_platform.node_client.normalization import normalize_node_info
+from user_platform.nodes_service import NodesService
 
 
 def _link(node_id: str, role: str = "execution") -> SimpleNamespace:

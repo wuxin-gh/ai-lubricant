@@ -180,22 +180,18 @@ async def _resolve_account_scope(token: str) -> tuple[str | None, set[int] | Non
             return None, {int(target.get("id") or -1)}
         return None, None
     if resolved.get("kind") in ("principal", "identity"):
-        principal_id: int | None = None
-        if resolved.get("kind") == "principal":
-            principal_id = int((resolved.get("target") or {}).get("id"))
-        else:
-            meta = resolved.get("token") or {}
-            target_id = meta.get("target_id")
-            if meta.get("target_type") == "agent" and target_id and str(target_id).isdigit():
-                principal_id = await mcp_plugin_store.get_agent_mcp_principal_id(int(target_id))
+        # 公共解析（principal 直取；identity agent/task → principal 反查）。
+        principal_id = await mcp_plugin_store.resolve_identity_to_principal(token)
         if principal_id is None:
             return None, None
-        # principal 自带 mail_account_id param，直接定位账户（单账户绑定）。
-        value = await mcp_plugin_store.get_principal_param(principal_id, "mail_account_id")
-        if value is None:
-            return None, None
-        return None, {int(value)}
-    return None, None
+        # principal 绑了 mail_account_id grants（多行=多账户）→ 显式允许集。
+        values = await mcp_plugin_store.get_principal_grant_values(principal_id, "mail_account_id")
+        if values:
+            return None, {int(v) for v in values}
+        # 未绑实例 → 默认全量：owner 名下全部 enabled 邮箱账户都可用（account_ids=None
+        # 即不限制，与 mail 的账户过滤语义天然一致）。解析不出 owner（平台级
+        # principal 等）维持 None（交由上游账户列表自身按 instance_key 收敛）。
+        return None, None
 
 
 async def _resolve_instance_key(token: str) -> str | None:

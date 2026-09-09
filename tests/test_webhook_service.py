@@ -13,16 +13,16 @@ import pytest
 import pytest_asyncio
 from tortoise import Tortoise
 
-from monkeycode_compat import git_clients, webhook_service as webhook_module
-from monkeycode_compat.webhook_service import webhook_service
-from monkeycode_compat.models_webhook import ProjectWebhook
+from user_platform import git_clients, webhook_service as webhook_module
+from user_platform.webhook_service import webhook_service
+from user_platform.models_webhook import ProjectWebhook
 
 
 @pytest_asyncio.fixture
 async def tortoise_db():
     await Tortoise.init(
         db_url="sqlite://:memory:",
-        modules={"monkeycode_compat": ["monkeycode_compat.models_webhook"]},
+        modules={"user_platform": ["user_platform.models_webhook"]},
     )
     await Tortoise.generate_schemas()
     try:
@@ -52,7 +52,7 @@ def _set_public_origin(monkeypatch, origin: str) -> None:
     """Override the configured webhook public origin for callback URL assertions."""
     import dataclasses
 
-    from monkeycode_compat import config
+    from user_platform import config
 
     monkeypatch.setattr(
         config, "settings", dataclasses.replace(config.settings, webhook_public_origin=origin)
@@ -156,7 +156,7 @@ async def test_enable_idempotent_across_calls(tortoise_db, monkeypatch):
 
     async def fake_list(platform, full_name, opts):
         # After the first enable, list returns our hook (matched by callback URL).
-        from monkeycode_compat import config
+        from user_platform import config
         base = (config.settings.webhook_public_origin or "").rstrip("/")
         url = f"{base}/api/v1/webhooks/projects/{project.id}"
         return [git_clients.Webhook(hook_id="300", url=url, events=["push"], active=True)]
@@ -318,7 +318,7 @@ async def test_validate_review_config_requires_parent_key(tortoise_db, monkeypat
     async def validate_nodes(*_args, **_kwargs):
         return []
 
-    from monkeycode_compat.review_node_service import review_node_service
+    from user_platform.review_node_service import review_node_service
     monkeypatch.setattr(review_node_service, "validate_candidate_nodes", validate_nodes)
     with pytest.raises(ValueError, match="review_api_key_required"):
         await webhook_module._validate_review_config(
@@ -340,7 +340,7 @@ async def test_validate_review_config_checks_parent_key_ownership(tortoise_db, m
     async def missing_parent(_key_id, _user_id):
         return None
 
-    from monkeycode_compat.review_node_service import review_node_service
+    from user_platform.review_node_service import review_node_service
     monkeypatch.setattr(review_node_service, "validate_candidate_nodes", validate_nodes)
     from db import PostgresClient
     monkeypatch.setattr(PostgresClient, "get_api_key_by_id_for_user", missing_parent)

@@ -20,6 +20,12 @@ class BuiltinServiceSpec:
     version: str = "1.0.0"
     author: str = "ai-lubricant"
     docs_url: str = ""
+    # 该服务鉴权所需的 principal param key（cdp-bridge→cdp_client_id 等）。
+    # 空 = 不需 param 的内置服务（marketplace-status 等走 identity 特判）。
+    # 与 mcp_runtime.sse_gateway._BUILTIN_SERVICE_PARAM_KEY 同源：本字段是单一声明源，
+    # DB seed 时落 mcp_services.required_param，sse_gateway 启动时从 catalog 读，
+    # 不再各处手写映射。
+    required_param: str = ""
 
 
 BUILTIN_SERVICE_SPECS: tuple[BuiltinServiceSpec, ...] = (
@@ -36,6 +42,7 @@ BUILTIN_SERVICE_SPECS: tuple[BuiltinServiceSpec, ...] = (
         version="0.1.19",
         author="Unagi-cq",
         docs_url="https://github.com/unagi-cq/cdp-bridge",
+        required_param="cdp_client_id",
     ),
     BuiltinServiceSpec(
         name="mail",
@@ -47,6 +54,7 @@ BUILTIN_SERVICE_SPECS: tuple[BuiltinServiceSpec, ...] = (
             "configured forwarding alias."
         ),
         category="media",
+        required_param="mail_account_id",
     ),
     BuiltinServiceSpec(
         name="device-control",
@@ -58,6 +66,7 @@ BUILTIN_SERVICE_SPECS: tuple[BuiltinServiceSpec, ...] = (
             "设备经配对码接入，按用户实例隔离。"
         ),
         category="device",
+        required_param="device_id",
     ),
     BuiltinServiceSpec(
         name="marketplace-status",

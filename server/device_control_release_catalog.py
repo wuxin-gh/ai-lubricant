@@ -21,8 +21,8 @@ import aiohttp
 from loguru import logger
 
 from db import PostgresClient
-from monkeycode_compat.marketplace import config as mp_config
-from monkeycode_compat.marketplace.validator import validate_device_control_release
+from user_platform.marketplace import config as mp_config
+from user_platform.marketplace.validator import validate_device_control_release
 
 SNAPSHOT_KEY = "device_control_release_snapshot"
 MAX_FILE_BYTES = 256 * 1024
@@ -60,7 +60,7 @@ async def apply_release(release: dict[str, Any], *, publish: bool = True) -> dic
     平台渲染出绝对 ``download_url``，下游（select_asset/添加设备弹框）零改动。
     """
     global _snapshot
-    from monkeycode_compat.marketplace import urls
+    from user_platform.marketplace import urls
 
     errors = validate_device_control_release(urls.normalize_release_assets(copy.deepcopy(release)))
     if errors:
@@ -84,7 +84,7 @@ async def apply_release(release: dict[str, Any], *, publish: bool = True) -> dic
 
 
 def _raw_url() -> str:
-    from monkeycode_compat.marketplace import urls
+    from user_platform.marketplace import urls
 
     return urls.consumer_raw_url("device-control-releases/version.json")
 
@@ -135,7 +135,7 @@ async def refresh(*, publish: bool = True) -> dict[str, Any]:
                 raise RuntimeError(f"version.json exceeds {MAX_FILE_BYTES} bytes")
             data = json.loads(raw.decode("utf-8"))
             # 与节点/移动端侧同口径：入仓资产按消费侧平台渲染绝对 download_url 再校验落库。
-            from monkeycode_compat.marketplace import urls
+            from user_platform.marketplace import urls
 
             data = urls.normalize_release_assets(data)
             errors = validate_device_control_release(data)
@@ -155,7 +155,7 @@ async def refresh(*, publish: bool = True) -> dict[str, Any]:
                 import runtime_sync
                 await runtime_sync.publish(runtime_sync.EVENT_DEVICE_CONTROL_RELEASE, "__all__")
             if next_version and previous_version and next_version != previous_version:
-                from monkeycode_compat.notify_core import emit_notification_background
+                from user_platform.notify_core import emit_notification_background
                 emit_notification_background(
                     "device_control.new_version",
                     params={

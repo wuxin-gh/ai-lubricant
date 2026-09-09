@@ -25,9 +25,9 @@ async def tortoise_db():
     await Tortoise.init(
         db_url="sqlite::memory:",
         modules={
-            "monkeycode_compat": [
-                "monkeycode_compat.models_git",
-                "monkeycode_compat.models_project",
+            "user_platform": [
+                "user_platform.models_git",
+                "user_platform.models_project",
             ]
         },
     )
@@ -40,7 +40,7 @@ async def tortoise_db():
 
 @pytest.fixture(autouse=True)
 def neutralize_prefetch(monkeypatch):
-    from monkeycode_compat import git_service
+    from user_platform import git_service
 
     monkeypatch.setattr(
         git_service.git_service, "_prefetch_repositories", lambda *_a, **_k: None
@@ -48,7 +48,7 @@ def neutralize_prefetch(monkeypatch):
 
 
 async def _make_identity(user_id, platform="github", token="ghp_tok", **kw):
-    from monkeycode_compat.models_git import GitIdentity
+    from user_platform.models_git import GitIdentity
 
     return await GitIdentity.create(
         id=uuid.uuid4(),
@@ -60,7 +60,7 @@ async def _make_identity(user_id, platform="github", token="ghp_tok", **kw):
 
 
 async def _make_project(user_id, identity_id, name="proj", repo_url="https://github.com/owner/repo", **kw):
-    from monkeycode_compat.models_project import Project
+    from user_platform.models_project import Project
 
     return await Project.create(
         id=uuid.uuid4(),
@@ -76,7 +76,7 @@ async def _make_project(user_id, identity_id, name="proj", repo_url="https://git
 # ── add / remove / owner-only ───────────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_add_then_list_association(tortoise_db, monkeypatch):
-    from monkeycode_compat import git_clients as gc, project_service
+    from user_platform import git_clients as gc, project_service
 
     owner = str(uuid.uuid4())
     ident_a = await _make_identity(owner)
@@ -105,7 +105,7 @@ async def test_add_then_list_association(tortoise_db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_add_association_owner_only(tortoise_db):
-    from monkeycode_compat import project_service
+    from user_platform import project_service
 
     owner = str(uuid.uuid4())
     ident = await _make_identity(owner)
@@ -120,7 +120,7 @@ async def test_add_association_owner_only(tortoise_db):
 
 @pytest.mark.asyncio
 async def test_self_association_rejected(tortoise_db):
-    from monkeycode_compat import project_service
+    from user_platform import project_service
 
     import pytest as _pytest
 
@@ -135,7 +135,7 @@ async def test_self_association_rejected(tortoise_db):
 
 @pytest.mark.asyncio
 async def test_remove_association(tortoise_db):
-    from monkeycode_compat import project_service
+    from user_platform import project_service
 
     owner = str(uuid.uuid4())
     ident = await _make_identity(owner)
@@ -152,7 +152,7 @@ async def test_remove_association(tortoise_db):
 
 @pytest.mark.asyncio
 async def test_remove_association_owner_only(tortoise_db):
-    from monkeycode_compat import project_service
+    from user_platform import project_service
 
     owner = str(uuid.uuid4())
     ident = await _make_identity(owner)
@@ -169,7 +169,7 @@ async def test_remove_association_owner_only(tortoise_db):
 # ── capability probing ─────────────────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_inaccessible_target_hides_repo_url(tortoise_db, monkeypatch):
-    from monkeycode_compat import git_clients as gc, project_service
+    from user_platform import git_clients as gc, project_service
 
     owner = str(uuid.uuid4())
     ident = await _make_identity(owner)
@@ -191,7 +191,7 @@ async def test_inaccessible_target_hides_repo_url(tortoise_db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_read_only_target_marks_no_write(tortoise_db, monkeypatch):
-    from monkeycode_compat import git_clients as gc, project_service
+    from user_platform import git_clients as gc, project_service
 
     owner = str(uuid.uuid4())
     ident = await _make_identity(owner)
@@ -211,7 +211,7 @@ async def test_read_only_target_marks_no_write(tortoise_db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_source_without_identity_marks_inaccessible(tortoise_db, monkeypatch):
-    from monkeycode_compat import git_clients as gc, project_service
+    from user_platform import git_clients as gc, project_service
 
     owner = str(uuid.uuid4())
     proj_a = await _make_project(owner, None)  # no git identity on source
@@ -233,8 +233,8 @@ async def test_source_without_identity_marks_inaccessible(tortoise_db, monkeypat
 # ── delete cleanup ──────────────────────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_delete_project_cleans_associations(tortoise_db):
-    from monkeycode_compat import project_service
-    from monkeycode_compat.models_project import ProjectAssociation
+    from user_platform import project_service
+    from user_platform.models_project import ProjectAssociation
 
     owner = str(uuid.uuid4())
     ident = await _make_identity(owner)

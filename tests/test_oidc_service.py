@@ -7,9 +7,9 @@ import pytest
 import pytest_asyncio
 from tortoise import Tortoise
 
-from monkeycode_compat.models import Team, TeamMember, User, UserIdentity
-from monkeycode_compat.models_team_admin import TeamOIDCConfig
-from monkeycode_compat.oidc_service import OidcService, OIDCError
+from user_platform.models import Team, TeamMember, User, UserIdentity
+from user_platform.models_team_admin import TeamOIDCConfig
+from user_platform.oidc_service import OidcService, OIDCError
 
 
 @pytest_asyncio.fixture
@@ -17,9 +17,9 @@ async def tortoise_db():
     await Tortoise.init(
         db_url="sqlite://:memory:",
         modules={
-            "monkeycode_compat": [
-                "monkeycode_compat.models",
-                "monkeycode_compat.models_team_admin",
+            "user_platform": [
+                "user_platform.models",
+                "user_platform.models_team_admin",
             ]
         },
     )

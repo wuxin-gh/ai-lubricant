@@ -36,7 +36,7 @@
 ### 2.2 agent runtime 怎么拿到 MCP 列表(关键)
 agent runtime(那个 stream 进程)**只读 mcpServers 配置**。链路:
 
-1. 服务端调 `apply_node_session_mcps`([monkeycode_compat/node_client/client.py:325](monkeycode_compat/node_client/client.py#L325))下发会话的 MCP 集合
+1. 服务端调 `apply_node_session_mcps`([user_platform/node_client/client.py:325](user_platform/node_client/client.py#L325))下发会话的 MCP 集合
 2. 节点侧 `applyMCPs`([nodes/execution/session.go:550](nodes/execution/session.go#L550))把会话的 editor MCP 配置**精确集合重写**进 `mcpServers`(codex 写 `config.toml` 的 managed mcp block;claude/gemini 走 env/config,见 [nodes/execution/editorconfig.go](nodes/execution/editorconfig.go))
 3. editor runtime 读 `mcpServers` → agent 看到的工具就是这套
 
@@ -49,16 +49,16 @@ agent runtime(那个 stream 进程)**只读 mcpServers 配置**。链路:
 | **editor.mcp_config + apply_node_session_mcps**(连接层) | agent 端 | editor 有 `mcp_config`,session 有 `mcp_overlay_json`;`_merge_mcp_config` 合并后下发,节点 applyMCPs 写 mcpServers → runtime 连这些端点 |
 | **MCP-user principal + grants**(授权层) | MCP 服务端 | task/agent 有 `mcp_user_id`(usage_type=agent/task/external 的 mcp_user principal),principal 对 resource(service/builtin_instance)有 grants。MCP 服务端收到请求时 token→principal→grants 校验 |
 
-principal 路由:[monkeycode_compat/routes_mcp_principals.py](monkeycode_compat/routes_mcp_principals.py)。principal store:[mcp_plugin_store.py](mcp_plugin_store.py)(`create_owned_mcp_principal` @ 953,`get_owned_mcp_principal` @ 919,`replace_owned_mcp_principal_grants` @ 1451,`list_mcp_principal_grants` @ 1425)。task 的 principal 视图:[task_service.py:184](monkeycode_compat/task_service.py#L184) `_task_principal_view`。
+principal 路由:[user_platform/routes_mcp_principals.py](user_platform/routes_mcp_principals.py)。principal store:[mcp_plugin_store.py](mcp_plugin_store.py)(`create_owned_mcp_principal` @ 953,`get_owned_mcp_principal` @ 919,`replace_owned_mcp_principal_grants` @ 1451,`list_mcp_principal_grants` @ 1425)。task 的 principal 视图:[task_service.py:184](user_platform/task_service.py#L184) `_task_principal_view`。
 
 ### 2.4 issue-workflow 是**旁路**(不要抄)
-[task_service.py:648](monkeycode_compat/task_service.py#L648) `_attach_issue_workflow_mcp` 把一个带 `issue_token(target_id=task.id)` 的 entry 直接塞进 `mcp_overlay_json` → 走 applyMCPs 注入,但 token 直接绑 task、**不经过 principal grants**。这是在 principal 体系外的旁路。**本方案明确不采用此模式**,改走 principal+grants。
+[task_service.py:648](user_platform/task_service.py#L648) `_attach_issue_workflow_mcp` 把一个带 `issue_token(target_id=task.id)` 的 entry 直接塞进 `mcp_overlay_json` → 走 applyMCPs 注入,但 token 直接绑 task、**不经过 principal grants**。这是在 principal 体系外的旁路。**本方案明确不采用此模式**,改走 principal+grants。
 
 ### 2.5 节点能力归属
 - `host_exec` / `terminal_*` / `file_upload` / `tunnel_request` 这些"干活"帧的逻辑全在共享层 `common/agent`([nodes/common/host_exec.go](nodes/common/host_exec.go)、[nodes/common/host_file_upload.go](nodes/common/host_file_upload.go))。**execution 和 management 两个 handler 都已经挂了这些 case**([nodes/execution/handler.go](nodes/execution/handler.go)、[nodes/management/handler.go](nodes/management/handler.go))。
 - 管理节点独有的增量能力是 `create/delete_execution_node`(拉起/销毁执行节点)。
 - **`host_exec` 派发要求**:节点必须 approved + online + capabilities 标签 `host_exec=true`([node_server/service.py:1533](node_server/service.py#L1533) `host_exec` 方法)。
-- node_server 是**进程内** Python 服务(`node_server_enabled` 默认 True,[monkeycode_compat/config.py:169](monkeycode_compat/config.py#L169))。publish-MCP 处理器在服务端进程内,可直接调进程内 node-server 的 `host_exec`,把命令派发到绑定的管理节点。
+- node_server 是**进程内** Python 服务(`node_server_enabled` 默认 True,[user_platform/config.py:169](user_platform/config.py#L169))。publish-MCP 处理器在服务端进程内,可直接调进程内 node-server 的 `host_exec`,把命令派发到绑定的管理节点。
 
 ### 2.6 token 机制
 `builtin_tool_store.issue_token(target_type, target_id)`([builtin_tool_store.py:231](builtin_tool_store.py#L231))签发 builtin_tool_token。`target_type ∈ {agent, node, user, external}`。内置 MCP 端点形态:`/mcp/{name}/sse?token=<token>`。MCP 服务端从 token 反查 principal/scope。
@@ -129,7 +129,7 @@ agent 通过现有 principal→grants 机制拿到 publish-MCP(跟现在 agent �
 - 工具调用后回写 publish_releases。
 
 ### 4.4 创建 publish_session 流程(新路由 + service)
-新增 `monkeycode_compat/routes_publish.py`(或并入 routes_project.py):`POST /api/v1/users/projects/{project_id}/publish`。
+新增 `user_platform/routes_publish.py`(或并入 routes_project.py):`POST /api/v1/users/projects/{project_id}/publish`。
 流程:
 1. 校验:用户对 project 有写权限;选的 node_id 是管理节点 + `host_exec=true` + 在线 + 用户有权
 2. 取项目 git 仓库 + 指定 ref(branch/commit)
@@ -206,17 +206,17 @@ agent 通过现有 principal→grants 机制拿到 publish-MCP(跟现在 agent �
 | mcp_users 表 | [db.py:1157](db.py#L1157) + [db.py:1279](db.py#L1279) 升级列 |
 | principal store | [mcp_plugin_store.py:919](mcp_plugin_store.py#L919) get / [953](mcp_plugin_store.py#L953) create / [1425](mcp_plugin_store.py#L1425) list grants / [1451](mcp_plugin_store.py#MCP Plugin Store) replace grants |
 | USAGE_TYPES | [mcp_plugin_store.py:883](mcp_plugin_store.py#L883) |
-| principal 路由 | [monkeycode_compat/routes_mcp_principals.py](monkeycode_compat/routes_mcp_principals.py) |
-| 下发会话 MCP | [monkeycode_compat/node_client/client.py:325](monkeycode_compat/node_client/client.py#L325) apply_node_session_mcps |
+| principal 路由 | [user_platform/routes_mcp_principals.py](user_platform/routes_mcp_principals.py) |
+| 下发会话 MCP | [user_platform/node_client/client.py:325](user_platform/node_client/client.py#L325) apply_node_session_mcps |
 | 节点 applyMCPs | [nodes/execution/session.go:550](nodes/execution/session.go#L550) |
 | editor MCP 配置 | [nodes/execution/editorconfig.go](nodes/execution/editorconfig.go) |
 | 会话进程形态 | [nodes/execution/stream_executor.go](nodes/execution/stream_executor.go) / [executor.go:19](nodes/execution/executor.go#L19) / [session.go:309](nodes/execution/session.go#L309) |
 | host_exec 派发 | [node_server/service.py:1533](node_server/service.py#L1533) |
-| node_client host_exec | [monkeycode_compat/node_client/client.py:423](monkeycode_compat/node_client/client.py#L423) |
-| issue-workflow(旁路,勿抄) | [monkeycode_compat/task_service.py:648](monkeycode_compat/task_service.py#L648) |
+| node_client host_exec | [user_platform/node_client/client.py:423](user_platform/node_client/client.py#L423) |
+| issue-workflow(旁路,勿抄) | [user_platform/task_service.py:648](user_platform/task_service.py#L648) |
 | token 签发 | [builtin_tool_store.py:231](builtin_tool_store.py#L231) issue_token |
-| 项目路由 | [monkeycode_compat/routes_project.py](monkeycode_compat/routes_project.py) |
-| node_server_enabled | [monkeycode_compat/config.py:169](monkeycode_compat/config.py#L169) |
+| 项目路由 | [user_platform/routes_project.py](user_platform/routes_project.py) |
+| node_server_enabled | [user_platform/config.py:169](user_platform/config.py#L169) |
 
 ---
 

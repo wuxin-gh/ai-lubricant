@@ -50,33 +50,34 @@ async def test_resolve_none_principal_returns_empty(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_resolve_cdp_needs_client_param(monkeypatch):
-    """cdp-bridge 仅当 principal 带 cdp_client_id param 才挂；否则不挂。"""
+async def test_resolve_cdp_needs_service_grant(monkeypatch):
+    """cdp-bridge 走 service grant 判权（与网关同源）；param 只收窄实例范围，
+    不在列表过滤层参与。无 registry 时退化不过滤。"""
     monkeypatch.setattr(mps, "list_services", lambda: _coro([
         _svc("cdp-bridge", builtin=True, svc_id=1),
         _svc("mail", builtin=True, svc_id=2),
     ]))
-    monkeypatch.setattr(mps, "list_services_for_mcp_user", lambda pid: _coro([]))
 
-    # 带 cdp_client_id → 挂 cdp-bridge，不挂 mail（无 mail_account_id）。
+    # 授权 cdp-bridge(1) 但不授权 mail(2) → 只挂 cdp-bridge（param 有无不参与判权）。
+    monkeypatch.setattr(mps, "list_services_for_mcp_user", lambda pid: _coro([1]))
     monkeypatch.setattr(mps, "list_principal_params",
                         lambda pid: _coro([{"param_key": "cdp_client_id", "param_value": "7"}]))
     services = await resolve_effective_services(10)
     assert [s["name"] for s in services] == ["cdp-bridge"]
 
-    # 无任何 param → 两个内置都不挂。
-    monkeypatch.setattr(mps, "list_principal_params", lambda pid: _coro([]))
+    # 无任何 service 授权 → 两个内置都不挂（即便有 param）。
+    monkeypatch.setattr(mps, "list_services_for_mcp_user", lambda pid: _coro([]))
     assert await resolve_effective_services(10) == []
 
 
 @pytest.mark.asyncio
-async def test_resolve_mail_needs_account_param(monkeypatch):
-    """mail 仅当 principal 带 mail_account_id param 才挂。"""
+async def test_resolve_mail_needs_service_grant(monkeypatch):
+    """mail 走 service grant 判权。"""
     monkeypatch.setattr(mps, "list_services", lambda: _coro([
         _svc("cdp-bridge", builtin=True, svc_id=1),
         _svc("mail", builtin=True, svc_id=2),
     ]))
-    monkeypatch.setattr(mps, "list_services_for_mcp_user", lambda pid: _coro([]))
+    monkeypatch.setattr(mps, "list_services_for_mcp_user", lambda pid: _coro([2]))
     monkeypatch.setattr(mps, "list_principal_params",
                         lambda pid: _coro([{"param_key": "mail_account_id", "param_value": "3"}]))
     services = await resolve_effective_services(10)
@@ -85,7 +86,7 @@ async def test_resolve_mail_needs_account_param(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_resolve_ordinary_service_needs_grant(monkeypatch):
-    """普通服务（含内置 marketplace-status）看 mcp_service_users 授权集合。"""
+    """普通服务（含内置 marketplace-status）看 service 授权集合（mcp_grants service 行）。"""
     monkeypatch.setattr(mps, "list_services", lambda: _coro([
         _svc("marketplace-status", builtin=True, svc_id=1),
         _svc("custom-a", builtin=False, svc_id=2),
@@ -110,21 +111,25 @@ async def test_resolve_disabled_service_filtered(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_resolve_install_not_ready_filtered(monkeypatch):
-    """就绪门：授权了但 install_state 处于安装中/失败 → 非 session 形态被过滤。"""
-    def _svc_state(name, sid, state):
-        s = _svc(name, builtin=False, svc_id=sid)
-        s["deploy_scope"] = "server"
-        s["install_state"] = state
-        return s
+async def test_resolve_registry_unloaded_filtered(monkeypatch):
+    """就绪门改为 registry-loaded：非 session 形态未加载进 registry → 过滤（避免
+    agent 拿到 plugin not loaded 的服务）。session 形态不经 registry，跳过此门。
+    registry 不可用（无 runtime）→ 退化为不滤（放过）。"""
+    # mock registry：custom-a 已加载、custom-b 未加载（_plugins 非空=已初始化）。
+    import mcp_runtime.registry as regmod
+    fake_registry = type("R", (), {})()
+    fake_registry._plugins = {"custom-a": object()}  # 非空 ⇒ 视为已初始化，触发 registry 门
+    fake_registry.get = lambda name: {"custom-a": object()}.get(name)
+    monkeypatch.setattr(regmod, "registry", fake_registry)
+
     monkeypatch.setattr(mps, "list_services", lambda: _coro([
-        _svc_state("ready-svc", 2, "ready"),
-        _svc_state("starting-svc", 3, "starting"),
+        _svc("custom-a", builtin=False, svc_id=2, kind="sse"),
+        _svc("custom-b", builtin=False, svc_id=3, kind="sse"),
     ]))
     monkeypatch.setattr(mps, "list_principal_params", lambda pid: _coro([]))
     monkeypatch.setattr(mps, "list_services_for_mcp_user", lambda pid: _coro([2, 3]))
     services = await resolve_effective_services(10)
-    assert [s["name"] for s in services] == ["ready-svc"]
+    assert [s["name"] for s in services] == ["custom-a"]
 
 
 @pytest.mark.asyncio
@@ -166,8 +171,8 @@ async def test_marketplace_mcp_exposes_management_tools_only(monkeypatch):
         # 外部榜单草稿管理（市场管理场景保留能力）
         "marketplace_leaderboard_list", "marketplace_leaderboard_get",
         "marketplace_leaderboard_update", "marketplace_leaderboard_publish",
-        "marketplace_leaderboard_unpublish", "marketplace_leaderboard_set_sort",
-        "marketplace_leaderboard_sync_field", "marketplace_leaderboard_verify",
+        "marketplace_leaderboard_unpublish", "marketplace_leaderboard_delete",
+        "marketplace_leaderboard_set_sort", "marketplace_leaderboard_sync_field", "marketplace_leaderboard_verify",
         "marketplace_leaderboard_add_github",
     }
 
@@ -227,10 +232,11 @@ async def test_ensure_tools_indexes_mcp_capabilities_not_first_class_tools(monke
     ]))
     monkeypatch.setattr(mps, "get_service_auth",
                        lambda sid: _coro({"auth_enabled": False, "allowed_tokens": set()}))
-    # principal 绑了 cdp_client_id → cdp-bridge 生效；服务级授权为空。
+    # principal 绑了 cdp_client_id param（实例范围，driver 读）+ cdp-bridge 服务授权
+    # → cdp-bridge 生效（网关/列表只看 service grant，param 不在判权层）。
     monkeypatch.setattr(mps, "list_principal_params",
                         lambda pid: _coro([{"param_key": "cdp_client_id", "param_value": "5"}]))
-    monkeypatch.setattr(mps, "list_services_for_mcp_user", lambda pid: _coro([]))
+    monkeypatch.setattr(mps, "list_services_for_mcp_user", lambda pid: _coro([1]))
     monkeypatch.setattr(mps, "get_mcp_user",
                         lambda uid, mask_token=False: _coro({"id": uid, "enabled": True, "token": ""}))
 
@@ -507,7 +513,198 @@ async def test_collect_service_tokens_never_falls_back_for_unbound_cdp(monkeypat
     assert "cdp-bridge" not in tokens
 
 
+@pytest.mark.asyncio
+async def test_collect_service_tokens_ignores_auth_enabled_flag(monkeypatch, tmp_path):
+    """鉴权一律强制：identity token 签得出时，DB auth_enabled=False 的服务也挂 token。
+
+    曾有的 bug：agent 侧按 DB auth_enabled=False 跳过 token 收集，网关对
+    device-control 却强制要求 token（configuration.py 硬编码 True）→ 401
+    「请提供 token」。修后 agent 不再看该开关，一律挂 identity token；授权
+    与否由网关按 principal param / mcp_service_users 判。
+    """
+    from agent.agent_main import GenericAgent
+    import builtin_tool_store
+
+    async def fake_issue_token(kind, target_id, display_token=False, expires_at=None):
+        return object(), "ident_token"
+
+    monkeypatch.setattr(builtin_tool_store, "issue_token", fake_issue_token)
+
+    # 不 mock get_service_auth：identity_token 命中时根本不该走到 legacy 分支
+    # （走到说明逻辑漏了）。service dict 的 auth_enabled 全 False 也不影响。
+    async def no_legacy(sid):
+        raise AssertionError("identity_token 路径不应回落 legacy get_service_auth")
+
+    monkeypatch.setattr(mps, "get_service_auth", no_legacy)
+
+    # agent_id 非 None → issue identity token；mcp_user_id 非 None → 绑定 principal。
+    agent = GenericAgent(
+        AgentConfig(
+            workspace_root=str(tmp_path / "ws"),
+            allowed_roots=[str(tmp_path / "ws"), str(tmp_path / "tmp")],
+            mcp_user_id=7,
+        ),
+        agent_id=42,
+    )
+    tokens = await agent._collect_service_tokens([
+        _svc("device-control", builtin=True, auth_enabled=False, svc_id=1),
+        _svc("custom-a", auth_enabled=False, svc_id=2),
+        _svc("mail", builtin=True, auth_enabled=False, svc_id=3),
+    ])
+
+    assert tokens == {
+        "device-control": "ident_token",
+        "custom-a": "ident_token",
+        "mail": "ident_token",
+    }
+
+
 # ── helpers ────────────────────────────────────────────────────────────────────
 
 async def _coro(value):
     return value
+
+
+# ── 网关 _check_service_auth：鉴权一律强制（无匿名放行）────────────────────────
+
+def _fake_plugin_ctx(enabled=True, auth_enabled=False):
+    """造一个最小 plugin，带 ctx（enabled / auth_enabled）。"""
+    from mcp_runtime.plugin_loader import PluginContext
+
+    class _P:
+        pass
+
+    p = _P()
+    p.ctx = PluginContext("fake", enabled=enabled, auth_enabled=auth_enabled)
+    return p
+
+
+@pytest.mark.asyncio
+async def test_gateway_requires_token_even_when_service_auth_disabled(monkeypatch):
+    """后门已关：服务的 ctx.auth_enabled=False（旧「匿名」形态）也必须带 token → 401。"""
+    import mcp_runtime.sse_gateway as gw
+    from fastapi import HTTPException
+
+    plugin = _fake_plugin_ctx(enabled=True, auth_enabled=False)
+    monkeypatch.setattr(gw.registry, "get", lambda name: plugin)
+
+    with pytest.raises(HTTPException) as ei:
+        await gw._check_service_auth("custom-a", "")
+    assert ei.value.status_code == 401
+    assert "请提供 token" in ei.value.detail
+
+
+@pytest.mark.asyncio
+async def test_gateway_identity_token_custom_service_needs_grant(monkeypatch):
+    """agent identity token 调 custom 服务：principal 被授权（mcp_service_users）→ 放行。"""
+    import mcp_runtime.sse_gateway as gw
+    import builtin_tool_store
+    from fastapi import HTTPException
+
+    plugin = _fake_plugin_ctx(enabled=True, auth_enabled=False)
+    monkeypatch.setattr(gw.registry, "get", lambda name: plugin)
+
+    async def fake_resolve(tok):
+        return {"kind": "identity", "target": None,
+                "token": {"target_type": "agent", "target_id": "42"}}
+    monkeypatch.setattr(builtin_tool_store, "resolve_token", fake_resolve)
+    monkeypatch.setattr(mps, "get_agent_mcp_principal_id", lambda aid: _coro(7))
+    monkeypatch.setattr(mps, "list_principal_params", lambda pid: _coro([]))
+    monkeypatch.setattr(mps, "get_service_by_name", lambda name: _coro({"id": 3, "name": name}))
+    monkeypatch.setattr(mps, "mcp_user_granted_service", lambda uid, sid: _coro(True))
+
+    # 被授权 → 放行（不抛即通过）。
+    await gw._check_service_auth("custom-a", "ident-token")
+
+    # 未授权 → 403。
+    monkeypatch.setattr(mps, "mcp_user_granted_service", lambda uid, sid: _coro(False))
+    with pytest.raises(HTTPException) as ei:
+        await gw._check_service_auth("custom-a", "ident-token")
+    assert ei.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_gateway_identity_token_builtin_param_still_wins(monkeypatch):
+    """agent identity token 调 device-control：principal 有该服务授权（mcp_grants 的
+    service 行）→ 放行。param 只收窄实例范围（driver 侧校验），网关不再做「有没有
+    param」的前置拦截——校验下沉工具侧（本测试锁的就是这个语义）。"""
+    import mcp_runtime.sse_gateway as gw
+    import builtin_tool_store
+    from fastapi import HTTPException
+
+    plugin = _fake_plugin_ctx(enabled=True, auth_enabled=True)
+    monkeypatch.setattr(gw.registry, "get", lambda name: plugin)
+
+    async def fake_resolve(tok):
+        return {"kind": "identity", "target": None,
+                "token": {"target_type": "agent", "target_id": "42"}}
+    monkeypatch.setattr(builtin_tool_store, "resolve_token", fake_resolve)
+    monkeypatch.setattr(mps, "get_agent_mcp_principal_id", lambda aid: _coro(7))
+    monkeypatch.setattr(mps, "get_service_by_name", lambda name: _coro({"id": 1, "name": name}))
+    monkeypatch.setattr(mps, "mcp_user_granted_service", lambda uid, sid: _coro(True))
+
+    # 有服务授权 → 放行（不抛即通过）。param 是否存在不参与网关判权。
+    await gw._check_service_auth("device-control", "ident-token")
+
+    # 无服务授权 → 403（实例收窄是插件 driver 的事，网关只判服务级）。
+    monkeypatch.setattr(mps, "mcp_user_granted_service", lambda uid, sid: _coro(False))
+    with pytest.raises(HTTPException) as ei:
+        await gw._check_service_auth("device-control", "ident-token")
+    assert ei.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_gateway_principal_token_custom_service_needs_grant(monkeypatch):
+    """principal 明文 token 直连 custom 服务：在 mcp_service_users 里 → 放行，否则 403。"""
+    import mcp_runtime.sse_gateway as gw
+    import builtin_tool_store
+    from fastapi import HTTPException
+
+    plugin = _fake_plugin_ctx(enabled=True, auth_enabled=False)
+    monkeypatch.setattr(gw.registry, "get", lambda name: plugin)
+
+    async def fake_resolve(tok):
+        return {"kind": "principal", "target": {"id": 7, "name": "u"}, "token": None}
+    monkeypatch.setattr(builtin_tool_store, "resolve_token", fake_resolve)
+    monkeypatch.setattr(mps, "list_principal_params", lambda pid: _coro([]))
+    monkeypatch.setattr(mps, "get_service_by_name", lambda name: _coro({"id": 3, "name": name}))
+    monkeypatch.setattr(mps, "mcp_user_granted_service", lambda uid, sid: _coro(True))
+
+    await gw._check_service_auth("custom-a", "principal-token")  # 放行
+
+    monkeypatch.setattr(mps, "mcp_user_granted_service", lambda uid, sid: _coro(False))
+    with pytest.raises(HTTPException) as ei:
+        await gw._check_service_auth("custom-a", "principal-token")
+    assert ei.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_gateway_review_result_identity_token_session_scoped(monkeypatch):
+    """review-result：编辑器/webhook 链路签的 identity token（target_id=webhook event id，
+    不是 agents 行 id）→ 网关只验「已认证身份」，对象级授权由 plugin._scope 收口。"""
+    import mcp_runtime.sse_gateway as gw
+    import builtin_tool_store
+    from fastapi import HTTPException
+
+    plugin = _fake_plugin_ctx(enabled=True, auth_enabled=True)
+    monkeypatch.setattr(gw.registry, "get", lambda name: plugin)
+
+    async def fake_resolve(tok):
+        return {"kind": "identity", "target": None,
+                "token": {"target_type": "agent", "target_id": "98765"}}
+    monkeypatch.setattr(builtin_tool_store, "resolve_token", fake_resolve)
+    # target_id 是 webhook event id，不是 agents 行 id → principal 反查返回 None，
+    # 然后落 session-scoped 专支放行（review-result 对象级授权由 plugin._scope 收口）。
+    monkeypatch.setattr(mps, "get_agent_mcp_principal_id", lambda aid: _coro(None))
+
+    await gw._check_service_auth("review-result", "ident-token")  # 放行
+
+    # 非 identity token（如 principal token）→ 403。
+    async def fake_resolve_principal(tok):
+        return {"kind": "principal", "target": {"id": 7}, "token": None}
+    monkeypatch.setattr(builtin_tool_store, "resolve_token", fake_resolve_principal)
+    monkeypatch.setattr(mps, "list_principal_params", lambda pid: _coro([]))
+    monkeypatch.setattr(mps, "get_service_by_name", lambda name: _coro(None))
+    with pytest.raises(HTTPException) as ei:
+        await gw._check_service_auth("review-result", "principal-token")
+    assert ei.value.status_code == 403

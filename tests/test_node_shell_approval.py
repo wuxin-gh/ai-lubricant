@@ -4,8 +4,8 @@ import asyncio
 
 import pytest
 
-from monkeycode_compat.node_client.approvals import ApprovalRegistry, hash_command
-from monkeycode_compat.node_client.tools import command_requires_confirmation, register_node_shell_exec
+from user_platform.node_client.approvals import ApprovalRegistry, hash_command
+from user_platform.node_client.tools import command_requires_confirmation, register_node_shell_exec
 
 
 class _Tools:
@@ -53,7 +53,7 @@ async def test_registry_reap_expired_auto_denies() -> None:
 
 @pytest.mark.asyncio
 async def test_dangerous_tool_emits_then_pauses_until_denied(monkeypatch) -> None:
-    import monkeycode_compat.node_client.tools as module
+    import user_platform.node_client.tools as module
 
     registry = ApprovalRegistry()
     monkeypatch.setattr(module, "approval_registry", registry)

@@ -782,7 +782,7 @@ async def deploy_service_to_node(
     from mcp_runtime.installer import kick_off_install
     kick_off_install(service_id)
     # 裸 dict，与同级 install/status、start、stop 等路由一致（这些走 request.get/post
-    # 直取 data，不是 monkeycode 的 {code,message,data} 信封链路）
+    # 直取 data，不走 user_platform 的 {code,message,data} 信封链路）
     return result
 
 

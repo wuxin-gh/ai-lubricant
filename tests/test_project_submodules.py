@@ -27,9 +27,9 @@ async def tortoise_db():
     await Tortoise.init(
         db_url="sqlite::memory:",
         modules={
-            "monkeycode_compat": [
-                "monkeycode_compat.models_git",
-                "monkeycode_compat.models_project",
+            "user_platform": [
+                "user_platform.models_git",
+                "user_platform.models_project",
             ]
         },
     )
@@ -42,7 +42,7 @@ async def tortoise_db():
 
 @pytest.fixture(autouse=True)
 def neutralize_prefetch(monkeypatch):
-    from monkeycode_compat import git_service
+    from user_platform import git_service
 
     monkeypatch.setattr(
         git_service.git_service, "_prefetch_repositories", lambda *_a, **_k: None
@@ -50,7 +50,7 @@ def neutralize_prefetch(monkeypatch):
 
 
 async def _make_identity(user_id, platform="github", token="ghp_tok", **kw):
-    from monkeycode_compat.models_git import GitIdentity
+    from user_platform.models_git import GitIdentity
 
     return await GitIdentity.create(
         id=uuid.uuid4(),
@@ -62,7 +62,7 @@ async def _make_identity(user_id, platform="github", token="ghp_tok", **kw):
 
 
 async def _make_project(user_id, identity_id, name="proj", repo_url="https://github.com/owner/repo", **kw):
-    from monkeycode_compat.models_project import Project
+    from user_platform.models_project import Project
 
     return await Project.create(
         id=uuid.uuid4(),
@@ -98,7 +98,7 @@ _REAL_GITMODULES = """[submodule "node_server"]
 
 # ── parse_gitmodules ───────────────────────────────────────────────────────
 def test_parse_gitmodules_real_shape():
-    from monkeycode_compat.project_service import parse_gitmodules
+    from user_platform.project_service import parse_gitmodules
 
     rows = parse_gitmodules(_REAL_GITMODULES)
     assert len(rows) == 5
@@ -113,7 +113,7 @@ def test_parse_gitmodules_real_shape():
 
 
 def test_parse_gitmodules_drops_incomplete_and_ignores_non_submodule_sections():
-    from monkeycode_compat.project_service import parse_gitmodules
+    from user_platform.project_service import parse_gitmodules
 
     text = (
         '[submodule "a"]\n\tpath = a\n\turl = ../a.git\n'
@@ -127,7 +127,7 @@ def test_parse_gitmodules_drops_incomplete_and_ignores_non_submodule_sections():
 
 # ── _resolve_submodule_url ─────────────────────────────────────────────────
 def test_resolve_submodule_url_relative_and_absolute():
-    from monkeycode_compat.project_service import _resolve_submodule_url
+    from user_platform.project_service import _resolve_submodule_url
 
     parent = "https://gitee.com/xiongrun/ai-lubricant.git"
     assert _resolve_submodule_url(parent, "../ai-lubricant-nodes.git") == (
@@ -157,7 +157,7 @@ async def _stub_blob(monkeypatch, module, text: str):
     """
 
     async def fake_fetch_blob(platform, full_name, opts, *, path, ref=""):
-        from monkeycode_compat.git_clients import Blob
+        from user_platform.git_clients import Blob
 
         if path == ".gitmodules":
             return Blob(content=_b64(text), is_binary=False, sha="x", size=len(text))
@@ -168,7 +168,7 @@ async def _stub_blob(monkeypatch, module, text: str):
 
 @pytest.mark.asyncio
 async def test_list_submodules_resolves_and_matches_projects(tortoise_db, monkeypatch):
-    from monkeycode_compat import project_service
+    from user_platform import project_service
 
     owner = str(uuid.uuid4())
     ident = await _make_identity(owner)
@@ -197,7 +197,7 @@ async def test_list_submodules_resolves_and_matches_projects(tortoise_db, monkey
 
 @pytest.mark.asyncio
 async def test_list_submodules_empty_when_no_gitmodules(tortoise_db, monkeypatch):
-    from monkeycode_compat import project_service
+    from user_platform import project_service
 
     owner = str(uuid.uuid4())
     ident = await _make_identity(owner)
@@ -210,7 +210,7 @@ async def test_list_submodules_empty_when_no_gitmodules(tortoise_db, monkeypatch
 
 @pytest.mark.asyncio
 async def test_list_submodules_inaccessible_returns_none(tortoise_db):
-    from monkeycode_compat import project_service
+    from user_platform import project_service
 
     owner = str(uuid.uuid4())
     other = str(uuid.uuid4())

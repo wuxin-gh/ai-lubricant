@@ -79,7 +79,7 @@ async def _maybe_create_notification(
             "api_key": f"{api_key[:8]}..." if api_key else None,
         }
         # 统一通知域：站内 + 出站 outbox（worker 按订阅规则推送 webhook）。
-        from monkeycode_compat.notify_core import emit_notification
+        from user_platform.notify_core import emit_notification
         await emit_notification(
             "security.warning",
             params=params,

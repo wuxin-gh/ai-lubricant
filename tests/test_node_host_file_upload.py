@@ -12,8 +12,8 @@ import hashlib
 
 import pytest
 
-from monkeycode_compat.node_client import RPCError
-from monkeycode_compat.node_client.client import NodeClient
+from user_platform.node_client import RPCError
+from user_platform.node_client.client import NodeClient
 
 
 class _FakeResponse:
@@ -60,7 +60,7 @@ class _QueuedSession:
 def remote_client(monkeypatch):
     from dataclasses import replace
 
-    from monkeycode_compat import config
+    from user_platform import config
 
     monkeypatch.setattr(
         config,

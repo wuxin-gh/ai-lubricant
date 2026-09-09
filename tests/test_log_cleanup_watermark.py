@@ -73,7 +73,7 @@ def test_cleanup_and_aggregation_share_advisory_lock():
 
 def test_cleanup_aggregates_before_deleting_runtime(monkeypatch):
     """清理入口先跑一轮聚合（aggregate-then-delete），运行时行为锁定。"""
-    import monkeycode_compat.notify_core as notify_core
+    import user_platform.notify_core as notify_core
     import rate_limiter
     from db import PostgresClient
     from rate_limiter import ModelClientPool

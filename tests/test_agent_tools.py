@@ -545,6 +545,24 @@ def test_persist_binary_result_parses_json_string_result(ga_registry: ToolRegist
     assert out["path"].endswith(".png")
 
 
+def test_persist_binary_result_unwraps_device_control_screenshot(ga_registry: ToolRegistry) -> None:
+    """device-control nests JPEG base64 under screenshot.b64; it must become media."""
+    import base64
+    inner = {
+        "screen": {"w": 1200, "h": 2640, "density": 530, "orientation": "portrait"},
+        "tree": "node_id\\tclass\\ttext",
+        "screenshot": {"format": "jpeg", "w": 700, "h": 1540, "b64": _BIG_PNG_B64},
+    }
+    out = ga_registry._persist_binary_result(
+        {"content": [{"type": "text", "text": __import__("json").dumps(inner)}]},
+        default_stem="get_screen_state",
+    )
+    assert "screenshot" not in out
+    assert out["path"].endswith(".jpeg")
+    assert out["screenshot_size"] == {"w": 700, "h": 1540}
+    assert out["bytes"] == len(base64.b64decode(_BIG_PNG_B64))
+
+
 def test_persist_binary_result_passes_through_non_binary(ga_registry: ToolRegistry) -> None:
     result = {"status": "ok", "tabs": [{"id": "1"}]}
     assert ga_registry._persist_binary_result(result) == result

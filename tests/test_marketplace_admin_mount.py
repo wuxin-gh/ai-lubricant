@@ -15,9 +15,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from monkeycode_compat.marketplace import config as mp_config
-from monkeycode_compat.marketplace import routes
-from monkeycode_compat.marketplace.config import MarketplaceSettings
+from user_platform.marketplace import config as mp_config
+from user_platform.marketplace import routes
+from user_platform.marketplace.config import MarketplaceSettings
 
 READONLY_SETTINGS = MarketplaceSettings(
     repo_url="https://github.com/acme/market",

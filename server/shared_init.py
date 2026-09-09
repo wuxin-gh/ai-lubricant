@@ -43,14 +43,14 @@ async def init_shared_services(lightweight: bool = False) -> None:
     except Exception:
         logger.exception("[shared_init] ensure AGENT_INTERNAL_TOKEN failed; webpage chat proxy may be unavailable")
 
-    # Optional MonkeyCode compatibility layer (disabled by default). Failure
+    # Optional upstream compatibility layer (disabled by default). Failure
     # here must never block the main service; it is best-effort only.
     try:
-        import monkeycode_compat
+        import user_platform
 
-        await monkeycode_compat.init()
+        await user_platform.init()
     except Exception:
-        logger.exception("[shared_init] monkeycode-compat init failed; main service continues")
+        logger.exception("[shared_init] user-platform init failed; main service continues")
 
 
 async def _ensure_agent_internal_token(config) -> None:

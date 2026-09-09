@@ -15,7 +15,7 @@
     <a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a>
   </nav>
   <div class="nav-group">能力详解</div><nav>
-    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-android-control.html"><span class="ic">🤖</span>Android 控制</a><a href="cap-ios-control.html"><span class="ic">📲</span>iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
+    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-android-control.html"><span class="ic">🤖</span>Android 控制</a><a href="cap-ios-control.html"><span class="ic">📲</span>iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
   </nav>
   <div class="nav-group">操作手册</div><nav>
     <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
@@ -59,7 +59,6 @@
 <div class="danger"><strong>设备连接凭据 ≠ MCP 访问 token</strong>APK 用设备凭据连 WebSocket；Agent 调用 MCP 用独立的 MCP token。二者不能混用，设备凭据只存 sha256。</div>
 
 <h2 id="commands">功能：15 个操控命令</h2>
-<figure class="shot" data-shot="cap-android-control/commands.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">15 个操控命令</span></div><button class="shot-open" type="button" aria-label="放大截图：15 个操控命令"><img src="assets/screenshots/cap-android-control/commands.png" alt="15 个操控命令" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-android-control/commands.png</code></div></div></figure>
 <div class="table-wrap"><table><thead><tr><th>命令</th><th>行为</th></tr></thead><tbody>
 <tr><td><code>get_screen_state</code></td><td>读取屏幕树/当前状态（只读，可并发）</td></tr>
 <tr><td><code>tap</code> / <code>long_press</code> / <code>double_tap</code></td><td>点击 / 长按 / 双击坐标或节点</td></tr>
@@ -73,7 +72,6 @@
 <div class="note"><strong>串行与并发</strong>会改 UI 状态的命令按顺序串行执行；<code>get_screen_state</code> 与 <code>list_apps</code> 是只读例外，可并发。v0 故意排除音量/电源键。</div>
 
 <h2 id="protocol">功能：WebSocket v0 协议</h2>
-<figure class="shot" data-shot="cap-android-control/protocol.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">WebSocket v0 协议</span></div><button class="shot-open" type="button" aria-label="放大截图：WebSocket v0 协议"><img src="assets/screenshots/cap-android-control/protocol.png" alt="WebSocket v0 协议" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-android-control/protocol.png</code></div></div></figure>
 <p>设备打开 WS 到 <code>/mcp/device-control/ws/device</code>，握手双方带 <code>protocol_version</code>，服务端权威——不匹配直接 close 4004。</p>
 <div class="table-wrap"><table><thead><tr><th>方向</th><th>帧</th></tr></thead><tbody>
 <tr><td>设备 → 服务端</td><td><code>register</code>（登记设备与 capabilities）、<code>heartbeat</code>、<code>call-response</code>（命令结果）、<code>event</code>（capabilities-changed / control-revoked）</td></tr>
@@ -89,11 +87,9 @@
 </tbody></table></div>
 
 <h2 id="liveness">机制：新连接踢旧</h2>
-<figure class="shot" data-shot="cap-android-control/liveness.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">新连接踢旧</span></div><button class="shot-open" type="button" aria-label="放大截图：新连接踢旧"><img src="assets/screenshots/cap-android-control/liveness.png" alt="新连接踢旧" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-android-control/liveness.png</code></div></div></figure>
 <p>Android 半开连接频繁（doze、蜂窝/WiFi 切换、进程被回收都不发 TCP FIN）。协议用<strong>新连接踢旧</strong>（旧连接 close 4009）而不是拒绝式，避免"服务端以为还连着、设备怎么都连不上"。吊销即断：用户删除/轮换设备凭据后活连接必须当场断（close 4003），不等心跳超时。</p>
 
 <h2 id="screen-tree">机制：屏幕树格式</h2>
-<figure class="shot" data-shot="cap-android-control/screen-tree.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">屏幕树格式</span></div><button class="shot-open" type="button" aria-label="放大截图：屏幕树格式"><img src="assets/screenshots/cap-android-control/screen-tree.png" alt="屏幕树格式" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-android-control/screen-tree.png</code></div></div></figure>
 <p><code>get_screen_state</code> 返回紧凑 TSV 格式的 UI 树（CompactTreeFormatter）：</p>
 <ul>
 <li>每行一个节点：<code>node_id\tdepth\ttype\ttext\thint\tstate\tbounds</code></li>

@@ -7,9 +7,9 @@ import pytest
 import pytest_asyncio
 from tortoise import Tortoise
 
-from monkeycode_compat import review_node_service as module
-from monkeycode_compat.models_review import ReviewNodeLease
-from monkeycode_compat.review_node_service import ReviewNodeService
+from user_platform import review_node_service as module
+from user_platform.models_review import ReviewNodeLease
+from user_platform.review_node_service import ReviewNodeService
 
 _FRAMEWORK = "open_code_review_delegate"
 
@@ -18,7 +18,7 @@ _FRAMEWORK = "open_code_review_delegate"
 async def db():
     await Tortoise.init(
         db_url="sqlite://:memory:",
-        modules={"monkeycode_compat": ["monkeycode_compat.models_review"]},
+        modules={"user_platform": ["user_platform.models_review"]},
     )
     await Tortoise.generate_schemas()
     try:

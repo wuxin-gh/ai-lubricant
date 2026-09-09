@@ -1666,7 +1666,7 @@ class ProviderPool:
         # 触发它的账号不同而生成不同 key，去重失效、通知刷屏）；账号级才带账号名。
         subject = "" if scope.startswith("channel") else (username or "")
         dedupe_key = f"freeze:{self.provider_name}:{scope}:{subject}:{model_id or ''}"
-        from monkeycode_compat.notify_core import emit_notification_background
+        from user_platform.notify_core import emit_notification_background
         emit_notification_background(
             event_type,
             params=params,
@@ -1805,7 +1805,7 @@ class ProviderPool:
                 c.auth_error = "初始化失败"
                 # 通知走统一事件域：是否进通知中心/webhook 由订阅配置决定，
                 # 这里只负责产生事件，绝不直接写 notifications 表。
-                from monkeycode_compat.notify_core import emit_notification_background
+                from user_platform.notify_core import emit_notification_background
                 emit_notification_background(
                     "account.init_failed",
                     params={
@@ -1883,7 +1883,7 @@ class ProviderPool:
         for provider_name, not_auth_user_list in is_not_auth_list.items():
             if len(not_auth_user_list) > 0:
                 message = f"渠道： {provider_name}, 这些账号({','.join(not_auth_user_list)})已经退登，请检查原因"
-                from monkeycode_compat.notify_core import emit_notification
+                from user_platform.notify_core import emit_notification
                 await emit_notification(
                     "account.logged_out",
                     params={
@@ -2741,7 +2741,7 @@ class ModelClientPool:
         的结果；且手动清理失败必须产生事件（点了按钮的人在等回执），定时失败只写日志。
         """
         from db import PostgresClient
-        from monkeycode_compat.notify_core import emit_notification
+        from user_platform.notify_core import emit_notification
         manual = trigger == "manual"
         keep_hours = config.Config.keep_response_hours()
         keep_days = config.Config.get_log_retention_days()
@@ -3536,7 +3536,7 @@ class ModelClientPool:
                             parts.append(f"更新映射 {len(updated)} 个")
                         if removed:
                             parts.append(f"下线 {len(removed)} 个")
-                        from monkeycode_compat.notify_core import emit_notification
+                        from user_platform.notify_core import emit_notification
                         await emit_notification(
                             "model.new",
                             params={

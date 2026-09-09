@@ -45,53 +45,64 @@ def _load_dc() -> Any:
 
 
 async def _principal_device_id(token: str) -> str | None:
-    """把 token 解析到其 principal 绑定的 device 明细 id（读 principal 的 device_id param）。
+    """把 token 解析到其 principal 绑定的 device 明细 id（读 principal 的 device_id
+    grants；多行=多设备时取首个，requested 选择由调用方显式做）。
 
-    principal kind 直取；identity kind（agent）经 agent_id → principal 再取。
-    没绑 device_id param 返回 None（交给后续外部 token 路径）。
+    公共解析（principal 直取；identity agent/task → principal 反查），替掉本插件
+    原先只认 agent 的手写版。没绑 device_id grant 返回 None（交给 owner 全量 /
+    外部 token 路径）。
     """
-    import builtin_tool_store
     import mcp_plugin_store
 
-    resolved = await builtin_tool_store.resolve_token(token)
-    if not resolved:
-        return None
-    principal_id: int | None = None
-    if resolved.get("kind") == "principal":
-        principal_id = int((resolved.get("target") or {}).get("id"))
-    elif resolved.get("kind") == "identity":
-        meta = resolved.get("token") or {}
-        target_id = meta.get("target_id")
-        if meta.get("target_type") == "agent" and target_id and str(target_id).isdigit():
-            principal_id = await mcp_plugin_store.get_agent_mcp_principal_id(int(target_id))
+    principal_id = await mcp_plugin_store.resolve_identity_to_principal(token)
     if principal_id is None:
         return None
-    value = await mcp_plugin_store.get_principal_param(principal_id, "device_id")
-    return str(value) if value is not None else None
+    values = await mcp_plugin_store.get_principal_grant_values(principal_id, "device_id")
+    return values[0] if values else None
 
 
 async def _resolve_device_id(token: str, requested_device_id: Any = None) -> str:
     """把每请求 token 解析成要驱动的协议 device_id。
 
-    与 cdp-bridge 的 ``_resolve_cdp_client_id`` 同构，两路：
+    与 cdp-bridge 的 ``_resolve_cdp_client_id`` 同构，三路：
     - 外部 MCP 访问 token（builtin_tool_tokens 行，绑 device 实例 + 具体 device 明细）：
       ``resolve_external_device_id`` 复核该设备属于本实例、已启用、有 token，返回其
       device_id。
-    - principal（或 agent identity 经 principal）带 ``device_id`` param：param 值是
-      device 明细 id（grants 物化的口径），这里再查 detail 取出协议 device_id。
-      requested_device_id（工具调用方显式给的）必须与此一致，否则拒。
+    - principal（或 agent/task identity 经 principal）绑了 ``device_id`` grants：
+      grant 值是 device 资源 id（多行=多设备，requested 必须命中集合；未指定取首个）。
+    - 未绑实例 → 默认全量：owner 名下全部 enabled 的 device 资源（requested 指了
+      必须在其中）。
 
-    两路都拿不到就报错，区分「未绑设备」与「连接 token 无效」。
+    三路都拿不到就报错，区分「未绑设备」与「连接 token 无效」。
     """
     import builtin_tool_store
+    import mcp_plugin_store
 
-    # principal 路径：param 值是 device 资源 id。
-    bound_resource_id = await _principal_device_id(token)
-    if bound_resource_id is not None:
+    # principal 路径：grants 值是 device 资源 id。
+    principal_id = await mcp_plugin_store.resolve_identity_to_principal(token)
+    if principal_id is not None:
+        bound = await mcp_plugin_store.get_principal_grant_values(principal_id, "device_id")
         requested = str(requested_device_id or "").strip()
-        if requested and requested != bound_resource_id:
-            raise ValueError(f"device {requested} is not authorized for this MCP principal")
-        resource = await builtin_tool_store.get_resource(int(bound_resource_id))
+        if bound:
+            chosen = requested if requested in bound else (bound[0] if not requested else None)
+            if chosen is None:
+                raise ValueError(f"device {requested} is not authorized for this MCP principal")
+        else:
+            # 未绑实例 → 默认全量：owner 名下全部 enabled device。
+            owner = await mcp_plugin_store.resolve_token_owner_user_id(token)
+            all_ids: list[str] = []
+            if owner:
+                resources = await builtin_tool_store.list_resources(
+                    resource_type="device", owner_user_id=owner, enabled=True,
+                )
+                all_ids = [str(r["id"]) for r in resources if r.get("id") is not None]
+            chosen = requested if requested in all_ids else (all_ids[0] if all_ids and not requested else None)
+            if chosen is None:
+                raise ValueError(
+                    f"device {requested} is not owned by this principal's owner"
+                    if requested else "MCP token is not authorized to operate any device"
+                )
+        resource = await builtin_tool_store.get_resource(int(chosen))
         if resource is None or resource.get("resource_type") != "device":
             raise ValueError("authorized device resource not found")
         if not resource.get("enabled", True) or not resource.get("token_hash"):
@@ -118,7 +129,30 @@ async def _resolve_device_id(token: str, requested_device_id: Any = None) -> str
     return str(device_id)
 
 
-def _wrap(cmd: str) -> Callable[[dict, PluginContext], Awaitable[Any]]:
+def _coerce_args(args: dict, props: dict) -> dict:
+    """按工具 schema 把字符串化的标量矫正回 bool/int。
+
+    LLM 调 capability_call 时常把布尔/数字参数发成字符串（实测 ``include_screenshot:
+    "true"``、``max_nodes: "20"``），设备端按严格类型解析就当 false/缺省处理——
+    典型症状是「要了截图却没返回」。schema 声明 boolean/integer 的属性且值确实
+    可解析时就地矫正；解析不动（或 schema 没声明）则原样透传，交给设备自己拒绝。
+    """
+    out = dict(args)
+    for key, spec in (props or {}).items():
+        if not isinstance(spec, dict) or key not in out:
+            continue
+        value = out[key]
+        if not isinstance(value, str):
+            continue
+        declared = spec.get("type")
+        if declared == "boolean" and value.strip() in ("true", "false"):
+            out[key] = value.strip() == "true"
+        elif declared == "integer" and value.strip().lstrip("-").isdigit():
+            out[key] = int(value.strip())
+    return out
+
+
+def _wrap(cmd: str, props: dict | None = None) -> Callable[[dict, PluginContext], Awaitable[Any]]:
     """把一条 device-control 命令包成 runtime 工具 handler。
 
     解析请求 token → device_id（双 token 见上），调 driver.call 下发并等 call-response。
@@ -137,8 +171,9 @@ def _wrap(cmd: str) -> Callable[[dict, PluginContext], Awaitable[Any]]:
         # device_id 由 token 解析；调用方不必也不能自己挑设备（防越权）。
         device_id = await _resolve_device_id(token, args.get("device_id"))
         timeout_ms = args.get("timeout_ms")
-        # 剥掉路由用的元字段，剩下的作为命令 args 下发设备。
+        # 剥掉路由用的元字段，剩下的作为命令 args 下发设备（先按 schema 矫正类型）。
         cmd_args = {k: v for k, v in args.items() if k not in ("device_id", "timeout_ms")}
+        cmd_args = _coerce_args(cmd_args, props)
         result = await driver.call(device_id, cmd, cmd_args, timeout_ms)
         return result
 
@@ -323,7 +358,7 @@ def register(reg: PluginRegistrar) -> None:
             "type": "integer",
             "description": "设备侧响应预算（ms），默认 15000，上限 60000。",
         }
-        reg.tool(name=name, description=description, params=params)(_wrap(name))
+        reg.tool(name=name, description=description, params=params)(_wrap(name, props))
 
 
 def apply_config(ctx: PluginContext) -> None:

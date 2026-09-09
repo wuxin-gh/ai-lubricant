@@ -169,7 +169,7 @@ def test_notification_delete_routes_are_registered_and_not_shadowed():
         assert decorator in admin_source, f"missing POST decorator for {path}"
         assert admin_source.index(decorator) < detail_at, f"{path} shadowed by detail route"
 
-    user_source = read_text(ROOT / "monkeycode_compat" / "routes_user_notifications.py")
+    user_source = read_text(ROOT / "user_platform" / "routes_user_notifications.py")
     assert '@router.delete("/{notification_id}")' in user_source
     user_detail_at = user_source.index('@router.get("/{notification_id}")')
     for path in ("/batch-delete", "/clear-read"):

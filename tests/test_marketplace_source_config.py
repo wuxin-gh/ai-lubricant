@@ -12,8 +12,8 @@ import types
 
 import pytest
 
-from monkeycode_compat.marketplace import config as mp_config
-from monkeycode_compat.marketplace.source_config import (
+from user_platform.marketplace import config as mp_config
+from user_platform.marketplace.source_config import (
     DEFAULT_REPO_URL,
     _normalize,
     public_view,
@@ -138,7 +138,7 @@ def test_load_settings_falls_back_to_default_when_no_env(fake_config, monkeypatc
 # ── _valid_module：发行模块无条件放行 ──────────────────────────────────────────
 
 def test_valid_module_release_modules_bypass(monkeypatch):
-    from monkeycode_compat.marketplace import routes
+    from user_platform.marketplace import routes
 
     settings = mp_config.MarketplaceSettings(
         repo_url="https://github.com/o/r", github_owner="o", github_repo="r",

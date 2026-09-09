@@ -13,8 +13,8 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
-from monkeycode_compat import notify_core
-from monkeycode_compat.notify_core import _filter_matches, emit_notification
+from user_platform import notify_core
+from user_platform.notify_core import _filter_matches, emit_notification
 
 
 class _FakeConn:

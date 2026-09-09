@@ -1,57 +1,56 @@
 #!/usr/bin/env bash
-# publish_github.sh —— 双远端发布：内部 Gitea 保留完整开发历史，GitHub 只收发布快照。
+# publish_github.sh —— 一键发布：提交在途改动 → 推内网 Gitea → 造 GitHub 公开快照 → 推 6 仓 + 标签
 #
-# 背景：
-#   * origin（内部 Gitea）承载全部开发历史，其中包含历史遗留的敏感配置与
-#     AGPL 时期的在树代码，绝不能整段推到 GitHub。
-#   * GitHub 仓库只接受「当前工作树的干净快照」——通过无父提交（orphan）
-#     的发布分支实现：每次发布是一个全新 commit，不携带任何历史。
+# 这条命令做什么（全程不切分支、不碰工作树，多会话并行共享 worktree 时安全）：
+#   0. 预检：GitHub 代理自配；自愈老脚本残留（子仓卡在 public-snapshot 分支）。
+#   1. 六仓（主仓+5 子仓）自动提交在途改动并推内网 origin；内网落后别机则报错退出。
+#   2. 每个子仓：用 HEAD 的树 + 上一次快照为父，git commit-tree 直接造新快照
+#      commit，推 github main + 标签。纯 plumbing——零 checkout、零分支切换。
+#   3. 主仓：同样用临时索引（GIT_INDEX_FILE）从 HEAD 树起步，只把 5 个子模块
+#      gitlink 换成各自公开快照 SHA，commit-tree 造快照推送。
+#      .gitmodules 是相对 URL（../<name>.git），内网 Gitea 与 GitHub 两边都正确解析，
+#      无需改写。
+#   4. 汇总报告：每仓快照 SHA、相对上次发布的变化量、GitHub 仓库地址、标签名。
 #
-# 安全前提（缺一不可）：
-#   1. 六个仓库（主仓 + 5 个 submodule）工作树必须干净——先提交在途改动。
-#   2. GitHub 上已建好对应空仓库（不要初始化 README，保持空仓）。
-#   3. env.ini / .env 等真实凭据已被 gitignore（已完成），凭据已轮换。
+# 用法（在主仓根目录）：
+#   bash script/publish_github.sh
+# 环境变量：
+#   GH_BASE      GitHub 前缀（默认 https://github.com/wuxin-gh）
+#   RELEASE_TAG  标签名（默认 v + 日期，如 v260909）
+#   NO_TAG=1     不打标签
+#   STRICT=1     不自动提交：任一仓工作树脏则报错退出（默认 0=自动提交）
 #
-# 用法（在主仓根目录执行）：
-#   GH_BASE="git@github.com:your-name" ./script/publish_github.sh
-#   # 或 HTTPS 形式：GH_BASE="https://github.com/your-name" ...
-#   # GitHub 上将创建/更新：ai-lubricant 及各 submodule 仓库的 main 分支。
-#
-# 之后的每次发布：直接重复运行本脚本即可——发布分支会以新快照 commit 追加，
-# GitHub 侧 main 保持「每次发布一个 commit」的线性历史。
-#
-# ⚠️ 永远不要 `git push github master`：github 远端只允许发布分支。
+# 安全前提：GitHub 仓库只收快照（每次发布 1 个 commit，不带开发历史）；
+#   ⚠ 永远不要 git push github master——github 远端只接受 public-snapshot。
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-GH_BASE="${GH_BASE:?请设置 GH_BASE，例如 git@github.com:your-name}"
-RELEASE_TAG="${RELEASE_TAG:-}"  # 可选：同时给六个公开快照打同名版本标签
+GH_BASE="${GH_BASE:-https://github.com/wuxin-gh}"
+RELEASE_TAG="${RELEASE_TAG:-v$(date +%y%m%d)}"
+NO_TAG="${NO_TAG:-0}"
+STRICT="${STRICT:-0}"
 REMOTE=github
-PUB=public-snapshot   # 本地发布分支名（仅本地，不推内部 Gitea）
+PUB=public-snapshot
 
-# 主仓与 submodule 在 GitHub 上的仓库名
 MAIN_REPO=ai-lubricant
-declare -A SUBS=(
+SUBS=(node_server nodes user-frontend mobile device-control)
+declare -A GH_REPO=(
   [node_server]=ai-lubricant-node-server
   [nodes]=ai-lubricant-nodes
   [user-frontend]=ai-lubricant-user-frontend
   [mobile]=ai-lubricant-mobile
   [device-control]=ai-lubricant-device-control
 )
-# 内部 Gitea URL 前缀（用于改写 .gitmodules 指向 GitHub）。
-# 默认从 origin 远端推导（origin 即内部 Gitea 主仓地址，剥去主仓名即为前缀），
-# 避免把内网地址硬编码进脚本；也可用环境变量显式覆盖。
-GITEA_PREFIX="${GITEA_PREFIX:-$(git remote get-url origin | sed 's#ai-lubricant\.git$##')}"
 
 # ── 工具函数 ──────────────────────────────────────────────────────────────
 
 push_with_retry() { # $@ = git push 参数。GitHub 连接常被代理/网络重置，重试至多 5 次。
   local attempt=1
-  until git push "$@"; do
+  until "$@"; do
     attempt=$((attempt + 1))
     if [ "$attempt" -gt 5 ]; then
-      echo "✗ 推送重试 5 次仍失败：git push $*" >&2
+      echo "✗ 推送重试 5 次仍失败：$*" >&2
       return 1
     fi
     echo "· 推送失败（第 $((attempt - 1)) 次），5 秒后重试…" >&2
@@ -59,112 +58,194 @@ push_with_retry() { # $@ = git push 参数。GitHub 连接常被代理/网络重
   done
 }
 
-ensure_remote() { # $1=仓库路径 $2=URL
-  local path="$1" url="$2"
-  (cd "$path"
-    if git remote get-url "$REMOTE" >/dev/null 2>&1; then
-      git remote set-url "$REMOTE" "$url"
-    else
-      git remote add "$REMOTE" "$url"
-    fi)
+fetch_with_retry() { # $1=仓库路径 $2=refspec；失败不致命（回退本地 public-snapshot 当父）
+  local p="$1" refspec="$2" attempt=1
+  until git -C "$p" fetch -q "$REMOTE" "$refspec" 2>/dev/null; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -gt 5 ]; then
+      return 1
+    fi
+    sleep 5
+  done
+  return 0
 }
 
-require_clean() { # $1=仓库路径 $2=名称（用于报错信息）
-  if [ -n "$(git -C "$1" status --porcelain)" ]; then
-    echo "✗ $2 有未提交改动，请先提交或贮藏后再发布。" >&2
+dev_branch() { # $1=仓库路径：当前开发分支名（直接读当前分支——主仓/子仓都在自己的开发分支上）
+  git -C "$1" symbolic-ref --short HEAD
+}
+
+ensure_remote() { # $1=仓库路径 $2=URL
+  if git -C "$1" remote get-url "$REMOTE" >/dev/null 2>&1; then
+    git -C "$1" remote set-url "$REMOTE" "$2"
+  else
+    git -C "$1" remote add "$REMOTE" "$2"
+  fi
+}
+
+ensure_proxy() {
+  local cur
+  cur="$(git config --global http.https://github.com/.proxy || true)"
+  if [ -z "$cur" ]; then
+    git config --global http.https://github.com/.proxy http://127.0.0.1:7890
+    echo "· 已设置 GitHub 专用代理 http://127.0.0.1:7890（仅 github.com 走代理）"
+  fi
+}
+
+# snapshot_parent <path>：该仓上一次快照 commit SHA（优先远端 main tip，回退本地分支，再回退空=首次）
+snapshot_parent() {
+  local p="$1" parent=""
+  if fetch_with_retry "$p" main && [ -n "$(git -C "$p" rev-parse --verify -q FETCH_HEAD)" ]; then
+    parent="$(git -C "$p" rev-parse FETCH_HEAD)"
+  elif git -C "$p" rev-parse --verify -q "refs/heads/${PUB}" >/dev/null 2>&1; then
+    parent="$(git -C "$p" rev-parse "$PUB")"
+    echo "· $p：github/main 拉不到，用本地 $PUB 当父快照（${parent:0:8}）"
+  else
+    echo "· $p：首次发布，orphan 快照（不带历史）"
+  fi
+  echo "$parent"
+}
+
+# diff_summary <path> <parent> <new>：相对上次发布的一行变化量（parent 空则标“首次发布”）
+diff_summary() {
+  local p="$1" parent="$2" new="$3"
+  if [ -z "$parent" ]; then
+    echo "首次发布"
+  else
+    git -C "$p" diff --stat "$parent" "$new" 2>/dev/null | tail -1 | sed 's/^ *//' || echo "?"
+  fi
+}
+
+# publish_snapshot <path> <parent> <tree> <msg>：树不变→跳过；否则 commit-tree 造快照 + 推 main + 标签。
+# 输出新快照 SHA（跳过时输出 parent）。
+publish_snapshot() {
+  local p="$1" parent="$2" tree="$3" msg="$4" new="" PARENT_FLAGS=()
+  if [ -n "$parent" ] && [ "$tree" = "$(git -C "$p" rev-parse -q --verify "${parent}^{tree}")" ]; then
+    echo "· $p 快照无变化，跳过 commit"
+    new="$parent"
+  else
+    if [ -n "$parent" ]; then PARENT_FLAGS=(-p "$parent"); fi
+    new="$(git -C "$p" commit-tree "$tree" "${PARENT_FLAGS[@]}" -m "$msg")"
+    git -C "$p" branch -f "$PUB" "$new"
+    push_with_retry git -C "$p" push "$REMOTE" "$PUB:main"
+    if [ "$NO_TAG" != "1" ]; then
+      git -C "$p" tag -f "$RELEASE_TAG" "$new"
+      push_with_retry git -C "$p" push -f "$REMOTE" "refs/tags/${RELEASE_TAG}"
+    fi
+  fi
+  echo "$new"
+}
+
+# ── 第 0 步：预检 + 自愈 ──────────────────────────────────────────────────
+
+ensure_proxy
+
+# 老脚本残留自愈：子仓/主仓当前分支若是 public-snapshot（上次发布崩在切分支时留下），
+# 切回各自开发分支。新脚本永不切分支，以后不会再产生此状态。
+for p in node_server nodes user-frontend mobile device-control; do
+  if [ "$(git -C "$p" symbolic-ref --short HEAD 2>/dev/null || true)" = "$PUB" ]; then
+    dev=master; [ "$p" = mobile ] && dev=main
+    git -C "$p" checkout -q "$dev"
+    echo "· 自愈：$p 从 $PUB 切回 $dev（老脚本残留）"
+  fi
+done
+if [ "$(git symbolic-ref --short HEAD 2>/dev/null || true)" = "$PUB" ]; then
+  git checkout -q master
+  echo "· 自愈：主仓从 $PUB 切回 master（老脚本残留）"
+fi
+
+ALL_REPOS=("${SUBS[@]}" .)
+declare -A DIRTY=()
+for p in "${ALL_REPOS[@]}"; do
+  if [ -n "$(git -C "$p" status --porcelain)" ]; then
+    DIRTY[$p]=1
+  fi
+done
+
+if [ "$STRICT" = "1" ] && [ "${#DIRTY[@]}" -gt 0 ]; then
+  echo "✗ STRICT=1 且以下仓有未提交改动，请先提交：${!DIRTY[*]}" >&2
+  exit 1
+fi
+
+for p in node_server nodes user-frontend mobile device-control; do
+  ensure_remote "$p" "${GH_BASE}/${GH_REPO[$p]}.git"
+done
+ensure_remote . "${GH_BASE}/${MAIN_REPO}.git"
+
+echo ""
+echo "════ 发布配置 ════"
+echo "  GitHub 前缀 : ${GH_BASE}"
+echo "  标签       : ${RELEASE_TAG}$([ "$NO_TAG" = 1 ] && echo '（跳过）')"
+echo "  自动提交   : $([ "$STRICT" = 1 ] && echo '关（STRICT=1）' || echo '开')"
+echo ""
+
+# ── 第 1 步：六仓自动提交在途改动 + 推内网 origin ────────────────────────
+
+echo "=== 1/3 提交在途改动并推内网 Gitea ==="
+for p in "${ALL_REPOS[@]}"; do
+  label="$p"; [ "$p" = "." ] && label="主仓"
+  if [ -n "${DIRTY[$p]:-}" ]; then
+    git -C "$p" add -A
+    git -C "$p" commit -qm "chore: 发布前自动提交在途改动（publish_github.sh）"
+    echo "· $label：在途改动已自动提交"
+  else
+    echo "· $label：工作树干净"
+  fi
+  dev="$(dev_branch "$p")"
+  git -C "$p" fetch -q origin
+  behind=$(git -C "$p" rev-list --count "HEAD..origin/$dev" 2>/dev/null || echo 0)
+  if [ "$behind" -gt 0 ]; then
+    echo "✗ $label 落后 origin/$dev $behind 个提交（别机推过新提交），请先 git pull 处理再发布。" >&2
     exit 1
   fi
-}
-
-# ── 第 0 步：主仓工作树必须干净 ───────────────────────────────────────────
-require_clean . "主仓"
-
-# ── 第 1 步：各 submodule —— 当前 HEAD 树发布为 GitHub main ────────────────
-declare -A PUB_SHA
-for path in node_server nodes user-frontend mobile device-control; do
-  repo="${SUBS[$path]}"
-  url="${GH_BASE}/${repo}.git"
-  ensure_remote "$path" "$url"
-
-  require_clean "$path" "$path"
-  orig_branch="$(git -C "$path" rev-parse --abbrev-ref HEAD)"
-
-  if git -C "$path" show-ref --verify --quiet "refs/heads/${PUB}"; then
-    # 已有发布分支：把当前 HEAD 的树重放到发布分支之上（新快照 commit）
-    git -C "$path" checkout -q "$PUB"
-    git -C "$path" read-tree --reset -u "$orig_branch"
+  ahead=$(git -C "$p" rev-list --count "origin/$dev..HEAD" 2>/dev/null || echo 0)
+  if [ "$ahead" -gt 0 ]; then
+    git -C "$p" push -q origin "$dev"
+    echo "· $label：已推内网（$ahead 个提交）"
   else
-    # 首次发布：orphan 分支，无任何历史
-    git -C "$path" checkout -q --orphan "$PUB"
-    git -C "$path" rm -rq --cached . 2>/dev/null || true
-    git -C "$path" add -A
+    echo "· $label：内网已同步"
   fi
-
-  if git -C "$path" diff --cached --quiet; then
-    echo "· $path 快照无变化，跳过 commit"
-  else
-    git -C "$path" commit -qm "release snapshot from ${orig_branch} @ $(git -C "$path" rev-parse --short "$orig_branch")"
-  fi
-  # 注意：必须在子 shell 外赋值，否则 PUB_SHA 不出 {} 范围（历史 bug：曾用 ( ... ) 包裹整个块致变量丢失）
-  PUB_SHA[$path]="$(git -C "$path" rev-parse HEAD)"
-
-  ( cd "$path" && push_with_retry "$REMOTE" "${PUB}:main" )
-  if [ -n "$RELEASE_TAG" ]; then
-    git -C "$path" tag -f "$RELEASE_TAG" "$PUB"
-    ( cd "$path" && push_with_retry -f "$REMOTE" "refs/tags/${RELEASE_TAG}" )
-  fi
-  git -C "$path" checkout -q "$orig_branch"
-done
-
-# ── 第 2 步：主仓 —— 组装发布快照（改 .gitmodules + submodule 指针）──────
-url="${GH_BASE}/${MAIN_REPO}.git"
-ensure_remote . "$url"
-
-if git show-ref --verify --quiet "refs/heads/${PUB}"; then
-  git checkout -q "$PUB"
-  git read-tree --reset -u master
-else
-  git checkout -q --orphan "$PUB"
-  git rm -rq --cached . 2>/dev/null || true
-  git add -A
-fi
-
-# 2a. .gitmodules 指向 GitHub 公开地址
-sed -i "s#${GITEA_PREFIX}#${GH_BASE}/#g" .gitmodules
-git add .gitmodules
-git submodule sync --quiet 2>/dev/null || true
-
-# 2b. submodule 指针指向各仓库的「公开快照 SHA」（内容与开发分支一致，SHA 属于 GitHub 历史）
-for path in node_server nodes user-frontend mobile device-control; do
-  (
-    cd "$path"
-    git checkout -q --detach "${PUB_SHA[$path]}"
-  )
-  git add "$path"
-done
-
-if git diff --cached --quiet; then
-  echo "· 主仓快照无变化，跳过 commit"
-else
-  git commit -qm "release snapshot from master @ $(git rev-parse --short master)"
-fi
-
-# ── 第 3 步：推送 + 恢复开发状态 ──────────────────────────────────────────
-push_with_retry "$REMOTE" "${PUB}:main"
-
-if [ -n "$RELEASE_TAG" ]; then
-  git tag -f "$RELEASE_TAG" "$PUB"
-  push_with_retry -f "$REMOTE" "refs/tags/${RELEASE_TAG}"
-fi
-
-git checkout -q master
-git submodule sync --quiet 2>/dev/null || true
-git submodule update --init --quiet
-for path in node_server nodes user-frontend mobile device-control; do
-  (cd "$path" && git remote set-url "$REMOTE" "${GH_BASE}/${SUBS[$path]}.git" 2>/dev/null || true)
 done
 
 echo ""
-echo "✓ 发布完成：${GH_BASE}/${MAIN_REPO}（main 分支，1 个新快照 commit）"
-echo "  submodule 指针与 .gitmodules 已指向 GitHub 公开地址。"
-echo "⚠  切记：永远不要执行 git push ${REMOTE} master。"
+
+# ── 第 2 步：各子仓造快照并推 GitHub ──────────────────────────────────────
+
+echo "=== 2/3 子仓快照 → GitHub main ==="
+declare -A PUB_SHA=()
+for p in "${SUBS[@]}"; do
+  parent="$(snapshot_parent "$p")"
+  tree="$(git -C "$p" rev-parse -q --verify 'HEAD^{tree}')"
+  src="$(git -C "$p" symbolic-ref --short HEAD) @ $(git -C "$p" rev-parse --short HEAD)"
+  new="$(publish_snapshot "$p" "$parent" "$tree" "release snapshot from ${src}")"
+  PUB_SHA[$p]="$new"
+  echo "  [$p] 快照 $(git -C "$p" rev-parse --short "$new")（$(diff_summary "$p" "$parent" "$new")）"
+done
+
+echo ""
+
+# ── 第 3 步：主仓快照（HEAD 树 + 子模块 gitlink 指向各公开快照）──────────
+
+echo "=== 3/3 主仓快照 → GitHub main ==="
+parent="$(snapshot_parent .)"
+idx="$(mktemp)"
+trap 'rm -f "$idx"' EXIT
+GIT_INDEX_FILE="$idx" git read-tree HEAD
+# .gitmodules 为相对 URL（../<name>.git），内网 Gitea 与 GitHub 两边解析都正确，无需改写。
+for p in "${SUBS[@]}"; do
+  GIT_INDEX_FILE="$idx" git update-index --cacheinfo "160000,${PUB_SHA[$p]},$p"
+done
+tree="$(GIT_INDEX_FILE="$idx" git write-tree)"
+rm -f "$idx"; trap - EXIT
+new="$(publish_snapshot . "$parent" "$tree" "release snapshot from master @ $(git rev-parse --short master)")"
+echo "  [主仓] 快照 $(git rev-parse --short "$new")（$(diff_summary . "$parent" "$new")）"
+
+# ── 报告 ──────────────────────────────────────────────────────────────────
+
+echo ""
+echo "════ 发布完成 ════"
+for p in "${SUBS[@]}"; do
+  echo "  ${GH_BASE}/${GH_REPO[$p]}  $(git -C "$p" rev-parse --short "${PUB_SHA[$p]}")"
+done
+echo "  ${GH_BASE}/${MAIN_REPO}  $(git rev-parse --short "$new")"
+[ "$NO_TAG" != "1" ] && echo "  标签：${RELEASE_TAG}（6 仓同名）"
+echo "  ⚠ 切记：永远不要 git push ${REMOTE} master——github 远端只接受 ${PUB} 快照。"

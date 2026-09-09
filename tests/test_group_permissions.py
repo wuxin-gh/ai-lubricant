@@ -19,9 +19,9 @@ async def db():
     await Tortoise.init(
         db_url="sqlite://:memory:",
         modules={
-            "monkeycode_compat": [
-                "monkeycode_compat.models_team_admin",
-                "monkeycode_compat.models",
+            "user_platform": [
+                "user_platform.models_team_admin",
+                "user_platform.models",
             ]
         },
         use_tz=False,
@@ -34,7 +34,7 @@ async def db():
 
 
 async def _make_team_group(team_id: str, name="g1"):
-    from monkeycode_compat.models import TeamGroup
+    from user_platform.models import TeamGroup
 
     gid = uuid.uuid4()
     await TeamGroup.create(id=gid, team_id=uuid.UUID(team_id), name=name)
@@ -43,8 +43,8 @@ async def _make_team_group(team_id: str, name="g1"):
 
 @pytest.mark.asyncio
 async def test_team_skill_group_binding_isolated_per_group(db):
-    from monkeycode_compat.models_team_admin import TeamSkill
-    from monkeycode_compat.team_users_service import team_users_service
+    from user_platform.models_team_admin import TeamSkill
+    from user_platform.team_users_service import team_users_service
 
     team_id = str(uuid.uuid4())
     g1 = await _make_team_group(team_id, "g1")
@@ -86,8 +86,8 @@ async def test_team_skill_group_binding_isolated_per_group(db):
 
 @pytest.mark.asyncio
 async def test_team_skill_set_skills_rejects_other_team_group(db):
-    from monkeycode_compat.models_team_admin import TeamSkill
-    from monkeycode_compat.team_users_service import team_users_service
+    from user_platform.models_team_admin import TeamSkill
+    from user_platform.team_users_service import team_users_service
 
     team_a = str(uuid.uuid4())
     team_b = str(uuid.uuid4())

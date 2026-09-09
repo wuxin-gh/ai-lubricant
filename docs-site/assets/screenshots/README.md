@@ -4,7 +4,7 @@
 
 ## 1. 能力详解页的预留图位（约定路径）
 
-11 个 `cap-*.html` 的每个功能小节正下方各有一个图位，共 63 个。路径规则：
+`cap-*.html` 的功能小节正下方可放图位。路径规则：
 
 ```text
 <页面名去掉 .html>/<小节 id>.png
@@ -16,7 +16,7 @@
 
 **一个图位放多张**：在基名后加 `-1`、`-2`、`-3`…（如 `cap-llm-server/testing.png + testing-1.png + testing-2.png`，或从 `testing-1.png` 起全部编号），加载时按序自动追加进同一图位并显示张数；从缺的那个编号起停止（上限 24 张）。
 
-各页图位数：cap-llm-server 11、cap-code-channel 8、cap-editor 8、cap-device-control 7、cap-node 6、cap-agent 6、cap-browser 5、cap-security 4、cap-mail 3、cap-mobile 3、cap-resource-center 2。
+当前各页图位数（仅保留已有截图的图位；无图位小节要补图时按路径约定新增 `<figure class="shot">` 即可）：cap-llm-server 11、cap-editor 6、cap-agent 2、cap-android-control 2、cap-browser 2、cap-node 1、cap-security 1。待补图位保留在：cap-mobile 3、cap-resource-center 2、cap-ios-control 6。
 
 ## 2. 既有管理端截图（按主题分目录，45 张）
 

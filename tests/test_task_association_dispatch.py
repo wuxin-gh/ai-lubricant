@@ -20,8 +20,8 @@ _proj = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _proj not in sys.path:
     sys.path.insert(0, _proj)
 
-from monkeycode_compat import task_service as task_service_module
-from monkeycode_compat.task_service import TaskService, _safe_subdir
+from user_platform import task_service as task_service_module
+from user_platform.task_service import TaskService, _safe_subdir
 
 
 ORIGIN = "http://127.0.0.1:8003"
@@ -35,9 +35,9 @@ async def tortoise_db():
     await Tortoise.init(
         db_url="sqlite::memory:",
         modules={
-            "monkeycode_compat": [
-                "monkeycode_compat.models_git",
-                "monkeycode_compat.models_project",
+            "user_platform": [
+                "user_platform.models_git",
+                "user_platform.models_project",
             ]
         },
     )
@@ -56,7 +56,7 @@ def proxy_configured(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def neutralize_prefetch(monkeypatch):
-    from monkeycode_compat import git_service
+    from user_platform import git_service
 
     monkeypatch.setattr(
         git_service.git_service, "_prefetch_repositories", lambda *_a, **_k: None
@@ -64,7 +64,7 @@ def neutralize_prefetch(monkeypatch):
 
 
 async def _make_identity(user_id):
-    from monkeycode_compat.models_git import GitIdentity
+    from user_platform.models_git import GitIdentity
 
     return await GitIdentity.create(
         id=uuid.uuid4(), user_id=uuid.UUID(user_id), platform="github", access_token="ghp_tok"
@@ -72,7 +72,7 @@ async def _make_identity(user_id):
 
 
 async def _make_project(user_id, identity_id, name, repo_url, branch=None):
-    from monkeycode_compat.models_project import Project
+    from user_platform.models_project import Project
 
     return await Project.create(
         id=uuid.uuid4(),
@@ -136,8 +136,8 @@ def test_proxy_token_rejects_unknown_mode():
 # ── _build_association_env ──────────────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_readable_association_becomes_dep_git_env(tortoise_db, monkeypatch):
-    from monkeycode_compat import git_clients as gc, project_service
-    from monkeycode_compat.models_project import ProjectAssociation
+    from user_platform import git_clients as gc, project_service
+    from user_platform.models_project import ProjectAssociation
 
     owner = str(uuid.uuid4())
     ident = await _make_identity(owner)
@@ -173,8 +173,8 @@ async def test_readable_association_becomes_dep_git_env(tortoise_db, monkeypatch
 
 @pytest.mark.asyncio
 async def test_read_only_association_gets_ro_mode(tortoise_db, monkeypatch):
-    from monkeycode_compat import git_clients as gc
-    from monkeycode_compat.models_project import ProjectAssociation
+    from user_platform import git_clients as gc
+    from user_platform.models_project import ProjectAssociation
 
     owner = str(uuid.uuid4())
     ident = await _make_identity(owner)
@@ -198,8 +198,8 @@ async def test_read_only_association_gets_ro_mode(tortoise_db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_unreadable_association_becomes_placeholder(tortoise_db, monkeypatch):
-    from monkeycode_compat import git_clients as gc
-    from monkeycode_compat.models_project import ProjectAssociation
+    from user_platform import git_clients as gc
+    from user_platform.models_project import ProjectAssociation
 
     owner = str(uuid.uuid4())
     ident = await _make_identity(owner)
@@ -229,8 +229,8 @@ async def test_unreadable_association_becomes_placeholder(tortoise_db, monkeypat
 @pytest.mark.asyncio
 async def test_probe_failure_degrades_to_placeholder(tortoise_db, monkeypatch):
     """A capability probe that raises must not abort dispatch."""
-    from monkeycode_compat import git_clients as gc
-    from monkeycode_compat.models_project import ProjectAssociation
+    from user_platform import git_clients as gc
+    from user_platform.models_project import ProjectAssociation
 
     owner = str(uuid.uuid4())
     ident = await _make_identity(owner)
@@ -253,8 +253,8 @@ async def test_probe_failure_degrades_to_placeholder(tortoise_db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_explicit_subdir_is_used_and_sanitized(tortoise_db, monkeypatch):
-    from monkeycode_compat import git_clients as gc
-    from monkeycode_compat.models_project import ProjectAssociation
+    from user_platform import git_clients as gc
+    from user_platform.models_project import ProjectAssociation
 
     owner = str(uuid.uuid4())
     ident = await _make_identity(owner)
@@ -290,7 +290,7 @@ async def test_no_project_or_no_associations_yields_empty(tortoise_db):
 @pytest.mark.asyncio
 async def test_unconfigured_proxy_yields_empty(tortoise_db, monkeypatch):
     """Without a proxy origin/control token there is no way to mint dep URLs."""
-    from monkeycode_compat.models_project import ProjectAssociation
+    from user_platform.models_project import ProjectAssociation
 
     owner = str(uuid.uuid4())
     ident = await _make_identity(owner)

@@ -5,6 +5,7 @@ port-range allocation, and the POSIX shell launcher scripts the node runs.
 """
 from __future__ import annotations
 
+import asyncio
 import shutil
 import subprocess
 import uuid
@@ -15,12 +16,12 @@ import pytest
 import pytest_asyncio
 
 from tortoise import Tortoise
-from monkeycode_compat import tunnel_allocator as alloc
-from monkeycode_compat import tunnel_node_dispatch as dispatch
-from monkeycode_compat import tunnel_runtime_manager as rm
-from monkeycode_compat import tunnel_service as svc
-from monkeycode_compat import tunnel_cloudflare as cf
-from monkeycode_compat.models_tunnel import TunnelBinding, TunnelScheme
+from user_platform import tunnel_allocator as alloc
+from user_platform import tunnel_node_dispatch as dispatch
+from user_platform import tunnel_runtime_manager as rm
+from user_platform import tunnel_service as svc
+from user_platform import tunnel_cloudflare as cf
+from user_platform.models_tunnel import TunnelBinding, TunnelScheme
 
 
 @pytest_asyncio.fixture
@@ -28,11 +29,11 @@ async def db():
     """In-memory sqlite so allocate()'s _used_ports query can run."""
     await Tortoise.init(
         config={
-            "connections": {"monkeycode_compat": "sqlite://:memory:"},
+            "connections": {"user_platform": "sqlite://:memory:"},
             "apps": {
-                "monkeycode_compat": {
-                    "models": ["monkeycode_compat.models_tunnel"],
-                    "default_connection": "monkeycode_compat",
+                "user_platform": {
+                    "models": ["user_platform.models_tunnel"],
+                    "default_connection": "user_platform",
                 }
             },
         },
@@ -62,7 +63,13 @@ def _binding(local_port=8000, allocated="30001") -> TunnelBinding:
     b.local_host = "127.0.0.1"
     b.local_port = local_port
     b.allocated_value = allocated
+    b.proxy_name = None
+    b.remote_port = None
     return b
+
+
+async def fake_noop_notify(*, runtime_id=None, target_id=None):
+    return None
 
 
 # ── config validation ──────────────────────────────────────────────────────
@@ -77,6 +84,23 @@ def test_validate_frpc_requires_server_addr():
 def test_validate_frpc_requires_port_range():
     with pytest.raises(svc.TunnelServiceError):
         svc._validate_scheme_config("frpc", {"server_addr": "h", "port_range": [1]})
+
+
+def test_validate_frpc_port_range_now_optional():
+    """port_range 选填:不写或写零值 [0, 0] 都视为「不限端口」。"""
+    cfg = {"server_addr": "h"}
+    svc._validate_scheme_config("frpc", cfg)  # no raise, key stays absent
+    assert "port_range" not in cfg
+    cfg = {"server_addr": "h", "port_range": [0, 0]}
+    svc._validate_scheme_config("frpc", cfg)  # stale [0,0] self-heals → dropped
+    assert "port_range" not in cfg
+
+
+def test_validate_frpc_rejects_inverted_port_range():
+    with pytest.raises(svc.TunnelServiceError):
+        svc._validate_scheme_config(
+            "frpc", {"server_addr": "h", "port_range": [30100, 30000]}
+        )
 
 
 def test_validate_cloudflared_quick_ok():
@@ -214,6 +238,61 @@ async def test_allocate_frpc_picks_first_free_port(db):
 
 
 @pytest.mark.asyncio
+async def test_allocate_without_port_range_is_rejected(db):
+    """Range-less scheme never auto-allocates; the binding must name its port."""
+    scheme = _scheme("frpc", {"server_addr": "10.0.0.8"})
+    with pytest.raises(alloc.AllocationError) as exc:
+        await alloc.allocate(scheme)
+    assert "port_range" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_allocate_treats_stale_zero_range_as_unset(db):
+    """A stored [0, 0] (old front-end empty submission) behaves like no range."""
+    scheme = _scheme("frpc", {"server_addr": "10.0.0.8", "port_range": [0, 0]})
+    with pytest.raises(alloc.AllocationError):
+        await alloc.allocate(scheme)
+
+
+@pytest.mark.asyncio
+async def test_create_binding_on_rangeless_scheme_requires_remote_port(db, monkeypatch):
+    """Create without remote_port on a range-less scheme is invalid_argument."""
+    scheme = await TunnelScheme.create(
+        id=uuid.uuid4(), user_id=uuid.uuid4(), name="frp", kind="frpc",
+        config={"server_addr": "h", "server_port": 7000},
+        enabled=True,
+    )
+    monkeypatch.setattr(
+        "user_platform.tunnel_notify.notify_tunnel_changed", fake_noop_notify
+    )
+    with pytest.raises(svc.TunnelServiceError) as exc:
+        await svc.create_binding(
+            str(scheme.user_id), scheme_id=str(scheme.id),
+            node_id=svc.MAIN_SERVICE_TARGET, local_port=8000,
+        )
+    assert exc.value.code == "invalid_argument"
+
+
+@pytest.mark.asyncio
+async def test_create_binding_on_rangeless_scheme_with_remote_port_ok(db, monkeypatch):
+    """A range-less scheme works fine when every binding names its port."""
+    scheme = await TunnelScheme.create(
+        id=uuid.uuid4(), user_id=uuid.uuid4(), name="frp", kind="frpc",
+        config={"server_addr": "h", "server_port": 7000, "domain": "t.example.com"},
+        enabled=True,
+    )
+    monkeypatch.setattr(
+        "user_platform.tunnel_notify.notify_tunnel_changed", fake_noop_notify
+    )
+    row = await svc.create_binding(
+        str(scheme.user_id), scheme_id=str(scheme.id),
+        node_id=svc.MAIN_SERVICE_TARGET, local_port=8000, remote_port=12345,
+    )
+    assert row["public_addr"] == "t.example.com:12345"
+    assert row["allocated_value"] is None
+
+
+@pytest.mark.asyncio
 async def test_allocate_frpc_prefers_public_domain(db):
     """Public display uses domain; client connection still uses server_addr."""
     scheme = _scheme(
@@ -301,6 +380,194 @@ def test_npc_conf_contains_vkey_when_token_set():
 def test_npc_conf_omits_vkey_when_no_token():
     conf = dispatch._npc_conf(_binding(), _scheme("npc", {"server_addr": "nps", "server_port": 8024}))
     assert "vkey=" not in conf
+
+
+# ── frpc user + proxy name / remote_port overrides ─────────────────────────
+
+
+def test_frpc_toml_emits_user_when_set():
+    conf = dispatch._frpc_group_toml(
+        [_binding()],
+        _scheme("frpc", {"server_addr": "h", "server_port": 7000, "user": "ops"}),
+    )
+    assert 'user = "ops"' in conf
+
+
+def test_frpc_toml_omits_user_when_absent():
+    conf = dispatch._frpc_group_toml(
+        [_binding()],
+        _scheme("frpc", {"server_addr": "h", "server_port": 7000}),
+    )
+    assert "user =" not in conf
+
+
+def test_frpc_toml_uses_proxy_name_override():
+    b = _binding()
+    b.proxy_name = "web"
+    conf = dispatch._frpc_group_toml([b], _scheme("frpc", {"server_addr": "h", "server_port": 7000}))
+    assert 'name = "web"' in conf
+    assert f'tunnel-{b.id}' not in conf
+
+
+def test_frpc_toml_falls_back_to_tunnel_id_name():
+    conf = dispatch._frpc_group_toml([_binding()], _scheme("frpc", {"server_addr": "h", "server_port": 7000}))
+    assert 'name = "tunnel-' in conf
+
+
+def test_frpc_toml_uses_remote_port_override():
+    b = _binding(allocated="30001")
+    b.remote_port = 40000
+    conf = dispatch._frpc_group_toml([b], _scheme("frpc", {"server_addr": "h", "server_port": 7000}))
+    assert "remotePort = 40000" in conf
+    assert "remotePort = 30001" not in conf
+
+
+def test_npc_conf_uses_remote_port_override():
+    b = _binding(allocated="30001")
+    b.remote_port = 40000
+    conf = dispatch._npc_conf(b, _scheme("npc", {"server_addr": "nps", "server_port": 8024}))
+    assert "remote_port=40000" in conf
+    assert "remote_port=30001" not in conf
+
+
+def test_validate_frpc_accepts_safe_user():
+    cfg = {"server_addr": "h", "port_range": [1, 2], "user": "ops.name-1"}
+    svc._validate_scheme_config("frpc", cfg)
+    assert cfg["user"] == "ops.name-1"
+
+
+def test_validate_frpc_rejects_bad_user_charset():
+    with pytest.raises(svc.TunnelServiceError):
+        svc._validate_scheme_config(
+            "frpc", {"server_addr": "h", "port_range": [1, 2], "user": 'ops"; rm'}
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_binding_with_remote_port_skips_allocation(db, monkeypatch):
+    """An explicit remote_port is the deterministic address; no pool allocation."""
+    scheme = await TunnelScheme.create(
+        id=uuid.uuid4(), user_id=uuid.uuid4(), name="frp", kind="frpc",
+        config={"server_addr": "h", "server_port": 7000, "port_range": [30000, 30010]},
+        enabled=True,
+    )
+
+    async def fail_allocate(_scheme):
+        raise AssertionError("allocate must not run with an explicit remote_port")
+
+    monkeypatch.setattr(svc, "allocate", fail_allocate)
+    monkeypatch.setattr(
+        "user_platform.tunnel_notify.notify_tunnel_changed", fake_noop_notify
+    )
+    row = await svc.create_binding(
+        str(scheme.user_id), scheme_id=str(scheme.id),
+        node_id=svc.MAIN_SERVICE_TARGET, local_port=8000,
+        proxy_name="web", remote_port=40000,
+    )
+    assert row["remote_port"] == 40000
+    assert row["proxy_name"] == "web"
+    assert row["allocated_value"] is None
+    assert row["public_addr"] == "h:40000"
+
+
+@pytest.mark.asyncio
+async def test_create_binding_remote_port_collision_rejected(db, monkeypatch):
+    scheme = await TunnelScheme.create(
+        id=uuid.uuid4(), user_id=uuid.uuid4(), name="frp", kind="frpc",
+        config={"server_addr": "h", "server_port": 7000, "port_range": [30000, 30010]},
+        enabled=True,
+    )
+    await TunnelBinding.create(
+        id=uuid.uuid4(), user_id=scheme.user_id, scheme_id=scheme.id,
+        node_id="__main__", local_host="127.0.0.1", local_port=8000,
+        allocated_value="40000", desired_state="running",
+    )
+    monkeypatch.setattr(
+        "user_platform.tunnel_notify.notify_tunnel_changed", fake_noop_notify
+    )
+    with pytest.raises(svc.TunnelServiceError) as exc:
+        await svc.create_binding(
+            str(scheme.user_id), scheme_id=str(scheme.id),
+            node_id=svc.MAIN_SERVICE_TARGET, local_port=8001, remote_port=40000,
+        )
+    assert exc.value.code == "in_use"
+
+
+@pytest.mark.asyncio
+async def test_create_binding_proxy_name_collision_rejected(db, monkeypatch):
+    scheme = await TunnelScheme.create(
+        id=uuid.uuid4(), user_id=uuid.uuid4(), name="frp", kind="frpc",
+        config={"server_addr": "h", "server_port": 7000, "port_range": [30000, 30010]},
+        enabled=True,
+    )
+    await TunnelBinding.create(
+        id=uuid.uuid4(), user_id=scheme.user_id, scheme_id=scheme.id,
+        node_id="__main__", local_host="127.0.0.1", local_port=8000,
+        proxy_name="web", desired_state="running",
+    )
+    monkeypatch.setattr(
+        "user_platform.tunnel_notify.notify_tunnel_changed", fake_noop_notify
+    )
+    with pytest.raises(svc.TunnelServiceError) as exc:
+        await svc.create_binding(
+            str(scheme.user_id), scheme_id=str(scheme.id),
+            node_id=svc.MAIN_SERVICE_TARGET, local_port=8001, proxy_name="web",
+        )
+    assert exc.value.code == "in_use"
+
+
+@pytest.mark.asyncio
+async def test_update_binding_remote_port_recomputes_public_addr(db, monkeypatch):
+    scheme = await TunnelScheme.create(
+        id=uuid.uuid4(), user_id=uuid.uuid4(), name="frp", kind="frpc",
+        config={
+            "server_addr": "h", "server_port": 7000, "port_range": [30000, 30010],
+            "domain": "tunnel.example.com",
+        },
+        enabled=True,
+    )
+    binding = await TunnelBinding.create(
+        id=uuid.uuid4(), user_id=scheme.user_id, scheme_id=scheme.id,
+        node_id="__main__", local_host="127.0.0.1", local_port=8000,
+        allocated_value="30000", public_addr="tunnel.example.com:30000",
+        desired_state="running", client_status="running",
+    )
+    monkeypatch.setattr(
+        "user_platform.tunnel_notify.notify_tunnel_changed", fake_noop_notify
+    )
+    result = await svc.update_binding(
+        str(scheme.user_id), str(binding.id), scheme_id=str(scheme.id),
+        node_id="__main__", local_port=8000, remote_port=41000,
+    )
+    assert result["remote_port"] == 41000
+    assert result["allocated_value"] is None
+    assert result["public_addr"] == "tunnel.example.com:41000"
+
+
+@pytest.mark.asyncio
+async def test_update_binding_empty_remote_port_keeps_current(db, monkeypatch):
+    """Edit with no remote_port keeps the pool allocation and its address."""
+    scheme = await TunnelScheme.create(
+        id=uuid.uuid4(), user_id=uuid.uuid4(), name="frp", kind="frpc",
+        config={"server_addr": "h", "server_port": 7000, "port_range": [30000, 30010]},
+        enabled=True,
+    )
+    binding = await TunnelBinding.create(
+        id=uuid.uuid4(), user_id=scheme.user_id, scheme_id=scheme.id,
+        node_id="__main__", local_host="127.0.0.1", local_port=8000,
+        allocated_value="30000", public_addr="h:30000",
+        desired_state="running", client_status="running",
+    )
+    monkeypatch.setattr(
+        "user_platform.tunnel_notify.notify_tunnel_changed", fake_noop_notify
+    )
+    result = await svc.update_binding(
+        str(scheme.user_id), str(binding.id), scheme_id=str(scheme.id),
+        node_id="__main__", local_port=9000,
+    )
+    assert result["remote_port"] is None
+    assert result["allocated_value"] == "30000"
+    assert result["public_addr"] == "h:30000"
 
 
 def test_ensure_binary_script_uses_configured_url_and_sha():
@@ -725,7 +992,7 @@ async def test_update_scheme_bumps_runtime_revisions_for_hot_restart(db, monkeyp
                 "zone_id": "z", "domain": "example.com"},
         enabled=True,
     )
-    from monkeycode_compat.models_tunnel import TunnelRuntime
+    from user_platform.models_tunnel import TunnelRuntime
 
     running_rt = await TunnelRuntime.create(
         id=uuid.uuid4(), scheme_id=scheme.id, target_id="__main__",
@@ -742,7 +1009,7 @@ async def test_update_scheme_bumps_runtime_revisions_for_hot_restart(db, monkeyp
         return None
 
     monkeypatch.setattr(
-        "monkeycode_compat.tunnel_notify.notify_tunnel_changed", fake_notify
+        "user_platform.tunnel_notify.notify_tunnel_changed", fake_notify
     )
 
     await svc.update_scheme(
@@ -780,11 +1047,12 @@ async def test_reconcile_stops_process_when_scheme_disabled(db, monkeypatch):
     assert stopped, "disabling a scheme must stop its running client"
     assert out.runtime_status == "failed"
     assert "disabled" in (out.error or "")
+    assert out.config_revision == 1, "stopping a live client must fence its late events"
 
 
 def test_is_live_guards_on_revision():
     """The supervisor's is_live must treat a revision bump as not-live."""
-    from monkeycode_compat.tunnel_supervisor import LocalTunnelSupervisor
+    from user_platform.tunnel_supervisor import LocalTunnelSupervisor
 
     sup = LocalTunnelSupervisor()
     key = "rt-1"
@@ -798,6 +1066,231 @@ def test_is_live_guards_on_revision():
     assert sup.is_live("other", 1) is False
     sup._procs[key].returncode = 1
     assert sup.is_live(key, 5) is False
+
+
+# ── binding membership changes must fence the group's rendered config ──────
+
+
+async def _frpc_group_fixture(db):
+    """One enabled frpc scheme + one running __main__ binding + its runtime."""
+    scheme = await TunnelScheme.create(
+        id=uuid.uuid4(), user_id=uuid.uuid4(), name="frp", kind="frpc",
+        config={"server_addr": "h", "server_port": 7000, "port_range": [30000, 30010]},
+        enabled=True,
+    )
+    binding = await TunnelBinding.create(
+        id=uuid.uuid4(), user_id=scheme.user_id, scheme_id=scheme.id,
+        node_id="__main__", local_host="127.0.0.1", local_port=8000,
+        allocated_value="30000", desired_state="running", client_status="running",
+    )
+    runtime = await rm.TunnelRuntime.create(
+        id=uuid.uuid4(), scheme_id=scheme.id, target_id="__main__",
+        runtime_key=f"__main__:{scheme.id}", kind="frpc",
+        desired_state="running", runtime_status="running", config_revision=3,
+    )
+    return scheme, binding, runtime
+
+
+@pytest.mark.asyncio
+async def test_stop_binding_fences_group_revision(db, monkeypatch):
+    """Stopping one binding invalidates the grouped frpc process.
+
+    Without the bump the reconciler's liveness guard adopts the healthy frpc
+    process and never re-renders its config — the stopped binding's proxy
+    keeps being forwarded (the "关不掉代理" bug).
+    """
+    scheme, binding, runtime = await _frpc_group_fixture(db)
+    monkeypatch.setattr(
+        "user_platform.tunnel_notify.notify_tunnel_changed", fake_noop_notify
+    )
+    await svc.stop_binding_service(str(scheme.user_id), str(binding.id))
+    refreshed = await rm.TunnelRuntime.get(id=runtime.id)
+    assert refreshed.config_revision == 4, "stop must fence the group config"
+
+
+@pytest.mark.asyncio
+async def test_start_binding_fences_group_revision(db, monkeypatch):
+    """Starting a binding must also fence: a running group only gains the new
+    member through a re-render, an adoption keeps it out forever."""
+    scheme, binding, runtime = await _frpc_group_fixture(db)
+    await TunnelBinding.filter(id=binding.id).update(
+        desired_state="stopped", client_status="stopped"
+    )
+    monkeypatch.setattr(
+        "user_platform.tunnel_notify.notify_tunnel_changed", fake_noop_notify
+    )
+    await svc.start_binding(str(scheme.user_id), str(binding.id))
+    refreshed = await rm.TunnelRuntime.get(id=runtime.id)
+    assert refreshed.config_revision == 4, "start must fence the group config"
+
+
+@pytest.mark.asyncio
+async def test_create_binding_fences_group_revision(db, monkeypatch):
+    """A second binding added to a healthy grouped runtime must fence it too."""
+    scheme, _binding, runtime = await _frpc_group_fixture(db)
+    monkeypatch.setattr(
+        "user_platform.tunnel_notify.notify_tunnel_changed", fake_noop_notify
+    )
+    await svc.create_binding(
+        str(scheme.user_id), scheme_id=str(scheme.id),
+        node_id="__main__", local_port=9000, remote_port=40000,
+    )
+    refreshed = await rm.TunnelRuntime.get(id=runtime.id)
+    assert refreshed.config_revision == 4, "create must fence the group config"
+
+
+@pytest.mark.asyncio
+async def test_delete_binding_fences_group_revision(db, monkeypatch):
+    scheme, binding, runtime = await _frpc_group_fixture(db)
+    monkeypatch.setattr(
+        "user_platform.tunnel_notify.notify_tunnel_changed", fake_noop_notify
+    )
+    await svc.delete_binding(str(scheme.user_id), str(binding.id))
+    refreshed = await rm.TunnelRuntime.get(id=runtime.id)
+    assert refreshed.config_revision == 4, "delete must fence the group config"
+
+
+@pytest.mark.asyncio
+async def test_update_binding_fences_old_and_new_node_groups(db, monkeypatch):
+    """Moving a binding between targets invalidates both groups."""
+    scheme = await TunnelScheme.create(
+        id=uuid.uuid4(), user_id=uuid.uuid4(), name="frp", kind="frpc",
+        config={"server_addr": "h", "server_port": 7000, "port_range": [30000, 30010]},
+        enabled=True,
+    )
+    binding = await TunnelBinding.create(
+        id=uuid.uuid4(), user_id=scheme.user_id, scheme_id=scheme.id,
+        node_id="node-old", local_host="127.0.0.1", local_port=8000,
+        allocated_value="30000", desired_state="running", client_status="running",
+    )
+    old_rt = await rm.TunnelRuntime.create(
+        id=uuid.uuid4(), scheme_id=scheme.id, target_id="node-old",
+        runtime_key=f"node-old:{scheme.id}", kind="frpc",
+        desired_state="running", runtime_status="running", config_revision=3,
+    )
+    new_rt = await rm.TunnelRuntime.create(
+        id=uuid.uuid4(), scheme_id=scheme.id, target_id="node-new",
+        runtime_key=f"node-new:{scheme.id}", kind="frpc",
+        desired_state="running", runtime_status="running", config_revision=7,
+    )
+    monkeypatch.setattr(
+        "user_platform.tunnel_notify.notify_tunnel_changed", fake_noop_notify
+    )
+    await svc.update_binding(
+        str(scheme.user_id), str(binding.id), scheme_id=str(scheme.id),
+        node_id="node-new", local_port=8000,
+    )
+    assert (await rm.TunnelRuntime.get(id=old_rt.id)).config_revision == 4
+    assert (await rm.TunnelRuntime.get(id=new_rt.id)).config_revision == 8
+
+
+# ── reconcile_all adoption guards ──────────────────────────────────────────
+
+
+async def _flush_spawned_reconciles():
+    """Await the reconcile tasks reconcile_all spawns via create_task."""
+    pending = asyncio.all_tasks() - {asyncio.current_task()}
+    if pending:
+        await asyncio.wait_for(asyncio.gather(*pending), timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_reconcile_all_stops_disabled_scheme_despite_matching_inventory(db, monkeypatch):
+    """Regression: the node-scan adoption guard must check scheme.enabled.
+
+    A client restarted by a stale reconcile runs at the matching revision; the
+    old guard adopted it without looking at the scheme, so a disabled scheme's
+    proxy kept serving (the "开关关了又自动打开" bug).
+    """
+    scheme = await TunnelScheme.create(
+        id=uuid.uuid4(), user_id=uuid.uuid4(), name="frp", kind="frpc",
+        config={"server_addr": "h", "server_port": 7000},
+        enabled=False,
+    )
+    runtime = await rm.TunnelRuntime.create(
+        id=uuid.uuid4(), scheme_id=scheme.id, target_id="node-1",
+        runtime_key=f"node-1:{scheme.id}", kind="frpc",
+        desired_state="running", runtime_status="running", config_revision=5,
+    )
+    runtime.run_id = f"tunnel-runtime:{runtime.id}"
+    await runtime.save(update_fields=["run_id"])
+
+    class FakeNodeClient:
+        async def list_active_tool_runs(self, node_id):
+            return [{"run_id": runtime.run_id, "revision": 5, "pid": 4242}]
+
+    monkeypatch.setattr(
+        "user_platform.node_client.get_local_node_client", lambda: FakeNodeClient()
+    )
+    stopped: list = []
+
+    async def fake_stop(rt):
+        stopped.append(str(rt.id))
+
+    monkeypatch.setattr(rm, "_stop_runtime", fake_stop)
+
+    await rm.reconcile_all()
+    await _flush_spawned_reconciles()
+    assert stopped == [str(runtime.id)], (
+        "a disabled scheme's healthy-looking client must be stopped, not adopted"
+    )
+
+
+@pytest.mark.asyncio
+async def test_reconcile_all_stops_disabled_scheme_on_main_despite_live_process(db, monkeypatch):
+    """__main__ scan: liveness must not protect a disabled scheme's client."""
+    scheme = await TunnelScheme.create(
+        id=uuid.uuid4(), user_id=uuid.uuid4(), name="frp", kind="frpc",
+        config={"server_addr": "h", "server_port": 7000},
+        enabled=False,
+    )
+    runtime = await rm.TunnelRuntime.create(
+        id=uuid.uuid4(), scheme_id=scheme.id, target_id="__main__",
+        runtime_key=f"__main__:{scheme.id}", kind="frpc",
+        desired_state="running", runtime_status="running", config_revision=5,
+    )
+    monkeypatch.setattr(rm, "_local_runtime_live", lambda rt, s: True)
+    stopped: list = []
+
+    async def fake_stop(rt):
+        stopped.append(str(rt.id))
+
+    monkeypatch.setattr(rm, "_stop_runtime", fake_stop)
+
+    await rm.reconcile_all()
+    await _flush_spawned_reconciles()
+    assert stopped == [str(runtime.id)]
+
+
+@pytest.mark.asyncio
+async def test_reconcile_all_stops_runtime_of_deleted_scheme(db, monkeypatch):
+    """A runtime whose scheme row was deleted must be stopped, not skipped."""
+    orphan_scheme_id = uuid.uuid4()
+    runtime = await rm.TunnelRuntime.create(
+        id=uuid.uuid4(), scheme_id=orphan_scheme_id, target_id="node-1",
+        runtime_key=f"node-1:{orphan_scheme_id}", kind="frpc",
+        desired_state="running", runtime_status="running", config_revision=5,
+    )
+    runtime.run_id = f"tunnel-runtime:{runtime.id}"
+    await runtime.save(update_fields=["run_id"])
+
+    class FakeNodeClient:
+        async def list_active_tool_runs(self, node_id):
+            return [{"run_id": runtime.run_id, "revision": 5, "pid": 4242}]
+
+    monkeypatch.setattr(
+        "user_platform.node_client.get_local_node_client", lambda: FakeNodeClient()
+    )
+    stopped: list = []
+
+    async def fake_stop(rt):
+        stopped.append(str(rt.id))
+
+    monkeypatch.setattr(rm, "_stop_runtime", fake_stop)
+
+    await rm.reconcile_all()
+    await _flush_spawned_reconciles()
+    assert stopped == [str(runtime.id)]
 
 
 @pytest.mark.asyncio
@@ -896,7 +1389,7 @@ async def test_managed_dispatch_passes_token_via_env_not_argv(monkeypatch):
             started.update({"node_id": node_id, "args": args, "env": env or {}})
 
     monkeypatch.setattr(
-        "monkeycode_compat.node_client.get_local_node_client", lambda: FakeClient()
+        "user_platform.node_client.get_local_node_client", lambda: FakeClient()
     )
     # Monitoring the run needs a live loop consumer; stub it out.
     monkeypatch.setattr(dispatch, "_monitor_tool_run", lambda *a, **k: _noop())
@@ -930,7 +1423,7 @@ def test_frpc_group_toml_contains_multiple_proxies():
 
 
 def test_runtime_key_groups_frpc_but_not_quick():
-    import monkeycode_compat.tunnel_runtime_manager as rm
+    import user_platform.tunnel_runtime_manager as rm
 
     frpc = _scheme("frpc", {})
     quick = _scheme("cloudflared", {"mode": "quick"})
@@ -939,14 +1432,14 @@ def test_runtime_key_groups_frpc_but_not_quick():
 
 
 def test_runtime_key_keeps_npc_per_binding_until_verified():
-    import monkeycode_compat.tunnel_runtime_manager as rm
+    import user_platform.tunnel_runtime_manager as rm
 
     npc = _scheme("npc", {})
     assert rm.runtime_key(npc, "node-a", "b1") != rm.runtime_key(npc, "node-a", "b2")
 
 
 def test_readiness_parser():
-    import monkeycode_compat.tunnel_runtime_manager as rm
+    import user_platform.tunnel_runtime_manager as rm
 
     assert rm._readiness("frpc", "login to server success") == "ready"
     assert rm._readiness("cloudflared", "Registered tunnel connection") == "ready"
@@ -957,7 +1450,7 @@ def test_readiness_parser():
 @pytest.mark.asyncio
 async def test_runtime_event_revision_fences_late_exit(monkeypatch):
     """EXITED from a replaced process must not mark the current revision failed."""
-    import monkeycode_compat.tunnel_runtime_manager as rm
+    import user_platform.tunnel_runtime_manager as rm
 
     runtime = type("Runtime", (), {
         "config_revision": 2,
@@ -974,7 +1467,7 @@ async def test_runtime_event_revision_fences_late_exit(monkeypatch):
 
 
 def test_quick_and_npc_remain_per_binding_runtime():
-    import monkeycode_compat.tunnel_runtime_manager as rm
+    import user_platform.tunnel_runtime_manager as rm
 
     quick = _scheme("cloudflared", {"mode": "quick"})
     npc = _scheme("npc", {})
@@ -1015,7 +1508,7 @@ def test_resolve_project_node_requires_live_task(monkeypatch):
     import asyncio
 
     monkeypatch.setattr(
-        "monkeycode_compat.models_task.ProjectTask.filter",
+        "user_platform.models_task.ProjectTask.filter",
         classmethod(lambda cls, **k: _q([])),
     )
     with pytest.raises(svc.TunnelServiceError) as exc:
@@ -1034,15 +1527,15 @@ def test_resolve_project_node_picks_node(monkeypatch):
 
     task = _TaskRow(uuid.uuid4(), "exec-node-7")
     monkeypatch.setattr(
-        "monkeycode_compat.models_task.ProjectTask.filter",
+        "user_platform.models_task.ProjectTask.filter",
         classmethod(lambda cls, **k: _q([type("R", (), {"task_id": task.id})()])),
     )
     monkeypatch.setattr(
-        "monkeycode_compat.models_task.Task.filter",
+        "user_platform.models_task.Task.filter",
         classmethod(lambda cls, **k: _q([task])),
     )
     monkeypatch.setattr(
-        "monkeycode_compat.models_task.TaskNodeBinding.get_or_none",
+        "user_platform.models_task.TaskNodeBinding.get_or_none",
         classmethod(lambda cls, **k: _awaitable(None)),
     )
     resolved = asyncio.run(
@@ -1075,7 +1568,7 @@ async def test_main_service_target_dispatches_locally(monkeypatch):
         called["binding"] = str(b.id)
         return None
 
-    import monkeycode_compat.tunnel_runtime_manager as runtime_manager
+    import user_platform.tunnel_runtime_manager as runtime_manager
     monkeypatch.setattr(runtime_manager, "reconcile_binding", fake_reconcile)
 
     await dispatch.dispatch_binding(binding, scheme)
@@ -1086,7 +1579,7 @@ async def test_main_service_target_dispatches_locally(monkeypatch):
 
 
 def test_binaries_pick_windows_zip(monkeypatch):
-    import monkeycode_compat.tunnel_binaries as bins
+    import user_platform.tunnel_binaries as bins
     monkeypatch.setattr(bins.platform, "system", lambda: "Windows")
     monkeypatch.setattr(bins.platform, "machine", lambda: "AMD64")
     url, archive, member = bins.resolve_source("frpc")
@@ -1096,7 +1589,7 @@ def test_binaries_pick_windows_zip(monkeypatch):
 
 
 def test_binaries_pick_linux_targz(monkeypatch):
-    import monkeycode_compat.tunnel_binaries as bins
+    import user_platform.tunnel_binaries as bins
     monkeypatch.setattr(bins.platform, "system", lambda: "Linux")
     monkeypatch.setattr(bins.platform, "machine", lambda: "x86_64")
     url, archive, member = bins.resolve_source("frpc")
@@ -1106,7 +1599,7 @@ def test_binaries_pick_linux_targz(monkeypatch):
 
 
 def test_binaries_cloudflared_is_bare_binary(monkeypatch):
-    import monkeycode_compat.tunnel_binaries as bins
+    import user_platform.tunnel_binaries as bins
     monkeypatch.setattr(bins.platform, "system", lambda: "Linux")
     monkeypatch.setattr(bins.platform, "machine", lambda: "aarch64")
     url, archive, member = bins.resolve_source("cloudflared")
@@ -1116,7 +1609,7 @@ def test_binaries_cloudflared_is_bare_binary(monkeypatch):
 
 
 def test_binaries_binary_name_has_exe_on_windows(monkeypatch):
-    import monkeycode_compat.tunnel_binaries as bins
+    import user_platform.tunnel_binaries as bins
     monkeypatch.setattr(bins.platform, "system", lambda: "Windows")
     monkeypatch.setattr(bins.platform, "machine", lambda: "AMD64")
     assert bins.binary_name("frpc") == "frpc.exe"
@@ -1126,7 +1619,7 @@ def test_binaries_binary_name_has_exe_on_windows(monkeypatch):
 
 def test_binaries_custom_url_override(monkeypatch):
     """An operator mirror URL is substituted with platform tokens."""
-    import monkeycode_compat.tunnel_binaries as bins
+    import user_platform.tunnel_binaries as bins
     monkeypatch.setattr(bins.platform, "system", lambda: "Linux")
     monkeypatch.setattr(bins.platform, "machine", lambda: "x86_64")
     url, _archive, _member = bins.resolve_source(
@@ -1165,7 +1658,7 @@ async def test_managed_restart_reuses_existing_tunnel(monkeypatch):
             started.update({"env": env or {}, "args": args})
 
     monkeypatch.setattr(
-        "monkeycode_compat.node_client.get_local_node_client", lambda: FakeClient()
+        "user_platform.node_client.get_local_node_client", lambda: FakeClient()
     )
     monkeypatch.setattr(dispatch, "_monitor_tool_run", lambda *a, **k: _noop())
 
@@ -1184,8 +1677,8 @@ async def test_stop_binding_enters_runtime_reconciler(monkeypatch):
     binding.node_id = svc.MAIN_SERVICE_TARGET
     binding.scheme_id = uuid.uuid4()
     called: dict = {}
-    import monkeycode_compat.tunnel_runtime_manager as runtime_manager
-    import monkeycode_compat.tunnel_node_dispatch as tnd
+    import user_platform.tunnel_runtime_manager as runtime_manager
+    import user_platform.tunnel_node_dispatch as tnd
 
     async def fake_desired(b, scheme, desired):
         called["desired"] = desired
@@ -1215,7 +1708,7 @@ async def test_create_binding_returns_pending_and_notifies(db, monkeypatch):
         notified.append({"runtime_id": runtime_id, "target_id": target_id})
 
     monkeypatch.setattr(
-        "monkeycode_compat.tunnel_notify.notify_tunnel_changed", fake_notify
+        "user_platform.tunnel_notify.notify_tunnel_changed", fake_notify
     )
 
     row = await svc.create_binding(
@@ -1247,7 +1740,7 @@ async def test_create_binding_managed_surfaces_public_addr_at_create(db, monkeyp
         return None
 
     monkeypatch.setattr(
-        "monkeycode_compat.tunnel_notify.notify_tunnel_changed", fake_notify
+        "user_platform.tunnel_notify.notify_tunnel_changed", fake_notify
     )
 
     row = await svc.create_binding(
@@ -1278,7 +1771,7 @@ async def test_delete_binding_marks_soft_delete_and_notifies(db, monkeypatch):
         notified.append({"runtime_id": runtime_id, "target_id": target_id})
 
     monkeypatch.setattr(
-        "monkeycode_compat.tunnel_notify.notify_tunnel_changed", fake_notify
+        "user_platform.tunnel_notify.notify_tunnel_changed", fake_notify
     )
 
     result = await svc.delete_binding(str(scheme.user_id), str(binding.id))
@@ -1331,7 +1824,7 @@ async def test_update_binding_changes_port_and_node(db, monkeypatch):
     async def fake_notify(*, runtime_id=None, target_id=None):
         notified.append({"runtime_id": runtime_id, "target_id": target_id})
 
-    monkeypatch.setattr("monkeycode_compat.tunnel_notify.notify_tunnel_changed", fake_notify)
+    monkeypatch.setattr("user_platform.tunnel_notify.notify_tunnel_changed", fake_notify)
     result = await svc.update_binding(
         str(scheme.user_id), str(binding.id), scheme_id=str(scheme.id),
         node_id="node-new", local_host="10.0.0.7", local_port=9000,
@@ -1367,7 +1860,7 @@ async def test_update_binding_managed_subdomain_rebuilds_dns(db, monkeypatch):
 
     monkeypatch.setattr(cf, "delete_dns_record", fake_delete_dns_record)
     monkeypatch.setattr(
-        "monkeycode_compat.tunnel_notify.notify_tunnel_changed",
+        "user_platform.tunnel_notify.notify_tunnel_changed",
         lambda **kwargs: _noop(),
     )
     result = await svc.update_binding(
@@ -1404,7 +1897,7 @@ async def test_update_binding_rejects_scheme_change(db):
 @pytest.mark.asyncio
 async def test_lease_no_owner_always_acquires(db):
     """Single-replica / tests: no owner configured → claim always succeeds."""
-    import monkeycode_compat.tunnel_runtime_manager as rm
+    import user_platform.tunnel_runtime_manager as rm
     runtime = await rm.TunnelRuntime.create(
         id=uuid.uuid4(), scheme_id=uuid.uuid4(), target_id="__main__",
         runtime_key="k", kind="frpc",
@@ -1416,7 +1909,7 @@ async def test_lease_no_owner_always_acquires(db):
 @pytest.mark.asyncio
 async def test_lease_second_owner_cannot_steal_live_lease(db, monkeypatch):
     """A live lease held by another owner blocks this process from acquiring it."""
-    import monkeycode_compat.tunnel_runtime_manager as rm
+    import user_platform.tunnel_runtime_manager as rm
     rm.configure_lease(owner="replica-A", ttl_seconds=60)
     try:
         runtime = await rm.TunnelRuntime.create(
@@ -1434,7 +1927,7 @@ async def test_lease_second_owner_cannot_steal_live_lease(db, monkeypatch):
 @pytest.mark.asyncio
 async def test_lease_expired_can_be_taken_over(db, monkeypatch):
     """An expired lease is acquirable by a different owner (crash recovery)."""
-    import monkeycode_compat.tunnel_runtime_manager as rm
+    import user_platform.tunnel_runtime_manager as rm
     from datetime import timedelta
     rm.configure_lease(owner="replica-A", ttl_seconds=60)
     try:
@@ -1455,7 +1948,7 @@ async def test_lease_expired_can_be_taken_over(db, monkeypatch):
 @pytest.mark.asyncio
 async def test_release_lease_lets_other_owner_acquire(db):
     """Releasing our lease lets a different process immediately take over."""
-    import monkeycode_compat.tunnel_runtime_manager as rm
+    import user_platform.tunnel_runtime_manager as rm
     rm.configure_lease(owner="replica-A", ttl_seconds=60)
     try:
         runtime = await rm.TunnelRuntime.create(
@@ -1494,7 +1987,7 @@ async def test_notify_payload_has_no_secrets(db, monkeypatch):
     monkeypatch.setattr(
         "tortoise.Tortoise.get_connection", lambda _name: _FakeConn()
     )
-    from monkeycode_compat import tunnel_notify as tn
+    from user_platform import tunnel_notify as tn
     await tn.notify_tunnel_changed(runtime_id=str(scheme.id), target_id="__main__")
     assert captured
     assert "SECRET-TOKEN-VALUE" not in captured[-1]

@@ -24,8 +24,8 @@ _proj = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _proj not in sys.path:
     sys.path.insert(0, _proj)
 
-from monkeycode_compat import git_clients
-from monkeycode_compat.project_service import _derive_full_name
+from user_platform import git_clients
+from user_platform.project_service import _derive_full_name
 
 
 # ── _derive_full_name ─────────────────────────────────────────────────────────
@@ -207,9 +207,9 @@ async def tortoise_db():
     await Tortoise.init(
         db_url="sqlite://:memory:",
         modules={
-            "monkeycode_compat": [
-                "monkeycode_compat.models_git",
-                "monkeycode_compat.models_project",
+            "user_platform": [
+                "user_platform.models_git",
+                "user_platform.models_project",
             ]
         },
     )
@@ -222,7 +222,7 @@ async def tortoise_db():
 
 @pytest.fixture(autouse=True)
 def neutralize_prefetch(monkeypatch):
-    from monkeycode_compat import git_service
+    from user_platform import git_service
 
     monkeypatch.setattr(
         git_service.git_service, "_prefetch_repositories", lambda *_a, **_k: None
@@ -230,7 +230,7 @@ def neutralize_prefetch(monkeypatch):
 
 
 async def _make_identity(user_id, platform="github", token="ghp_tok", **kw):
-    from monkeycode_compat.models_git import GitIdentity
+    from user_platform.models_git import GitIdentity
 
     return await GitIdentity.create(
         id=uuid.uuid4(),
@@ -242,7 +242,7 @@ async def _make_identity(user_id, platform="github", token="ghp_tok", **kw):
 
 
 async def _make_project(user_id, identity_id, **kw):
-    from monkeycode_compat.models_project import Project
+    from user_platform.models_project import Project
 
     return await Project.create(
         id=uuid.uuid4(),
@@ -257,7 +257,7 @@ async def _make_project(user_id, identity_id, **kw):
 
 @pytest.mark.asyncio
 async def test_list_branches_ownership_denied(tortoise_db):
-    from monkeycode_compat import git_service
+    from user_platform import git_service
 
     owner = str(uuid.uuid4())
     identity = await _make_identity(owner)
@@ -270,7 +270,7 @@ async def test_list_branches_ownership_denied(tortoise_db):
 
 @pytest.mark.asyncio
 async def test_list_branches_missing_token_returns_empty(tortoise_db, monkeypatch):
-    from monkeycode_compat import git_service
+    from user_platform import git_service
 
     owner = str(uuid.uuid4())
     identity = await _make_identity(owner, token=None)
@@ -282,7 +282,7 @@ async def test_list_branches_missing_token_returns_empty(tortoise_db, monkeypatc
 
 @pytest.mark.asyncio
 async def test_list_branches_forwards_and_maps(tortoise_db, monkeypatch):
-    from monkeycode_compat import git_clients as gc, git_service
+    from user_platform import git_clients as gc, git_service
 
     owner = str(uuid.uuid4())
     identity = await _make_identity(owner)
@@ -302,7 +302,7 @@ async def test_list_branches_forwards_and_maps(tortoise_db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_tree_ownership_denied(tortoise_db):
-    from monkeycode_compat import project_service
+    from user_platform import project_service
 
     owner = str(uuid.uuid4())
     identity = await _make_identity(owner)
@@ -314,7 +314,7 @@ async def test_get_tree_ownership_denied(tortoise_db):
 
 @pytest.mark.asyncio
 async def test_get_tree_forwards_full_name_and_creds(tortoise_db, monkeypatch):
-    from monkeycode_compat import git_clients as gc, project_service
+    from user_platform import git_clients as gc, project_service
 
     owner = str(uuid.uuid4())
     identity = await _make_identity(owner)
@@ -336,8 +336,8 @@ async def test_get_tree_forwards_full_name_and_creds(tortoise_db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_tree_no_identity_returns_empty(tortoise_db):
-    from monkeycode_compat import project_service
-    from monkeycode_compat.models_project import Project
+    from user_platform import project_service
+    from user_platform.models_project import Project
 
     owner = str(uuid.uuid4())
     project = await Project.create(
@@ -354,7 +354,7 @@ async def test_get_tree_no_identity_returns_empty(tortoise_db):
 
 @pytest.mark.asyncio
 async def test_get_blob_forwards_and_returns_dict(tortoise_db, monkeypatch):
-    from monkeycode_compat import git_clients as gc, project_service
+    from user_platform import git_clients as gc, project_service
 
     owner = str(uuid.uuid4())
     identity = await _make_identity(owner)
@@ -374,7 +374,7 @@ async def test_get_blob_forwards_and_returns_dict(tortoise_db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_blob_ownership_denied(tortoise_db):
-    from monkeycode_compat import project_service
+    from user_platform import project_service
 
     owner = str(uuid.uuid4())
     identity = await _make_identity(owner)
@@ -392,8 +392,8 @@ def test_route_raw_blob_returns_image_bytes(monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    import monkeycode_compat.routes_project as routes_project
-    from monkeycode_compat.deps import get_current_user
+    import user_platform.routes_project as routes_project
+    from user_platform.deps import get_current_user
 
     png = b"\x89PNG\r\n\x1a\nfixture"
     captured: dict = {}
@@ -428,8 +428,8 @@ def test_route_raw_blob_rejects_active_content(monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    import monkeycode_compat.routes_project as routes_project
-    from monkeycode_compat.deps import get_current_user
+    import user_platform.routes_project as routes_project
+    from user_platform.deps import get_current_user
 
     class _User:
         id = uuid.uuid4()
@@ -459,8 +459,8 @@ def test_route_branches_unquotes_double_encoded_repo(monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    import monkeycode_compat.routes_git as routes_git
-    from monkeycode_compat.deps import get_current_user
+    import user_platform.routes_git as routes_git
+    from user_platform.deps import get_current_user
 
     identity_id = str(uuid.uuid4())
     captured: dict = {}

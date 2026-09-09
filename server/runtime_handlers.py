@@ -424,7 +424,7 @@ async def _reconcile_api_keys() -> None:
 
 
 async def _on_channel_catalog_event(_name: str | None, _payload: dict) -> None:
-    from monkeycode_compat.marketplace.channel_catalog import reload_from_db
+    from user_platform.marketplace.channel_catalog import reload_from_db
     await reload_from_db()
 
 

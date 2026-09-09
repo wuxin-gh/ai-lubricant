@@ -1,7 +1,7 @@
 """MCP principal / grants / service-users / runtime-settings / market-settings。
 
 管理端 principal（owner_user_id IS NULL，平台级）+ 服务↔用户授权 + 连接展示设置。
-用户侧 principal 路由在 monkeycode_compat/routes_mcp_principals.py（owner_user_id=用户）。
+用户侧 principal 路由在 user_platform/routes_mcp_principals.py（owner_user_id=用户）。
 两套共用 mcp_plugin_store 的 principal 函数族，下一步合并。
 """
 from __future__ import annotations
@@ -365,13 +365,18 @@ async def set_service_users(service_id: int, payload: UpdateMCPServiceUsersReque
 
 @router.put("/services/{service_id}/auth")
 async def set_service_auth(service_id: int, payload: UpdateMCPServiceAuthRequest, authorization: str | None = Header(None)) -> dict:
-    """开关访问控制。保存后自动重新加载服务配置（无需重启）。"""
+    """开关访问控制。保存后自动重新加载服务配置（无需重启）。
+
+    鉴权现在一律强制——所有 MCP 服务都必须带 token 才能连，不允许「任何人可连」的
+    匿名模式（那是绕过安全边界的后门）。本端点只接受 auth_enabled=True；
+    传 False 一律 409。字段与端点保留是为了兼容既有调用方与未来可能的「展示态」。
+    """
     await _require_admin(authorization)
     service = await mcp_plugin_store.get_service(service_id)
     if not service:
         raise HTTPException(404, f"MCP service {service_id} not found")
-    if service.get("name") == "cdp-bridge" and not payload.auth_enabled:
-        raise HTTPException(409, "CDP Bridge 必须开启 MCP 用户身份鉴权")
+    if not payload.auth_enabled:
+        raise HTTPException(409, "MCP 服务鉴权不可关闭：所有服务一律要求 token")
     result = await mcp_plugin_store.set_service_auth_enabled(service_id, payload.auth_enabled)
     if not result:
         raise HTTPException(404, f"MCP service {service_id} not found")

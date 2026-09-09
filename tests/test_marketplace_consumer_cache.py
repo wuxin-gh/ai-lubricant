@@ -9,9 +9,9 @@ import asyncio
 
 import pytest
 
-from monkeycode_compat.git_clients import GitClientError
-from monkeycode_compat.marketplace import consumer_cache
-from monkeycode_compat.marketplace.config import (
+from user_platform.git_clients import GitClientError
+from user_platform.marketplace import consumer_cache
+from user_platform.marketplace.config import (
     MarketplaceConsumerSettings,
     MarketplaceSettings,
 )

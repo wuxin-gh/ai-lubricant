@@ -17,7 +17,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from monkeycode_compat import routes_editors
+from user_platform import routes_editors
 
 
 EDITOR = {
@@ -127,7 +127,7 @@ def _install_basic(monkeypatch, *, issue=None, duplicate=None, session=SESSION_R
     monkeypatch.setattr(routes_editors, "audit_user_action", audit_user_action)
 
     # Explicit node requires a node-permission check; stub it as allowed.
-    from monkeycode_compat import nodes_service
+    from user_platform import nodes_service
 
     async def user_can_use_node(_user_id, _node_id):
         return True
@@ -152,7 +152,7 @@ def _install_basic(monkeypatch, *, issue=None, duplicate=None, session=SESSION_R
     monkeypatch.setattr(gateway_config.Config, "api_key_allows_model", classmethod(_allows))
 
     # And the issue lookup itself.
-    import monkeycode_compat.models_project as models_project
+    import user_platform.models_project as models_project
 
     async def project_issue_get_or_none(id=None, project_id=None):
         if issue is None:
@@ -168,7 +168,7 @@ def _install_basic(monkeypatch, *, issue=None, duplicate=None, session=SESSION_R
     # Server URL for the SSE MCP entry. settings is a frozen dataclass; the route
     # reads `from .config import settings; settings.server_url`. Swap the whole
     # module attribute for a tiny stand-in so the frozen instance stays intact.
-    from monkeycode_compat import config
+    from user_platform import config
 
     class _Settings:
         server_url = "https://gw.example.com"
@@ -212,7 +212,7 @@ async def test_issue_not_in_editors_project_is_404(monkeypatch):
     _install_basic(monkeypatch, issue=None)  # get_or_none sees mismatched project_id
 
     # Re-stub get_or_none so the project_id check fails against the editor's project.
-    import monkeycode_compat.models_project as models_project
+    import user_platform.models_project as models_project
 
     async def get_or_none(id=None, project_id=None):
         # Route passes EDITOR["project_id"], but the row belongs to other_project.

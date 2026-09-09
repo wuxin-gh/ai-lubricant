@@ -14,8 +14,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from monkeycode_compat import system_env_service
-from monkeycode_compat.system_env_service import SystemEnvError
+from user_platform import system_env_service
+from user_platform.system_env_service import SystemEnvError
 
 NODE_ID = "node-sys-1"
 USER_ID = str(uuid.uuid4())
@@ -69,7 +69,9 @@ class _FakeRow:
         self.name = name
         self.version = ""
         self.provider = ""
+        self.readers = ""
         self.path = ""
+        self.description = ""
         self.platform_managed = platform_managed
         self.archived_reference_id = archived
         self.reported_at = None
@@ -85,14 +87,14 @@ class _FakeRow:
 
 def _install_nodes(monkeypatch, fake):
     """system_env_service 里 nodes_service 是函数内延迟 import，故打模块属性。"""
-    from monkeycode_compat import nodes_service as nodes_module
+    from user_platform import nodes_service as nodes_module
 
     monkeypatch.setattr(nodes_module, "nodes_service", fake)
 
 
 def _install_entry_model(monkeypatch, *, get_result=None):
     """替掉 ORM 入口，返回可断言的假行。"""
-    calls: dict = {"filter": [], "created": []}
+    calls: dict = {"filter": [], "created": [], "lock": []}
 
     class _Query:
         def __init__(self, **kw):
@@ -105,10 +107,25 @@ def _install_entry_model(monkeypatch, *, get_result=None):
         def order_by(self, *_a):
             return self
 
+        def using_db(self, _db):
+            # refresh_system_env pins each queryset to the transaction conn.
+            return self
+
         def __await__(self):
             async def _rows():
                 return []
             return _rows().__await__()
+
+    class _FakeConn:
+        async def execute_query(self, sql, params=None):
+            calls["lock"].append((sql, params))
+
+    class _FakeTxn:
+        async def __aenter__(self):
+            return _FakeConn()
+
+        async def __aexit__(self, *_exc):
+            return False
 
     class _Model:
         @staticmethod
@@ -121,6 +138,8 @@ def _install_entry_model(monkeypatch, *, get_result=None):
 
         @staticmethod
         async def create(**kw):
+            # using_db is dropped: the real ORM takes it as a create kwarg.
+            kw.pop("using_db", None)
             row = _FakeRow(kind=kw.get("kind", "skill"), name=kw.get("name", "x"),
                            platform_managed=kw.get("platform_managed", False),
                            archived=kw.get("archived_reference_id"))
@@ -128,6 +147,7 @@ def _install_entry_model(monkeypatch, *, get_result=None):
             return row
 
     monkeypatch.setattr(system_env_service, "NodeSystemEnvEntry", _Model)
+    monkeypatch.setattr(system_env_service, "in_transaction", lambda **_kw: _FakeTxn())
     return calls
 
 
@@ -186,6 +206,46 @@ async def test_refresh_replaces_snapshot(monkeypatch):
     assert len(rows) == 2
 
 
+@pytest.mark.asyncio
+async def test_refresh_keeps_cross_provider_same_name_mcp(monkeypatch):
+    """同名 MCP server 在两个编辑器配置里 = 节点按 (provider, name) 上报两行。
+
+    存储唯一键含 provider，refresh 必须两行都落库——曾因 (node_id, kind, name)
+    唯一键在第二个 insert 上 500（操作者把 mcpServers 键错嵌进两个编辑器配置）。
+    """
+    fake = _FakeNodesService()
+    fake.inspect_result = {"installed": [
+        {"kind": "mcp", "name": "mcpServers", "provider": "gemini", "readers": ["gemini"]},
+        {"kind": "mcp", "name": "mcpServers", "provider": "opencode", "readers": ["opencode"]},
+    ]}
+    _install_nodes(monkeypatch, fake)
+    calls = _install_entry_model(monkeypatch)
+
+    rows = await system_env_service.refresh_system_env(USER_ID, NODE_ID)
+
+    assert len(calls["created"]) == 2
+    assert {(c["kind"], c["name"], c["provider"]) for c in calls["created"]} == {
+        ("mcp", "mcpServers", "gemini"),
+        ("mcp", "mcpServers", "opencode"),
+    }
+    assert len(rows) == 2
+
+
+@pytest.mark.asyncio
+async def test_refresh_serializes_via_per_node_advisory_lock(monkeypatch):
+    """整表替换必须先拿 per-node advisory lock 再删再插，串行化并发 refresh。"""
+    fake = _FakeNodesService()
+    _install_nodes(monkeypatch, fake)
+    calls = _install_entry_model(monkeypatch)
+
+    await system_env_service.refresh_system_env(USER_ID, NODE_ID)
+
+    assert len(calls["lock"]) == 1
+    sql, params = calls["lock"][0]
+    assert sql.strip().startswith("SELECT pg_advisory_xact_lock")
+    assert params == [f"system-env-refresh:{NODE_ID}"]
+
+
 # ── 安装（server → node，增量）────────────────────────────────────────────
 
 
@@ -214,7 +274,7 @@ async def test_install_passes_resolved_spec_and_overwrite(monkeypatch):
         return [{"name": "resolved-skill", "source": "archive", "url": "http://x/fetch"}]
 
     monkeypatch.setattr(
-        "monkeycode_compat.resource_reference_service.resolve_reference_specs", resolve
+        "user_platform.resource_reference_service.resolve_reference_specs", resolve
     )
 
     touched = await system_env_service.install_to_system_env(
@@ -240,7 +300,7 @@ async def test_install_rejects_unresolvable_resource(monkeypatch):
         return []
 
     monkeypatch.setattr(
-        "monkeycode_compat.resource_reference_service.resolve_reference_specs", resolve
+        "user_platform.resource_reference_service.resolve_reference_specs", resolve
     )
     with pytest.raises(SystemEnvError) as exc:
         await system_env_service.install_to_system_env(
@@ -311,7 +371,7 @@ async def test_archive_uses_stable_market_id_and_creates_reference(monkeypatch):
     reference_id = uuid.uuid4()
     seen: dict = {}
 
-    from monkeycode_compat import system_env_upload
+    from user_platform import system_env_upload
 
     monkeypatch.setattr(system_env_upload, "base_url", lambda: "http://console")
     monkeypatch.setattr(

@@ -264,3 +264,266 @@ def test_reload_jobs_from_db_loads_enabled_jobs(fake_db, scheduler):
 def test_reload_jobs_skips_on_missing_pool(reset_pool, scheduler):
     # should not raise
     run(scheduler._reload_jobs_from_db())
+
+
+# ---------------------------------------------------------------------------
+# 执行记录（agent_scheduled_task_runs）tests
+# ---------------------------------------------------------------------------
+
+
+def test_start_run_inserts_running_row(fake_db, scheduler):
+    from agent import scheduler as sched_mod
+
+    fake_db.fetchrow.return_value = {"id": 77}
+    result = run(sched_mod._start_run(11, task_kind="script", triggered_by="manual"))
+
+    sql, *params = fake_db.fetchrow.await_args.args
+    flat = squash_sql(sql)
+    assert flat.startswith("INSERT INTO agent_scheduled_task_runs")
+    assert "status" not in params  # status 走字面量 'running'
+    assert params == [11, "script", "manual"]
+    assert result == 77
+
+
+def test_start_run_returns_none_without_pool(reset_pool, scheduler):
+    from agent import scheduler as sched_mod
+
+    assert run(sched_mod._start_run(1, task_kind="prompt", triggered_by="scheduler")) is None
+
+
+def test_start_run_swallows_db_error(fake_db, scheduler):
+    """_start_run 失败不阻断执行——run 记录是旁路，任务本体照跑。"""
+    from agent import scheduler as sched_mod
+
+    fake_db.fetchrow.side_effect = RuntimeError("db down")
+    assert run(sched_mod._start_run(1, task_kind="prompt", triggered_by="scheduler")) is None
+
+
+def test_finish_run_updates_only_provided_columns(fake_db, scheduler):
+    from agent import scheduler as sched_mod
+
+    run(sched_mod._finish_run(
+        77, status="failed", exit_code=1, stderr="boom", result_text="x" * 5000,
+    ))
+
+    sql, *params = fake_db.execute.await_args.args
+    flat = squash_sql(sql)
+    assert flat.startswith("UPDATE agent_scheduled_task_runs SET")
+    assert flat.endswith("WHERE id=$1")
+    # 只写传入的列 + status；没传的（stdout/conversation_id 等）不该出现。
+    assert "exit_code=$" in flat and "stderr=$" in flat
+    assert "stdout" not in flat and "conversation_id" not in flat
+    # params = [run_id, status, exit_code, stderr, result_text]（列序按 dict 插入序）；
+    # result_text 截断到 2000。
+    assert params[0] == 77
+    assert params[1] == "failed"
+    assert params[2] == 1
+    assert params[3] == "boom"
+    assert len(params[4]) == 2000
+
+
+def test_finish_run_noop_when_run_id_none(fake_db, scheduler):
+    from agent import scheduler as sched_mod
+
+    run(sched_mod._finish_run(None, status="completed"))
+    fake_db.execute.assert_not_awaited()
+
+
+def test_finish_run_caps_stdout(fake_db, scheduler):
+    from agent import scheduler as sched_mod
+
+    run(sched_mod._finish_run(1, status="completed", stdout="y" * 30000))
+
+    _sql, *params = fake_db.execute.await_args.args
+    stdout_val = [p for p in params if isinstance(p, str) and p.startswith("y")][0]
+    assert len(stdout_val) == 16000
+
+
+def test_list_runs_orders_desc_and_pages(fake_db, scheduler):
+    fake_db.fetch.return_value = [{"id": 5, "run_at": datetime.now(timezone.utc), "status": "completed"}]
+
+    result = run(scheduler.list_runs(11, limit=50))
+
+    sql, *params = fake_db.fetch.await_args.args
+    flat = squash_sql(sql)
+    assert "FROM agent_scheduled_task_runs WHERE job_id=$1" in flat
+    assert "ORDER BY run_at DESC" in flat
+    assert "result_snippet" in flat
+    assert params == [11, 50]
+    assert isinstance(result[0]["run_at"], str)
+
+    # cursor 翻页：加 AND id < $n
+    run(scheduler.list_runs(11, limit=50, cursor=100))
+    sql, *params = fake_db.fetch.await_args.args
+    flat = squash_sql(sql)
+    assert "AND id < $3" in flat
+    assert params == [11, 50, 100]
+
+
+def test_list_runs_returns_empty_without_pool(reset_pool, scheduler):
+    assert run(scheduler.list_runs(1)) == []
+
+
+def test_get_run_returns_row_with_str_dates(fake_db, scheduler):
+    fake_db.fetchrow.return_value = {"id": 5, "job_id": 11, "run_at": datetime.now(timezone.utc), "stdout": "out"}
+
+    result = run(scheduler.get_run(5))
+
+    sql, *params = fake_db.fetchrow.await_args.args
+    assert squash_sql(sql) == "SELECT * FROM agent_scheduled_task_runs WHERE id=$1"
+    assert params == [5]
+    assert isinstance(result["run_at"], str)
+    assert result["stdout"] == "out"
+
+
+def test_get_run_none_when_missing(fake_db, scheduler):
+    fake_db.fetchrow.return_value = None
+    assert run(scheduler.get_run(404)) is None
+
+
+def test_prompt_run_status_mapping():
+    from agent import scheduler as sched_mod
+
+    assert sched_mod._prompt_run_status([{"result": "CURRENT_TASK_DONE", "data": "ok"}]) == "completed"
+    assert sched_mod._prompt_run_status([{"result": "ERROR", "data": "bad"}]) == "failed"
+    assert sched_mod._prompt_run_status([{"result": "MAX_TURNS_EXCEEDED", "data": ""}]) == "failed"
+    assert sched_mod._prompt_run_status([{"result": "EXITED", "data": ""}]) == "aborted"
+    assert sched_mod._prompt_run_status([]) == "completed"
+    assert sched_mod._prompt_run_status([{"turn": 3}]) == "completed"
+
+
+def test_cleanup_old_runs_window_delete(fake_db, scheduler):
+    fake_db.execute.return_value = None
+    run(scheduler._cleanup_old_runs())
+
+    sql, *_ = fake_db.execute.await_args.args
+    flat = squash_sql(sql)
+    assert flat.startswith("DELETE FROM agent_scheduled_task_runs")
+    assert "row_number() OVER (PARTITION BY job_id ORDER BY run_at DESC)" in flat
+    assert "rn > 200" in flat
+
+
+def test_cleanup_old_runs_swallows_error(fake_db, scheduler):
+    fake_db.execute.side_effect = RuntimeError("nope")
+    # should not raise
+    run(scheduler._cleanup_old_runs())
+
+
+def test_execute_prompt_job_records_run_and_finalizes(fake_db, scheduler):
+    """_execute_prompt_job 应开 run 行、结尾写 status，并保持 _finalize_job 兼容。"""
+    from agent import scheduler as sched_mod
+
+    row = {
+        "id": 11, "cron_expression": "0 9 * * *", "task_prompt": "summarize",
+        "task_kind": "prompt", "agent_id": None, "user_id": "u1",
+        "name": "t", "consecutive_failures": 0,
+    }
+    fake_db.fetchrow.return_value = {"id": 77}  # _start_run 的 RETURNING id
+
+    done = [{"result": "CURRENT_TASK_DONE", "data": "all good"}]
+    with patch.object(sched_mod, "_scheduled_run", AsyncMock(return_value=done)), \
+         patch.object(sched_mod, "_finalize_job", AsyncMock()) as fin:
+        run(sched_mod._execute_prompt_job(row, triggered_by="manual"))
+
+        # run 收尾：status=completed + result_text + duration_ms
+        finish_calls = [c for c in fake_db.execute.await_args_list
+                        if "agent_scheduled_task_runs" in c.args[0]]
+        assert finish_calls, "应至少有一次 _finish_run 的 UPDATE agent_scheduled_task_runs"
+        finish_sql, *finish_params = finish_calls[-1].args
+        assert finish_params[1] == "completed"
+        assert finish_params[2] == '{"result": "CURRENT_TASK_DONE", "data": "all good"}'
+        # _finalize_job 仍被调用（列表 last_* 语义不变）。
+        fin.assert_awaited_once()
+
+
+def test_scheduled_run_persists_conversation(fake_db, scheduler):
+    """_scheduled_run 应建 kind=scheduled 会话、写 user/assistant 消息、
+    on_event 渐进落库，结尾 assistant 转回 done。"""
+    from agent import scheduler as sched_mod
+    from agent import conversation_store
+
+    row = {"id": 11, "name": "t", "user_id": "u1", "agent_id": None, "api_key_id": None, "model": ""}
+
+    conv_created = {"id": "conv-abc"}
+    user_msg = {"id": 101}
+    asst_msg = {"id": 102}
+    create_conv = AsyncMock(return_value=conv_created)
+    add_msg = AsyncMock(side_effect=lambda *args, **kw: user_msg if args[1] == "user" else asst_msg)
+    update_msg = AsyncMock()
+    run_task = AsyncMock(return_value=[{"result": "CURRENT_TASK_DONE", "data": "done"}])
+
+    class FakeAgent:
+        _agent_system_prompt = "persona"
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def _ensure_config(self): return None
+        async def resolve_scheduled_llm(self, api_key_id=None, model=""): return None
+        async def run_task(self, prompt, system_prompt="", max_turns=None, llm=None, on_event=None):
+            if on_event:
+                await on_event({"type": "content", "text": "hello"})
+                await on_event({"type": "done", "usage": {"total_tokens": 5}})
+            return [{"result": "CURRENT_TASK_DONE", "data": "done"}]
+
+    with patch.object(sched_mod, "_scheduled_scene", lambda r: None), \
+         patch("agent.agent_main.GenericAgent", FakeAgent), \
+         patch.object(conversation_store, "create_conversation", create_conv), \
+         patch.object(conversation_store, "add_message", add_msg), \
+         patch.object(conversation_store, "update_message", update_msg), \
+         patch("agent.scene_context.append_prompt", lambda a, b: "sys"), \
+         patch("agent.scene_context.persist", lambda s: {"scheduled_job_id": 11}):
+        result = run(sched_mod._scheduled_run(row, "do the thing", max_turns=5, run_id=77))
+
+    assert result[0]["result"] == "CURRENT_TASK_DONE"
+    # 会话归属 = 任务 owner，kind=scheduled（不进普通会话列表，但按 id 可读）。
+    create_conv.assert_awaited_once()
+    kwargs = create_conv.await_args.kwargs
+    assert kwargs["kind"] == "scheduled"
+    assert kwargs["user_id"] == "u1"
+    assert kwargs["agent_id"] is None
+    # user 消息先建（分页锚点），assistant 占位后建。
+    roles = [c.args[1] for c in add_msg.await_args_list]
+    assert roles == ["user", "assistant"]
+    # 结尾 assistant 转回 done。
+    final_update = update_msg.await_args_list[-1]
+    assert final_update.args[0] == 102
+    assert final_update.kwargs.get("status") == "done"
+    assert final_update.kwargs.get("content") == "hello"
+
+
+def test_scheduled_run_degrades_without_clickhouse(fake_db, scheduler):
+    """CH 不可用 → 对话不落库，但任务本体照跑，run 行 conversation_id 留空。"""
+    from agent import scheduler as sched_mod
+    from agent import conversation_store
+
+    row = {"id": 11, "name": "t", "user_id": "u1", "agent_id": None, "api_key_id": None, "model": ""}
+
+    class FakeAgent:
+        _agent_system_prompt = "persona"
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def _ensure_config(self): return None
+        async def resolve_scheduled_llm(self, api_key_id=None, model=""): return None
+        async def run_task(self, prompt, system_prompt="", max_turns=None, llm=None, on_event=None):
+            assert on_event is None  # 没建成会话就不该有事件出口
+            return [{"result": "CURRENT_TASK_DONE", "data": "ok"}]
+
+    finish_calls = []
+
+    async def spy_finish(run_id, *, status, **fields):
+        finish_calls.append((status, fields))
+
+    with patch.object(sched_mod, "_scheduled_scene", lambda r: None), \
+         patch("agent.agent_main.GenericAgent", FakeAgent), \
+         patch.object(conversation_store, "create_conversation",
+                      AsyncMock(side_effect=RuntimeError("ch down"))), \
+         patch.object(sched_mod, "_finish_run", spy_finish), \
+         patch("agent.scene_context.append_prompt", lambda a, b: "sys"):
+        result = run(sched_mod._scheduled_run(row, "go", max_turns=5, run_id=88))
+
+    assert result[0]["result"] == "CURRENT_TASK_DONE"
+    # 没有中途 conversation_id 写回。
+    assert all("conversation_id" not in fields for _s, fields in finish_calls)

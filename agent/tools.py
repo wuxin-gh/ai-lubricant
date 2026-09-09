@@ -715,6 +715,25 @@ class ToolRegistry:
         helper deliberately owns only the binary conversion; MCP envelope
         unwrapping stays in ``_persist_binary_result``.
         """
+        # device-control get_screen_state (spec §8.3) hands the screenshot back as
+        # an OBJECT ``{format, w, h, b64}`` — the generic key scan below only
+        # matches top-level STRING keys, so without this normalization the JPEG
+        # bytes stayed nested and reached the model as text (no file, no
+        # ask_user hint, page described from the tree instead of shown).
+        shot = result.get("screenshot")
+        if (
+            isinstance(shot, dict)
+            and isinstance(shot.get("b64"), str)
+            and len(shot["b64"]) > 256
+        ):
+            result = {
+                **{k: v for k, v in result.items() if k != "screenshot"},
+                "format": str(shot.get("format") or "").strip().lower() or "jpeg",
+                "base64": shot["b64"],
+                "screenshot_w": shot.get("w"),
+                "screenshot_h": shot.get("h"),
+            }
+
         key = next(
             (k for k in self._BINARY_RESULT_KEYS
              if isinstance(result.get(k), str) and len(result[k]) > 256),
@@ -747,6 +766,11 @@ class ToolRegistry:
         out["path"] = rel
         out["bytes"] = len(raw)
         out["mime_type"] = f"image/{'jpeg' if fmt in {'jpg', 'jpeg'} else fmt}"
+        if "screenshot_w" in out or "screenshot_h" in out:
+            out["screenshot_size"] = {
+                "w": out.pop("screenshot_w", None),
+                "h": out.pop("screenshot_h", None),
+            }
         out.setdefault("status", "ok")
         out["hint"] = (
             f"Saved to {rel}. To show it to the user, call ask_user with "

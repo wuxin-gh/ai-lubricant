@@ -10,7 +10,7 @@ async def db():
 
     await Tortoise.init(
         db_url="sqlite://:memory:",
-        modules={"monkeycode_compat": ["monkeycode_compat.models_team_admin"]},
+        modules={"user_platform": ["user_platform.models_team_admin"]},
         use_tz=False,
     )
     await Tortoise.generate_schemas()
@@ -22,7 +22,7 @@ async def db():
 
 @pytest.mark.asyncio
 async def test_node_policy_upsert_is_idempotent_and_normalized(db):
-    from monkeycode_compat import shell_approval_service as service
+    from user_platform import shell_approval_service as service
 
     first = await service.upsert_node_policy("node-a", "Git:Reset", "posix", "first")
     second = await service.upsert_node_policy("node-a", "git:reset", "posix", "second")
@@ -35,7 +35,7 @@ async def test_node_policy_upsert_is_idempotent_and_normalized(db):
 
 @pytest.mark.asyncio
 async def test_node_and_shell_scopes_are_isolated(db):
-    from monkeycode_compat import shell_approval_service as service
+    from user_platform import shell_approval_service as service
 
     await service.upsert_node_policy("node-a", "rm", "posix")
     await service.upsert_node_policy("node-a", "remove-item", "powershell")
@@ -49,7 +49,7 @@ async def test_node_and_shell_scopes_are_isolated(db):
 
 @pytest.mark.asyncio
 async def test_clear_shell_and_clear_node_do_not_cross_scopes(db):
-    from monkeycode_compat import shell_approval_service as service
+    from user_platform import shell_approval_service as service
 
     await service.upsert_node_policy("node-a", "rm", "posix")
     await service.upsert_node_policy("node-a", "remove-item", "powershell")
@@ -67,7 +67,7 @@ async def test_clear_shell_and_clear_node_do_not_cross_scopes(db):
 
 @pytest.mark.asyncio
 async def test_invalid_shell_is_rejected(db):
-    from monkeycode_compat import shell_approval_service as service
+    from user_platform import shell_approval_service as service
 
     with pytest.raises(ValueError, match="shell"):
         await service.upsert_node_policy("node-a", "rm", "bash")
@@ -76,7 +76,7 @@ async def test_invalid_shell_is_rejected(db):
 
 
 def test_shell_flavor_uses_trusted_node_telemetry():
-    from monkeycode_compat.shell_approval_service import infer_node_shell_flavor
+    from user_platform.shell_approval_service import infer_node_shell_flavor
 
     assert infer_node_shell_flavor({"capabilities": {"os": "windows"}}) == "powershell"
     assert infer_node_shell_flavor({"capabilities": {"os": "linux"}}) == "posix"

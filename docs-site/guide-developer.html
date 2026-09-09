@@ -15,7 +15,7 @@
     <a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a>
   </nav>
   <div class="nav-group">能力详解</div><nav>
-    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
+    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
   </nav>
   <div class="nav-group">操作手册</div><nav>
     <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
@@ -57,11 +57,13 @@
 <h3>创建任务</h3>
 <ol>
 <li>进入 <code>/console/tasks</code>，点击“新建任务”。</li>
+<li>先选执行环境档位：<strong>隔离环境</strong>（默认，每次任务全新开始）、<strong>共用环境</strong>（选一个你建好的命名环境，依赖与登录态跨任务复用）或<strong>系统环境</strong>（直接跑在节点操作者的本机 HOME 上，接入现有的环境无需迁移远程连接；需节点已开启该模式）。</li>
 <li>选择项目；填写清晰目标、验收标准和已知约束。</li>
 <li>选择被授权的模型/API Key；如需自有机器执行，选择在线且获授权的 execution 节点。</li>
 <li>仅显式选择任务需要的资源、技能与工具，遵循最小权限。</li>
 <li>提交后进入任务详情，观察状态和 Agent 事件。</li>
 </ol>
+<p>环境档位在创建时选定，任务建成后不可改；三种环境的详细对比见 <a href="cap-editor.html#envs">编辑器能力详解</a>。</p>
 <h3>写好任务描述</h3>
 <div class="table-wrap"><table><thead><tr><th>应包含</th><th>示例</th></tr></thead><tbody>
 <tr><td>目标</td><td>“为订单 API 增加幂等键校验”</td></tr>
@@ -105,7 +107,7 @@
 
 <h2 id="editor">6. 项目编辑器与会话</h2>
 <ol>
-<li>从项目详情的“编辑器”Tab 创建编辑器；选择工作节点与必要的环境配置。</li>
+<li>从项目详情的“编辑器”Tab 创建编辑器；选择工作节点与分支模式。</li>
 <li>进入 <code>/console/editor/:editorId</code> 查看编辑器详情。</li>
 <li>新建/恢复编辑器会话；会话可关联终端与工作区。</li>
 <li>完成工作后停止不再使用的会话，释放节点容量。</li>

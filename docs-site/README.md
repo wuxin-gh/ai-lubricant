@@ -20,7 +20,7 @@
 - `cap-llm-server.html`：免费模型监控、模型列表自动更新、渠道标签、多协议链路、多种冻结、六种选路、8 种速率限制、自定义测试与上游拒绝；含 Cloudflare Workers URL 代理说明
 - `cap-code-channel.html`：自定义代码渠道的场景索引、钩子速查、类级开关、统一帧、样例与常见错误
 - `cap-agent.html`：主/子 Agent、定时任务、终端 Agent、浏览器与网页内 Agent、邮箱 Agent、记忆增强
-- `cap-editor.html`：Claude Code/Codex/OpenCode/Cursor/Gemini 接入、多环境选择、代码 Review、多 task 隔离
+- `cap-editor.html`：Claude Code/Codex/OpenCode/Cursor/Gemini 接入、三种执行环境（隔离/共用/系统）、代码 Review、会话隔离
 - `cap-node.html`：一键连接 Agent、三角色、无需 SSH、Agent 安全控制、PTY/host exec/文件/代理出口
 - `cap-mobile.html`：任务跟踪、新建任务与远程操控、语音转写、附件、预签名直传、下载升级
 - `cap-browser.html`：把真实 Chrome 交给 Agent 与编辑器、12 个 CDP 工具、网页内 Agent、两类 token 隔离
@@ -96,7 +96,7 @@ npx wrangler pages deploy docs-site --branch=master
 
 ## 实机截图
 
-没有独立画廊页。11 个能力详解页的**每个功能小节**（`<h2>`）正下方预留一个图位，共 63 个，图片路径按「页面名 / 小节 id」约定生成，图片文件放进去即生效：
+没有独立画廊页。能力详解页的功能小节（`<h2>`）正下方可放图位，图片路径按「页面名 / 小节 id」约定生成，图片文件放进去即生效：
 
 ```text
 assets/screenshots/<页面名去掉 .html>/<小节 id>.png
@@ -104,11 +104,11 @@ assets/screenshots/<页面名去掉 .html>/<小节 id>.png
     assets/screenshots/cap-node/agent-safety.png        ← cap-node.html #agent-safety
 ```
 
-图位是 `<figure class="shot" data-shot="…">`，图片缺失时显示「截图待补」占位条并附上期望路径；加载成功后占位条由 `assets/docs.js` 自动移除，图片接入 Lightbox。要换成别的图片，直接改这个 figure 里的 `src`（以及 `data-shot`、`alt`）即可，不必迁移文件。
+图位是 `<figure class="shot" data-shot="…">`，图片缺失时显示「截图待补」占位条并附上期望路径；加载成功后占位条由 `assets/docs.js` 自动移除，图片接入 Lightbox。要换成别的图片，直接改这个 figure 里的 `src`（以及 `data-shot`、`alt`）即可，不必迁移文件。要给暂无图位的小节补图，按上面的路径约定新建一个 `<figure class="shot">` 即可（参考 `cap-ios-control.html` 现有写法）。
 
 **一个图位放多张**：在基名后加 `-1`、`-2`、`-3`… 依次命名，页面加载时会按序探测并全部追加进同一图位，右上角显示张数，Lightbox 里可左右翻页。两种写法都行：`passthrough.png + passthrough-2.png + passthrough-3.png`，或全部编号 `passthrough-1.png + passthrough-2.png`；从缺的那个编号起停止探测（单个图位上限 24 张）。
 
-各页图位数：cap-llm-server 11、cap-code-channel 8、cap-editor 8、cap-device-control 7、cap-node 6、cap-agent 6、cap-browser 5、cap-security 4、cap-mail 3、cap-mobile 3、cap-resource-center 2。
+当前各页图位数（仅保留已有截图的图位）：cap-llm-server 11、cap-editor 6、cap-agent 2、cap-android-control 2、cap-browser 2、cap-node 1、cap-security 1；待补图位保留在：cap-mobile 3、cap-resource-center 2、cap-ios-control 6。
 
 另有 45 张既有管理端（`/manager`）实机截图，按页面主题分目录存放，供手册页和上述图位取用：
 

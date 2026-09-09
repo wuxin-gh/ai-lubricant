@@ -79,12 +79,17 @@ def _extract_token(request: Request) -> str:
 
 
 # 内置工具服务名 → 该服务鉴权所需的 principal param key。
-# principal 带这个 param 就代表能操作该服务的一个具体资源（CDP 客户端 / 邮箱账户 / 设备）。
-_BUILTIN_SERVICE_PARAM_KEY = {
-    "cdp-bridge": "cdp_client_id",
-    "mail": "mail_account_id",
-    "device-control": "device_id",
-}
+# 声明源在 mcp_builtin.catalog.BuiltinServiceSpec.required_param；本映射在模块加载时
+# 从 catalog 派生，sse_gateway / 派发器 / 前端编辑器统一读它，不再各处手写。
+def _load_builtin_param_key() -> dict[str, str]:
+    try:
+        from mcp_builtin.catalog import BUILTIN_SERVICE_SPECS
+        return {spec.name: spec.required_param for spec in BUILTIN_SERVICE_SPECS if spec.required_param}
+    except Exception:
+        return {}
+
+
+_BUILTIN_SERVICE_PARAM_KEY = _load_builtin_param_key()
 
 # 内置工具服务名 → 该服务可操作的一级资源类型。
 _BUILTIN_SERVICE_RESOURCE_TYPE = {
@@ -95,28 +100,24 @@ _BUILTIN_SERVICE_RESOURCE_TYPE = {
 }
 
 
-# （旧名称不再暴露；保留 issue-workflow 的空集合仅为文档兼容。）
-
-def _principal_has_service_param(params: list[dict], service_name: str) -> bool:
-    """principal 是否带该服务所需的操作 param（cdp-bridge→cdp_client_id 等）。
-
-    内置工具服务按 param 判权；普通自定义 MCP 服务不在此判（走 mcp_service_users），
-    这里对它们返回 False，由 _check_service_auth 的 service/identity 分支处理。
-    """
-    required = _BUILTIN_SERVICE_PARAM_KEY.get(service_name)
-    if not required:
-        return False
-    return any(str(p.get("param_key") or "") == required for p in (params or []))
-
-
 async def _check_service_auth(service_name: str, token: str) -> None:
-    """服务开启鉴权时校验 token；不通过抛 HTTPException(401/403)。
+    """校验 token；不通过抛 HTTPException(401/403)。
 
     统一走 builtin_tool_store.resolve_token：token → 解析授权目标。
     - 外部 MCP：token 绑 service_id，解析出的服务名必须与本次 service_name 一致。
     - 内置工具（cdp-bridge/mail/device-control）：token 绑 resource_id，资源类型必须
       与本次服务对应（cdp_client/mail_account/device）。会话/设备归属再由各自
       连接层按 resource id / device_id 隔离。
+    - principal / identity token：按 mcp_grants 的 service 行判权——principal 被授权
+      该服务即放行；具体操作哪个 CDP 客户端 / 邮箱账户 / 设备由插件 driver 读
+      principal 的 param grant 收窄（无 grant = 该 owner 名下全部 enabled 实例，
+      见 cdp_bridge_plugin / mail_plugin / device_control_plugin 的 _resolve_*_id）。
+      网关不做「有没有 param」的前置拦截，校验下沉到工具侧。
+
+    鉴权一律强制（不再看服务的 auth_enabled 开关）：MCP 网关是所有服务的统一
+    安全边界，「auth_enabled=false 匿名放行」曾让拿到 SSE 地址的任何人直连资源，
+    且造成 agent 侧按 DB 列跳过 token 收集 vs 网关强制要求的两边口径不一致（401）。
+    auth_enabled 列/ctx 字段降级为仅展示。
     """
     plugin = registry.get(service_name)
     if not plugin:
@@ -125,8 +126,7 @@ async def _check_service_auth(service_name: str, token: str) -> None:
     if not ctx.enabled:
         raise HTTPException(503, "该 MCP 服务已停用")
     if service_name == "marketplace-status":
-        # 市场工具永远要求本次 Agent 对话签发的用户身份 token；不能被服务配置里的
-        # auth_enabled=false 放宽成匿名访问。
+        # 市场工具永远要求本次 Agent 对话签发的用户身份 token。
         if not token:
             raise HTTPException(401, "市场管理 MCP 需要管理员身份 token")
         import builtin_tool_store
@@ -136,8 +136,6 @@ async def _check_service_auth(service_name: str, token: str) -> None:
         if (resolved.get("token") or {}).get("target_type") == "user":
             return
         raise HTTPException(403, "市场管理 MCP 需要用户身份 token")
-    if not ctx.auth_enabled:
-        return  # 未开启鉴权，放行（保持向后兼容）
     if not token:
         raise HTTPException(401, "该 MCP 服务已开启访问控制，请提供 token")
 
@@ -146,11 +144,19 @@ async def _check_service_auth(service_name: str, token: str) -> None:
     if not resolved:
         raise HTTPException(403, "token 未被授权访问该 MCP 服务")
     kind = resolved["kind"]
-    if kind == "principal":
+
+    async def _granted_via_service(principal_id: int) -> bool:
+        """principal 被授权该服务（mcp_grants 的 service 行）即放行，不分内置/自定义。"""
         import mcp_plugin_store
 
+        svc = await mcp_plugin_store.get_service_by_name(service_name)
+        if not svc or svc.get("id") is None:
+            return False
+        return await mcp_plugin_store.mcp_user_granted_service(int(principal_id), int(svc["id"]))
+
+    if kind == "principal":
         principal_id = (resolved.get("target") or {}).get("id")
-        if _principal_has_service_param(await mcp_plugin_store.list_principal_params(int(principal_id)), service_name):
+        if await _granted_via_service(int(principal_id)):
             return
     elif kind == "service":
         if resolved["target"].get("name") == service_name:
@@ -160,26 +166,54 @@ async def _check_service_auth(service_name: str, token: str) -> None:
         if want_type and resolved["target"].get("resource_type") in want_type:
             return
     elif kind == "identity":
-        # Agent identity token is not itself a resource grant. Resolve the Agent's
-        # explicitly bound MCP principal, then authorize through that principal.
+        # identity token：解到使用方身份（agent/task）→ 其绑定的 principal → service grant。
+        # 内置工具的实例范围（哪个浏览器/邮箱/设备）由插件 driver 读 principal 的 param
+        # grant 收窄；网关只判「能不能用这个服务」。
         token_meta = resolved.get("token") or {}
         target_type = token_meta.get("target_type")
         target_id = token_meta.get("target_id")
-        if target_type == "agent" and target_id and str(target_id).isdigit():
-            import mcp_plugin_store
+        import mcp_plugin_store
 
+        principal_id: int | None = None
+        if target_type == "agent" and target_id and str(target_id).isdigit():
             principal_id = await mcp_plugin_store.get_agent_mcp_principal_id(int(target_id))
-            if principal_id is not None:
-                if _principal_has_service_param(await mcp_plugin_store.list_principal_params(principal_id), service_name):
+        elif target_type == "task" and target_id:
+            # task identity token（任务派发的内置/sse MCP 走网关用）：解 task → 其 principal。
+            # 替代 issue-workflow 旧实现拿 "agent" 类型装 task id 的 hack。
+            from user_platform.task_service import Task
+            try:
+                task_row = await Task.filter(id=str(target_id)).first()
+            except Exception:
+                task_row = None
+            if task_row is not None:
+                principal_id = getattr(task_row, "mcp_user_id", None)
+        if principal_id is not None and await _granted_via_service(principal_id):
+            return
+        if target_type == "user" and target_id:
+            # editor 会话的 user identity token：无 principal，按用户级授权判权——
+            # sse/custom 服务走 can_use_service（与编辑器 create/update 校验同源）；
+            # 内置工具服务直接放行——实例范围（哪个浏览器/邮箱/设备）由插件 driver
+            # resolve_identity_to_principal 返回 None → 走 owner 全量路径收窄。
+            svc = await mcp_plugin_store.get_service_by_name(service_name)
+            if svc and svc.get("id") is not None:
+                if await mcp_plugin_store.can_use_service(
+                    user_id=str(target_id), service_id=int(svc["id"]),
+                ):
                     return
-        # Session-scoped internal tools (e.g. issue-workflow) use an identity
-        # token. The plugin itself narrows target_type/target_id to one task and
-        # derives the issue from that task, so the gateway only verifies that
-        # this is an authenticated identity and leaves object-level authorization
-        # to the adapter.
-        if service_name in {"issue-workflow", "marketplace-status"}:
-            target_type = (resolved.get("token") or {}).get("target_type")
-            if service_name == "issue-workflow" and target_type in ("agent", "node"):
+        # Session-scoped internal tools (issue-workflow / review-result) use an
+        # identity token. The plugin itself narrows target_type/target_id to one
+        # task / one review event and derives the issue from that task, so the
+        # gateway only verifies that this is an authenticated identity and leaves
+        # object-level authorization to the adapter.
+        if service_name in {"issue-workflow", "review-result", "marketplace-status"}:
+            if service_name == "issue-workflow" and target_type in ("agent", "node", "task"):
+                # task：任务派发的 issue-workflow overlay 现签 issue_token("task", task.id)
+                # （替代旧实现拿 "agent" 类型装 task id 的 hack），插件按 target_id 收口到该任务。
+                return
+            if service_name == "review-result" and target_type == "agent":
+                # token 的 target_id 是 webhook event id（issue_token("agent", event.id)），
+                # 不是 agents 行 id——上面的 principal 反查必然落空；对象级授权由
+                # review_result_plugin._scope 按 event 收口。
                 return
             if service_name == "marketplace-status" and target_type == "user":
                 return
@@ -1111,12 +1145,26 @@ async def device_ws(websocket: WebSocket, service_name: str):
         return
 
     await websocket.accept()
+    # [req] 中间件只记 HTTP，WebSocket 握手在日志里是黑的——排障时手机 WS 到底
+    # 有没有拨进来无从判断。这里 accept 一打就记一行：远程地址 + 服务名，把 WS
+    # 连接的「到没到」从日志盲区捞出来。下方 _device_register 的 auth failed /
+    # registered 后续行据此串得起来。
+    client_addr = "-"
+    try:
+        client = websocket.client
+        if client is not None:
+            client_addr = f"{client.host}:{client.port}"
+    except Exception:
+        client_addr = "?"
+    logger.info(f"[device-control] ws open from {client_addr}")
+    _ws_opened_at = asyncio.get_event_loop().time()
     ctx = None
     try:
         try:
             first = await asyncio.wait_for(websocket.receive_text(), timeout=proto.REGISTER_TIMEOUT_S)
         except asyncio.TimeoutError:
             # spec §4.1：10s 内没收到 register → close 4008。区别于「发了坏帧」的协议错误。
+            logger.info(f"[device-control] ws end {client_addr} close=4008 (no register within 10s)")
             await websocket.close(code=proto.CLOSE_REGISTER_TIMEOUT, reason="no register within deadline")
             return
         if len(first.encode("utf-8")) > proto.MAX_FRAME_BYTES:
@@ -1124,6 +1172,7 @@ async def device_ws(websocket: WebSocket, service_name: str):
             return
         ctx = await _device_register(first, websocket, driver)
         if ctx is None:
+            logger.info(f"[device-control] ws end {client_addr} (register rejected)")
             return  # 握手失败已按 spec close
         await driver.register(ctx)
         await _device_read_loop(websocket, ctx, driver)
@@ -1132,6 +1181,11 @@ async def device_ws(websocket: WebSocket, service_name: str):
     except Exception as exc:  # noqa: BLE001
         logger.debug(f"[device-control] ws error: {exc}")
     finally:
+        # 收尾日志：存活时长 + 是否进过 register。串起 ws open → (auth failed|registered)
+        # → ws end 三段，手机拨号在哪一跳断的，服务端日志即可定位。
+        _alive = asyncio.get_event_loop().time() - _ws_opened_at
+        _tag = getattr(ctx, "device_id", None) or client_addr
+        logger.info(f"[device-control] ws end {_tag} alive={_alive:.1f}s")
         if ctx is not None:
             # 旧连接的 read loop 走到这里收尾；unregister 仅在 ctx 仍是当前登记的那条时摘。
             driver.unregister(ctx)
@@ -1140,6 +1194,20 @@ async def device_ws(websocket: WebSocket, service_name: str):
                 await ctx.close(proto.CLOSE_STALE, "connection ended")
             except Exception:
                 pass
+            # 断连即落库 last_seen：网页据此展示「最后在线」，不依赖 worker 内存
+            # 快照。last_error 不在这里造——app 下次 register 会带人话断开原因
+            # （网络错误/心跳超时/…）全量覆盖，比服务端猜 close code 准。
+            # 失败只记日志——收尾路径绝不能反过来把连接清理也拖崩。
+            try:
+                import builtin_tool_store
+                from datetime import datetime, timezone
+                now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                await builtin_tool_store.update_device_runtime(
+                    ctx.resource_id,
+                    last_seen_at=now,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"[device-control] persist disconnect state failed: {exc}")
 
 
 async def _device_register(raw: str, websocket: WebSocket, driver) -> Any:
@@ -1181,6 +1249,9 @@ async def _device_register(raw: str, websocket: WebSocket, driver) -> Any:
     caps_raw = frame.get("capabilities")
     capabilities = [str(c) for c in caps_raw if isinstance(c, str)] if isinstance(caps_raw, list) else []
     device_info = frame.get("device_info") if isinstance(frame.get("device_info"), dict) else {}
+    # detail 是 _resource_value 的扁平化 dict，顶层带 id（builtin_tool_resources.id）。
+    # 断连/device_status 事件落库运行态时要按这行定位。
+    resource_id = detail.get("id")
 
     session_id = proto.new_id("ses_")
     send_lock = asyncio.Lock()
@@ -1204,6 +1275,7 @@ async def _device_register(raw: str, websocket: WebSocket, driver) -> Any:
         device_info=device_info,
         send=send,
         close=close,
+        resource_id=int(resource_id) if resource_id is not None else None,
     )
     # spec §4：认证通过后回 registered 帧，把协商参数（心跳间隔/超时、session_id、
     # 接受的能力）下发给设备。设备收到后才认为握手完成、可开始收 call。
@@ -1214,6 +1286,20 @@ async def _device_register(raw: str, websocket: WebSocket, driver) -> Any:
         server_time=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         accepted_capabilities=capabilities,
     ))
+    # register 成功即把 app 上报的 device_info（版本/系统/机型/无障碍开关/上次
+    # 断连原因）落库：driver 内存快照只活在 worker 进程里，落库后设备离线/服务重启
+    # 网页仍能展示。app 端每次重连现造，这里全量覆盖即可。失败只记日志——握手已
+    # 成功，不能因为落库抖动把设备踢掉。
+    try:
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        await builtin_tool_store.update_device_runtime(
+            int(resource_id),
+            device_info=device_info,
+            last_seen_at=now,
+            last_error_at=now,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"[device-control] persist register state failed: {exc}")
     return ctx
 
 
@@ -1274,6 +1360,22 @@ async def _device_handle_event(frame: dict, ctx) -> None:
         caps = frame.get("capabilities")
         if isinstance(caps, list):
             ctx.set_capabilities([str(c) for c in caps if isinstance(c, str)])
+    elif kind == proto.EVENT_DEVICE_STATUS:
+        # app 会话内上报的设备态（无障碍开关变化等）：merge 进 ctx.device_info
+        # （网页走内存快照立即看到）+ 落库（离线/重启后仍在）。未知字段忽略。
+        data = frame.get("data")
+        if isinstance(data, dict):
+            info = dict(ctx.device_info or {})
+            info.update({str(k): v for k, v in data.items()})
+            ctx.device_info = info
+            try:
+                import builtin_tool_store
+                if ctx.resource_id is not None:
+                    await builtin_tool_store.update_device_runtime(
+                        ctx.resource_id, device_info=info,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"[device-control] persist device_status failed: {exc}")
     elif kind == proto.EVENT_CONTROL_REVOKED:
         # 设备侧主动关控制权（spec §9）：当不可控直到下次 register。
         await ctx.close(1000, "control revoked on device")
@@ -1287,6 +1389,10 @@ async def device_pair(request: Request) -> dict:
     无鉴权——配对码本身就是凭证。返回 ``{device_id, token, protocol_version}``，
     token 明文只此一次返回；DB 只存 sha256。403 对「不存在 / 过期 / 已用」不做区分
     （spec 要求），App 据此统一提示。
+
+    body 可带 ``device_info``（App 配对时一并上报的本机信息：app 版本 / 系统 / 机型 /
+    无障碍开关 / 内网 IP）。落到设备记录的 device_info——网页在配对完成那一刻就能
+    展示手机信息，不必等 WS register；WS register 时会再刷新一次（带上 last_error）。
     """
     try:
         body = await request.json()
@@ -1297,6 +1403,7 @@ async def device_pair(request: Request) -> dict:
     code = str(body.get("code") or "").strip()
     if not code:
         raise HTTPException(400, "code is required")
+    device_info = body.get("device_info") if isinstance(body.get("device_info"), dict) else None
 
     import builtin_tool_store
     from mcp_builtin.device_control import store as dc_store
@@ -1318,10 +1425,14 @@ async def device_pair(request: Request) -> dict:
             legacy = await builtin_tool_store.get_resource(int(instance_part))
             if legacy is not None:
                 owner_user_id = str(legacy.get("owner_user_id") or owner_user_id)
-        resource, device_id, token = await builtin_tool_store.create_device(owner_user_id, label)
+        resource, device_id, token = await builtin_tool_store.create_device(
+            owner_user_id, label, device_info=device_info,
+        )
     else:
         # 旧 payload 是裸实例 id——迁移前签出的码仍要能兑换。
-        resource, device_id, token = await builtin_tool_store.create_device(instance_part or "0", label)
+        resource, device_id, token = await builtin_tool_store.create_device(
+            instance_part or "0", label, device_info=device_info,
+        )
     # 把新凭据立刻推给活着的 driver，否则刚配对的设备要等下次 admin reload 才能连上。
     driver = _device_driver()
     if driver is not None:

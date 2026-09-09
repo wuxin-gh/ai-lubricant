@@ -1271,17 +1271,17 @@ async def _resolve_admin_from_user_session() -> Optional[str]:
     """主鉴权：C 端 session cookie + role==admin。
 
     从 contextvar 取当前请求的 C 端 session cookie（由 main.py middleware 填充），
-    经 monkeycode_compat 解析用户；role=="admin" 且 active 则通过，返回 user_id。
+    经 user_platform 解析用户；role=="admin" 且 active 则通过，返回 user_id。
     compat 未启用 / cookie 缺失 / 非 admin / 任何异常都返回 None（交由应急兜底）。
     """
     cookie = _current_user_cookie.get()
     if not cookie:
         return None
     try:
-        from monkeycode_compat.config import settings as _compat_settings
+        from user_platform.config import settings as _compat_settings
         if not _compat_settings.enabled:
             return None
-        from monkeycode_compat.auth_service import auth_service
+        from user_platform.auth_service import auth_service
         authed = await auth_service.resolve_session(cookie)
     except Exception:
         return None
@@ -2753,7 +2753,7 @@ async def add_api_key(data: dict, token: str = Header(None, alias="Authorization
     await config.Config.refresh_api_keys_cache()
     row["rate_limit"] = json.loads(row["rate_limit"]) if isinstance(row["rate_limit"], str) else (row["rate_limit"] or {})
     await _log_operation(token, "add_api_key", "api_key", str(row.get("id")), None, _scrub_relay_secret(row))
-    from monkeycode_compat.notify_core import emit_notification_background
+    from user_platform.notify_core import emit_notification_background
     emit_notification_background(
         "api_key.created",
         params={"api_key_id": str(row.get("id")), "name": row.get("name") or ""},
@@ -2779,7 +2779,7 @@ async def update_api_key(key_id: int, data: dict, token: str = Header(None, alia
     await config.Config.refresh_api_keys_cache()
     row["rate_limit"] = json.loads(row["rate_limit"]) if isinstance(row["rate_limit"], str) else (row["rate_limit"] or {})
     await _log_operation(token, "update_api_key", "api_key", str(key_id), _scrub_relay_secret(old_row) if old_row else None, _scrub_relay_secret(row))
-    from monkeycode_compat.notify_core import emit_notification_background
+    from user_platform.notify_core import emit_notification_background
     emit_notification_background(
         "api_key.modified",
         params={"api_key_id": str(key_id), "name": row.get("name") or ""},
@@ -5415,7 +5415,7 @@ async def create_custom_provider(data: dict, token: str = Header(None, alias="Au
     clear_policy_cache(name)
     await _load_provider_runtime(name, cfg)
     await _log_operation(token, "create_provider", "provider", name, None, cfg)
-    from monkeycode_compat.notify_core import emit_notification_background
+    from user_platform.notify_core import emit_notification_background
     emit_notification_background(
         "channel.created",
         params={"provider_name": name, "remark": cfg.get("remark") or ""},
@@ -5456,7 +5456,7 @@ _BUILTIN_PROVIDER_TYPES: dict[str, dict] = {
 def _channel_catalog_builtin_entries() -> list[dict]:
     """Build system channel entries for the unified add-channel catalog."""
     entries: list[dict] = []
-    from monkeycode_compat.marketplace.channel_catalog import _preset_from_config
+    from user_platform.marketplace.channel_catalog import _preset_from_config
     for name, info in _BUILTIN_PROVIDER_TYPES.items():
         cfg = _builtin_provider_default_config(name) or {}
         entries.append({
@@ -5474,14 +5474,14 @@ def _channel_catalog_builtin_entries() -> list[dict]:
 @router.get("/channel-catalog")
 async def get_channel_catalog(token: str = Header(None, alias="Authorization")):
     await _require_admin(token)
-    from monkeycode_compat.marketplace.channel_catalog import get_catalog
+    from user_platform.marketplace.channel_catalog import get_catalog
     return await get_catalog()
 
 
 @router.post("/channel-catalog/refresh")
 async def refresh_channel_catalog(token: str = Header(None, alias="Authorization")):
     await _require_admin(token)
-    from monkeycode_compat.marketplace.channel_catalog import refresh
+    from user_platform.marketplace.channel_catalog import refresh
     return await refresh()
 
 
@@ -5498,9 +5498,9 @@ async def apply_provider_channel_template(
         raise HTTPException(status_code=400, detail="template_id 必填")
 
     from channel_template_service import apply_channel_template
-    from monkeycode_compat.marketplace import config as marketplace_config
-    from monkeycode_compat.marketplace import urls as marketplace_urls
-    from monkeycode_compat.marketplace.validator import safe_item_id
+    from user_platform.marketplace import config as marketplace_config
+    from user_platform.marketplace import urls as marketplace_urls
+    from user_platform.marketplace.validator import safe_item_id
 
     settings = marketplace_config.consumer_settings
     if not settings.enabled or "channels" not in settings.modules:
@@ -5981,7 +5981,7 @@ async def add_account(name: str, data: dict, token: str = Header(None, alias="Au
         # 渠道配置存在但运行池缺失（如历史配置、热更新遗漏）— 走完整加载
         await _load_provider_runtime(name, cfg)
     await _log_operation(token, "add_account", "account", data.get("username"), None, {"provider": name, "account": data})
-    from monkeycode_compat.notify_core import emit_notification_background
+    from user_platform.notify_core import emit_notification_background
     emit_notification_background(
         "account.created",
         params={"provider_name": name, "account_username": data.get("username") or ""},
@@ -7846,7 +7846,7 @@ async def update_proxies(data: list[dict], token: str = Header(None, alias="Auth
 
 
 # ==================== 全局配置聚合（各 Tab 独立读写） ====================
-# 市场仓库源配置不属于这里：由 monkeycode marketplace 的
+# 市场仓库源配置不属于这里：由 user_platform marketplace 的
 # /api/v1/marketplace/admin/source-config 统一管理。
 
 @router.get("/global-config/run-mode")
@@ -8123,14 +8123,14 @@ _PLATFORM_OWNER_ID = "00000000-0000-0000-0000-0000000009f1"
 async def list_notify_event_types(token: str = Header(None, alias="Authorization")):
     """事件目录（含一级分类 category 与可配范围 owner_scope）。"""
     await _require_admin(token)
-    from monkeycode_compat.notify_service import notify_service
+    from user_platform.notify_service import notify_service
     return {"items": notify_service.list_event_types()}
 
 
 @router.get("/notifications/subscription-rules")
 async def list_notify_subscription_rules(token: str = Header(None, alias="Authorization")):
     await _require_admin(token)
-    from monkeycode_compat.notify_service import notify_service
+    from user_platform.notify_service import notify_service
     rows = await notify_service.list_rules(_PLATFORM_OWNER_ID, owner_type="platform")
     return {"items": rows}
 
@@ -8138,7 +8138,7 @@ async def list_notify_subscription_rules(token: str = Header(None, alias="Author
 @router.post("/notifications/subscription-rules")
 async def create_notify_subscription_rule(data: dict, token: str = Header(None, alias="Authorization")):
     await _require_admin(token)
-    from monkeycode_compat.notify_service import notify_service
+    from user_platform.notify_service import notify_service
     row = await notify_service.create_rule(_PLATFORM_OWNER_ID, data, owner_type="platform")
     if row is None:
         raise HTTPException(status_code=400, detail="订阅事件或通知渠道无效")
@@ -8149,7 +8149,7 @@ async def create_notify_subscription_rule(data: dict, token: str = Header(None, 
 @router.put("/notifications/subscription-rules/{rule_id}")
 async def update_notify_subscription_rule(rule_id: str, data: dict, token: str = Header(None, alias="Authorization")):
     await _require_admin(token)
-    from monkeycode_compat.notify_service import notify_service
+    from user_platform.notify_service import notify_service
     ok = await notify_service.update_rule(_PLATFORM_OWNER_ID, rule_id, data, owner_type="platform")
     if not ok:
         raise HTTPException(status_code=404, detail="订阅规则不存在或无效")
@@ -8160,7 +8160,7 @@ async def update_notify_subscription_rule(rule_id: str, data: dict, token: str =
 @router.delete("/notifications/subscription-rules/{rule_id}")
 async def delete_notify_subscription_rule(rule_id: str, token: str = Header(None, alias="Authorization")):
     await _require_admin(token)
-    from monkeycode_compat.notify_service import notify_service
+    from user_platform.notify_service import notify_service
     ok = await notify_service.delete_rule(_PLATFORM_OWNER_ID, rule_id, owner_type="platform")
     if not ok:
         raise HTTPException(status_code=404, detail="订阅规则不存在")
@@ -8171,14 +8171,14 @@ async def delete_notify_subscription_rule(rule_id: str, token: str = Header(None
 @router.get("/notifications/events")
 async def list_notify_events_admin(token: str = Header(None, alias="Authorization")):
     await _require_admin(token)
-    from monkeycode_compat.notify_service import notify_service
+    from user_platform.notify_service import notify_service
     return {"items": await notify_service.list_events(_PLATFORM_OWNER_ID, owner_type="platform")}
 
 
 @router.post("/notifications/events")
 async def create_notify_event_admin(data: dict, token: str = Header(None, alias="Authorization")):
     await _require_admin(token)
-    from monkeycode_compat.notify_service import notify_service
+    from user_platform.notify_service import notify_service
     row = await notify_service.create_event(_PLATFORM_OWNER_ID, data, owner_type="platform")
     if row is None:
         raise HTTPException(status_code=400, detail="事件类型或参数无效")
@@ -8189,7 +8189,7 @@ async def create_notify_event_admin(data: dict, token: str = Header(None, alias=
 @router.put("/notifications/events/{event_id}")
 async def update_notify_event_admin(event_id: str, data: dict, token: str = Header(None, alias="Authorization")):
     await _require_admin(token)
-    from monkeycode_compat.notify_service import notify_service
+    from user_platform.notify_service import notify_service
     ok = await notify_service.update_event(_PLATFORM_OWNER_ID, event_id, data, owner_type="platform")
     if not ok:
         raise HTTPException(status_code=404, detail="事件不存在或参数无效")
@@ -8200,7 +8200,7 @@ async def update_notify_event_admin(event_id: str, data: dict, token: str = Head
 @router.delete("/notifications/events/{event_id}")
 async def delete_notify_event_admin(event_id: str, token: str = Header(None, alias="Authorization")):
     await _require_admin(token)
-    from monkeycode_compat.notify_service import notify_service
+    from user_platform.notify_service import notify_service
     ok = await notify_service.delete_event(_PLATFORM_OWNER_ID, event_id, owner_type="platform")
     if not ok:
         raise HTTPException(status_code=404, detail="事件不存在")
@@ -8212,14 +8212,14 @@ async def delete_notify_event_admin(event_id: str, token: str = Header(None, ali
 async def list_notify_channels_admin(token: str = Header(None, alias="Authorization")):
     """平台级出站渠道列表（供订阅配置选择目标渠道）。"""
     await _require_admin(token)
-    from monkeycode_compat.notify_service import notify_service
+    from user_platform.notify_service import notify_service
     return {"items": await notify_service.list_channels(_PLATFORM_OWNER_ID, owner_type="platform")}
 
 
 @router.post("/notifications/channels")
 async def create_notify_channel_admin(data: dict, token: str = Header(None, alias="Authorization")):
     await _require_admin(token)
-    from monkeycode_compat.notify_service import notify_service
+    from user_platform.notify_service import notify_service
     try:
         row = await notify_service.create_channel(_PLATFORM_OWNER_ID, data, owner_type="platform")
     except ValueError as exc:
@@ -8231,7 +8231,7 @@ async def create_notify_channel_admin(data: dict, token: str = Header(None, alia
 @router.put("/notifications/channels/{channel_id}")
 async def update_notify_channel_admin(channel_id: str, data: dict, token: str = Header(None, alias="Authorization")):
     await _require_admin(token)
-    from monkeycode_compat.notify_service import notify_service
+    from user_platform.notify_service import notify_service
     ok = await notify_service.update_channel(_PLATFORM_OWNER_ID, channel_id, data, owner_type="platform")
     if not ok:
         raise HTTPException(status_code=404, detail="渠道不存在")
@@ -8242,7 +8242,7 @@ async def update_notify_channel_admin(channel_id: str, data: dict, token: str = 
 @router.delete("/notifications/channels/{channel_id}")
 async def delete_notify_channel_admin(channel_id: str, token: str = Header(None, alias="Authorization")):
     await _require_admin(token)
-    from monkeycode_compat.notify_service import notify_service
+    from user_platform.notify_service import notify_service
     ok = await notify_service.delete_channel(_PLATFORM_OWNER_ID, channel_id, owner_type="platform")
     if not ok:
         raise HTTPException(status_code=404, detail="渠道不存在")
@@ -8253,7 +8253,7 @@ async def delete_notify_channel_admin(channel_id: str, token: str = Header(None,
 @router.post("/notifications/channels/{channel_id}/test")
 async def test_notify_channel_admin(channel_id: str, token: str = Header(None, alias="Authorization")):
     await _require_admin(token)
-    from monkeycode_compat.notify_service import notify_service
+    from user_platform.notify_service import notify_service
     result = await notify_service.test_channel(_PLATFORM_OWNER_ID, channel_id, owner_type="platform")
     if result is None:
         raise HTTPException(status_code=404, detail="渠道不存在")
@@ -8332,7 +8332,7 @@ async def delete_notification(notification_id: int, token: str = Header(None, al
 
 # ==================== Agent / 聊天 对话列表（管理端） ====================
 # 数据存 ClickHouse（agent/conversation_store），与项目对话（SQLite mc_*）并列。
-# 前端管理端对话页通过 tab 切换查看三类对话。游标分页口径与 monkeycode audit 一致。
+# 前端管理端对话页通过 tab 切换查看三类对话。游标分页口径与 user_platform audit 一致。
 
 @router.get("/agent/conversations")
 async def admin_list_agent_conversations(

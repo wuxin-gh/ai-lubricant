@@ -2,18 +2,18 @@ from types import SimpleNamespace
 
 from fastapi import FastAPI
 
-import monkeycode_compat
+import user_platform
 
 
 def test_webhook_receive_route_is_mounted(monkeypatch):
-    monkeypatch.setattr(monkeycode_compat, "settings", SimpleNamespace(
+    monkeypatch.setattr(user_platform, "settings", SimpleNamespace(
         enabled=True,
         agent_compose_base_url="",
         node_control_token="",
         agent_compose_timeout=30,
     ))
     app = FastAPI()
-    assert monkeycode_compat.mount_routes(app) is True
+    assert user_platform.mount_routes(app) is True
     matches = [
         route for route in app.routes
         if getattr(route, "path", "") == "/api/v1/webhooks/projects/{project_id}"

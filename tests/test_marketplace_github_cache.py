@@ -9,9 +9,9 @@ import asyncio
 import base64
 import json
 
-from monkeycode_compat.git_clients import GitClientError
-from monkeycode_compat.marketplace import github as gh
-from monkeycode_compat.marketplace.config import MarketplaceSettings
+from user_platform.git_clients import GitClientError
+from user_platform.marketplace import github as gh
+from user_platform.marketplace.config import MarketplaceSettings
 
 
 def _settings() -> MarketplaceSettings:

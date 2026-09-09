@@ -18,7 +18,7 @@ if _proj not in sys.path:
 from fastapi import FastAPI
 from starlette.testclient import TestClient
 
-from monkeycode_compat.routes_builtin_tools import router  # noqa: E402
+from user_platform.routes_builtin_tools import router  # noqa: E402
 
 # 静态子路径：不能被 /resources/{resource_id} 通配吞掉。
 STATIC_RESOURCE_PATHS = (

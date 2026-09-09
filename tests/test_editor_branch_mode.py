@@ -1,4 +1,4 @@
-from monkeycode_compat.routes_editors import (
+from user_platform.routes_editors import (
     CreateEditorReq,
     _editor_git_payload,
     _validated_editor_create_payload,

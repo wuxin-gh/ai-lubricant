@@ -603,20 +603,20 @@ class GenericAgent:
         for svc in services:
             if svc.get("name") == "marketplace-status":
                 continue
-            if not svc.get("auth_enabled"):
-                continue
             name = svc.get("name")
             svc_id = svc.get("id")
             if not name or svc_id is None:
                 continue
-            # identity token 即放行：具体操作哪个 CDP 客户端 / 邮箱账户由 driver 读
-            # principal 的 cdp_client_id / mail_account_id param 定位（见
-            # cdp_bridge_plugin._principal_cdp_client_id / mail_plugin._resolve_account_scope）。
-            # 不再在 agent 主链路做 grant scope 特殊判断。
+            # 鉴权一律强制：所有 MCP 服务都要 token，不再按服务的 auth_enabled 开关
+            # 决定收不收集 token（曾让 admin 关过鉴权的匿名服务两边口径不一致致 401）。
+            # identity token 即放行：具体操作哪个 CDP 客户端 / 邮箱账户 / 设备由 driver
+            # 读 principal 的 param 定位（cdp_bridge_plugin / mail_plugin / device_control_plugin），
+            # custom/sse/stdio 服务的授权由网关按 mcp_service_users 判。
             if identity_token:
                 tokens[name] = identity_token
                 continue
-            # 兼容旧 principal plaintext token + mcp_service_users 授权。
+            # 兼容旧 principal plaintext token + mcp_service_users 授权（identity token 签不出
+            # 时的兜底：agent_id 为空 / issue_token 失败的极少数路径）。
             try:
                 auth = await mcp_plugin_store.get_service_auth(int(svc_id))
             except Exception as exc:  # noqa: BLE001
@@ -628,7 +628,7 @@ class GenericAgent:
                 continue
             # 未绑定/未授权：不任取 token，避免跨用户串台。
             logger.warning(
-                "[mcp] service=%s 开启鉴权但 agent 未绑定获授权的 MCP 用户，调用可能 401",
+                "[mcp] service=%s 鉴权已强制，但 agent 未绑定获授权的 MCP 用户，调用将 401/403",
                 name,
             )
         return tokens

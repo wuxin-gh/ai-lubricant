@@ -1,5 +1,5 @@
 """Unary Connect-RPC parity: the NodeService router speaks the exact
-JSON wire shape the data-side ``monkeycode_compat.node_client`` sends and parses.
+JSON wire shape the data-side ``user_platform.node_client`` sends and parses.
 
 We mount :func:`build_unary_router` on a bare FastAPI app and drive it with the
 same camelCase request bodies + ``NODE_STATUS_*`` enum-name shapes the client's
@@ -85,7 +85,7 @@ async def test_onboard_passive_container_then_list_normalizes(db):
         assert node["online"] is True
 
         # Feed the response through the real client projection.
-        from monkeycode_compat.node_client.normalization import normalize_node_info
+        from user_platform.node_client.normalization import normalize_node_info
 
         norm = normalize_node_info(node)
         assert norm["status"] == "approved"
@@ -113,7 +113,7 @@ async def test_onboard_management_client_mints_secret(db):
         assert node["status"] == "NODE_STATUS_PENDING"
         assert node["role"] == "NODE_ROLE_MANAGEMENT"
 
-        from monkeycode_compat.node_client.normalization import normalize_node_info
+        from user_platform.node_client.normalization import normalize_node_info
 
         norm = normalize_node_info(node)
         assert norm["role"] == "management"

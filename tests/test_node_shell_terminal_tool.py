@@ -7,8 +7,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from monkeycode_compat.node_client import tools as node_tools
-from monkeycode_compat.node_client.approvals import ApprovalDenied, approval_registry
+from user_platform.node_client import tools as node_tools
+from user_platform.node_client.approvals import ApprovalDenied, approval_registry
 
 
 class ToolBag:

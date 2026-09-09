@@ -10,8 +10,8 @@ from typing import Any
 
 import builtin_tool_store
 from mcp_runtime.plugin_loader import PluginContext, PluginRegistrar, current_request_token
-from monkeycode_compat.marketplace import config as mp_config
-from monkeycode_compat.marketplace.routes import (
+from user_platform.marketplace import config as mp_config
+from user_platform.marketplace.routes import (
     catalog,
     delete_item,
     export,
@@ -25,8 +25,8 @@ from monkeycode_compat.marketplace.routes import (
     batch_delete_channel_templates,
     upsert,
 )
-from monkeycode_compat.marketplace.validator import validate_manifest
-from monkeycode_compat.models import User
+from user_platform.marketplace.validator import validate_manifest
+from user_platform.models import User
 
 
 async def _admin() -> User:
@@ -204,28 +204,25 @@ async def _leaderboard_update(args: dict, _ctx: PluginContext) -> dict:
     patch = args.get("patch")
     if not isinstance(patch, dict) or not patch:
         raise ValueError("patch 必须是非空对象")
-    from monkeycode_compat.marketplace.source_config import get_source_config_async
-    source = await get_source_config_async()
-    row = await store.update_curation(
-        _item_id(args), patch,
-        require_verified=bool(source.get("leaderboard_require_verified")),
-    )
+    # 编辑不含发布：status 在 update_curation 里被忽略（发布走 _leaderboard_publish）。
+    row = await store.update_curation(_item_id(args), patch)
     if row is None:
         raise ValueError("榜单条目不存在")
     return row
 
 
 async def _leaderboard_publish(args: dict, _ctx: PluginContext) -> dict:
+    """推送发布（异步队列）：立即入队返回 queued/skipped，worker 校验门禁后翻 published。
+
+    与 HTTP 端点同口径；agent 侧要拿最终结果需轮询榜单条目状态。
+    """
     user = await _admin()
     import marketplace_leaderboard_store as store
-    from monkeycode_compat.marketplace.source_config import get_source_config_async
 
-    source = await get_source_config_async()
-    return await store.publish_items(
-        _item_ids(args),
-        operator=str(getattr(user, "id", "") or "admin"),
-        require_verified=bool(source.get("leaderboard_require_verified")),
+    enqueued, skipped = await store.enqueue_publish_jobs(
+        _item_ids(args), operator=str(getattr(user, "id", "") or "admin"),
     )
+    return {"queued": enqueued, "skipped": skipped, "requested": len(enqueued) + len(skipped)}
 
 
 async def _leaderboard_unpublish(args: dict, _ctx: PluginContext) -> dict:
@@ -234,6 +231,19 @@ async def _leaderboard_unpublish(args: dict, _ctx: PluginContext) -> dict:
 
     unpublished = await store.unpublish_items(_item_ids(args))
     return {"unpublished": unpublished, "count": len(unpublished)}
+
+
+async def _leaderboard_delete(args: dict, _ctx: PluginContext) -> dict:
+    """从候选池硬删除条目（**不可恢复**，含已发布行——用户侧立即不可见）。
+
+    与 REST ``POST /admin/leaderboard/delete`` 同链路；关联的 pending 推送 job
+    随行一并清掉（见 store.delete_items）。
+    """
+    await _admin()
+    import marketplace_leaderboard_store as store
+
+    deleted = await store.delete_items(_item_ids(args))
+    return {"deleted": deleted, "count": len(deleted)}
 
 
 async def _leaderboard_set_sort(args: dict, _ctx: PluginContext) -> dict:
@@ -271,7 +281,7 @@ async def _leaderboard_sync_field(args: dict, _ctx: PluginContext) -> dict:
     """
     await _admin()
     import marketplace_leaderboard_store as store
-    from monkeycode_compat.marketplace import leaderboard_probe
+    from user_platform.marketplace import leaderboard_probe
 
     field = str(args.get("field") or "").strip()
     if field not in _SYNC_FIELD_VALUES:
@@ -334,7 +344,7 @@ async def _leaderboard_add_github(args: dict, _ctx: PluginContext) -> dict:
     已存在时返回既有条目并标 created=false，不报错。
     """
     await _admin()
-    from monkeycode_compat.marketplace import leaderboard_sync
+    from user_platform.marketplace import leaderboard_sync
     import marketplace_leaderboard_store as store
 
     raw = str(args.get("repo") or "").strip().removeprefix("https://github.com/").strip("/")
@@ -357,7 +367,7 @@ async def _leaderboard_add_github(args: dict, _ctx: PluginContext) -> dict:
         raise ValueError("无法解析仓库标识")
     # 手动添加也跑确定性探针（与同步链路同一份 attach_probe）：仓库有 .mcp.json/SKILL.md
     # 等结构化清单时 install_spec/launch_spec 直接派生。探针失败不挡创建。
-    from monkeycode_compat.marketplace import leaderboard_probe
+    from user_platform.marketplace import leaderboard_probe
     item = await leaderboard_probe.attach_probe(item)
     row, created = await store.create_manual_item(item)
     if row is None:
@@ -368,7 +378,7 @@ async def _leaderboard_add_github(args: dict, _ctx: PluginContext) -> dict:
 async def _leaderboard_verify(args: dict, _ctx: PluginContext) -> dict:
     """重新验证一条条目的 launch_spec（可选 install_spec），写回 verified/failed。"""
     await _admin()
-    from monkeycode_compat.marketplace import leaderboard_verify
+    from user_platform.marketplace import leaderboard_verify
 
     return await leaderboard_verify.verify_item(
         _item_id(args), include_install=bool(args.get("include_install", False)),
@@ -403,9 +413,10 @@ def register(reg: PluginRegistrar) -> None:
     # 只在市场管理场景的对话里临时获权，普通 Agent MCP 选择器不暴露（见 agent/api.list_available_mcp）。
     reg.tool(name="marketplace_leaderboard_list", description="查询外部榜单候选池（草稿+已发布），支持按榜单/状态/分类/可安装/启动方式状态过滤与搜索。", params={"type": "object", "properties": {"board": {"type": "string"}, "status": {"type": "string", "enum": ["draft", "published"]}, "target_module": _LEADERBOARD_MODULE, "installable": {"type": "boolean"}, "launch_status": {"type": "string", "enum": ["unfilled", "pending", "filled", "failed", "verified"]}, "q": {"type": "string"}, "limit": {"type": "integer"}, "offset": {"type": "integer"}}})(_leaderboard_list)
     reg.tool(name="marketplace_leaderboard_get", description="读取一条榜单条目的完整字段（含 external_data 上游快照与安装配置）。", params={"type": "object", "properties": {"item_id": _ITEM_ID}, "required": ["item_id"]})(_leaderboard_get)
-    reg.tool(name="marketplace_leaderboard_update", description="修改榜单草稿的资源字段（名称/显示名/摘要/发布者/版本/子分类/标签/分类多选）与安装配置、状态；发布=状态选 published。", params={"type": "object", "properties": {"item_id": _ITEM_ID, "patch": _OBJECT}, "required": ["item_id", "patch"]})(_leaderboard_update)
+    reg.tool(name="marketplace_leaderboard_update", description="修改榜单条目的资源字段（名称/显示名/摘要/发布者/版本/子分类/标签/分类多选）与安装配置。不含发布：patch 里的 status 会被忽略，发布用 marketplace_leaderboard_publish。", params={"type": "object", "properties": {"item_id": _ITEM_ID, "patch": _OBJECT}, "required": ["item_id", "patch"]})(_leaderboard_update)
     reg.tool(name="marketplace_leaderboard_publish", description="批量发布榜单条目（对用户可见）。空分类会按上游榜单自动推导，推不出的条目报错返回原因。", params={"type": "object", "properties": {"item_ids": _ITEM_IDS}, "required": ["item_ids"]})(_leaderboard_publish)
     reg.tool(name="marketplace_leaderboard_unpublish", description="批量撤回榜单条目（回草稿，用户侧立即不可见）。", params={"type": "object", "properties": {"item_ids": _ITEM_IDS}, "required": ["item_ids"]})(_leaderboard_unpublish)
+    reg.tool(name="marketplace_leaderboard_delete", description="从候选池硬删除榜单条目（含已发布，用户侧立即不可见，**不可恢复**；上游榜单再次同步会把同名仓库重新拉回草稿）。", params={"type": "object", "properties": {"item_ids": _ITEM_IDS}, "required": ["item_ids"]})(_leaderboard_delete)
     reg.tool(name="marketplace_leaderboard_set_sort", description="设置榜单条目的排序（资源中心索引）；留空=null 取消固定，排最后按热度。", params={"type": "object", "properties": {"item_id": _ITEM_ID, "sort_order": {"type": ["integer", "null"], "minimum": 0}}, "required": ["item_id"]})(_leaderboard_set_sort)
     reg.tool(name="marketplace_leaderboard_sync_field", description="把某个资源字段同步回上游值（从 external_data 派生）；分类按 board/上游分类重新推导。", params={"type": "object", "properties": {"item_id": _ITEM_ID, "field": _SYNC_FIELD}, "required": ["item_id", "field"]})(_leaderboard_sync_field)
     reg.tool(name="marketplace_leaderboard_verify", description="重新验证一条榜单条目的启动方式（remote 握手 / stdio registry HEAD）与安装资源存在性，写回 verified/failed。", params={"type": "object", "properties": {"item_id": _ITEM_ID, "include_install": {"type": "boolean"}}, "required": ["item_id"]})(_leaderboard_verify)

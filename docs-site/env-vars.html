@@ -14,7 +14,7 @@
     <a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a>
   </nav>
   <div class="nav-group">能力详解</div><nav>
-    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
+    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
   </nav>
   <div class="nav-group">操作手册</div><nav>
     <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
@@ -102,6 +102,7 @@
 <tr><td><code>node_control_port</code></td><td><code>NODE_CONTROL_PORT</code></td><td>控制</td><td>8003</td><td>Hypercorn 监听端口。</td></tr>
 <tr><td><code>agent_compose_agent_image</code></td><td><code>AGENT_COMPOSE_AGENT_IMAGE</code></td><td>控制</td><td>空</td><td>docker/docker-compose 节点引导脚本使用的镜像。</td></tr>
 <tr><td><code>agent_compose_node_bin_dir</code></td><td><code>AGENT_COMPOSE_NODE_BIN_DIR</code></td><td>控制</td><td>自动探测 nodes/dist</td><td>提供节点安装包下载的二进制目录。</td></tr>
+<tr><td><code>agent_compose_node_allow_system_env</code></td><td><code>AGENT_COMPOSE_NODE_ALLOW_SYSTEM_ENV</code></td><td>节点</td><td>宿主机安装默认开，容器默认关</td><td>节点是否上报「系统内置环境」能力位（系统环境档：任务直接跑在节点操作者的本机 HOME）；设为 <code>on</code> 后重启节点生效。详见 <a href="cap-editor.html#envs">编辑器能力详解</a>。</td></tr>
 <tr><td><code>node_default_session_cpu</code></td><td><code>NODE_DEFAULT_SESSION_CPU</code></td><td>控制</td><td>1.0 核</td><td>每个节点会话的全局 CPU 计费量；0 表示不按该维度准入。</td></tr>
 <tr><td><code>node_default_session_memory</code></td><td><code>NODE_DEFAULT_SESSION_MEMORY</code></td><td>控制</td><td>1073741824 字节</td><td>每个节点会话的全局内存计费量；0 表示不按该维度准入。</td></tr>
 <tr><td><code>node_terminal_max_active_per_node</code></td><td><code>NODE_TERMINAL_MAX_ACTIVE_PER_NODE</code></td><td>控制</td><td>10</td><td>单节点最大活跃终端数，至少为 1。</td></tr>

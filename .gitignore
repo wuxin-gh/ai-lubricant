@@ -29,6 +29,8 @@ nodes/runtime/javascript/dist/
 _cr_profile/
 logs/
 _real_shot.png
+# 本地 Node.js 版本索引缓存（host-tool 安装器用，可重建，不入库）
+.tmp-*.json
 
 # PyInstaller desktop build output (desktop/build.ps1)
 /build/
@@ -63,3 +65,4 @@ data/
 .claude_ch9.md
 .claude_chapter4.md
 .claude_async_call_scan.py
+.vite/

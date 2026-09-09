@@ -4,7 +4,7 @@ import zipfile
 
 import pytest
 
-from monkeycode_compat.skill_domain import SkillDomainService, _script_manifest, parse_skill_source
+from user_platform.skill_domain import SkillDomainService, _script_manifest, parse_skill_source
 
 
 def _zip(entries: dict[str, str]) -> bytes:

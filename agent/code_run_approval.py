@@ -6,7 +6,7 @@ import hashlib
 import json
 from typing import Any, Awaitable, Callable
 
-from monkeycode_compat.node_client.approvals import (
+from user_platform.node_client.approvals import (
     CONFIRMATION_TIMEOUT_SECONDS,
     ApprovalDenied,
     ApprovalTimeout,

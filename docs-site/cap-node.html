@@ -15,7 +15,7 @@
     <a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a>
   </nav>
   <div class="nav-group">能力详解</div><nav>
-    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
+    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
   </nav>
   <div class="nav-group">操作手册</div><nav>
     <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
@@ -40,7 +40,6 @@
 </table></div>
 
 <h2 id="roles">功能：三种角色</h2>
-<figure class="shot" data-shot="cap-node/roles.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">三种角色</span></div><button class="shot-open" type="button" aria-label="放大截图：三种角色"><img src="assets/screenshots/cap-node/roles.png" alt="三种角色" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-node/roles.png</code></div></div></figure>
 <div class="table-wrap"><table><thead><tr><th>角色</th><th>是否运行客户端</th><th>职责</th></tr></thead><tbody>
 <tr><td><code>execution</code></td><td>是（独立 Go 二进制）</td><td>执行 provider CLI 会话、任务、工作区、终端、文件与节点代理；只有它参与会话调度</td></tr>
 <tr><td><code>management</code></td><td>是（独立 Go 二进制）</td><td>管理 execution 节点并在宿主机创建/删除它们；自身也支持 host terminal 与 exec</td></tr>
@@ -49,7 +48,6 @@
 <p>一台接进来的机器可同时是五类用途：<strong>浏览器 PTY 终端</strong>、<strong>跑 provider CLI 的编程子端</strong>、<strong>host exec 单条命令</strong>、<strong>工作区与文件读写</strong>、<strong>HTTP 代理出口</strong>。</p>
 
 <h2 id="connect">功能：无需 SSH 的四步链路</h2>
-<figure class="shot" data-shot="cap-node/connect.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">无需 SSH 的四步链路</span></div><button class="shot-open" type="button" aria-label="放大截图：无需 SSH 的四步链路"><img src="assets/screenshots/cap-node/connect.png" alt="无需 SSH 的四步链路" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-node/connect.png</code></div></div></figure>
 <div class="chain">
 <div class="chain-step"><span class="num">1</span><div class="body"><h4>节点主动拨号</h4><p>节点使用自身 ID 与 TOTP 凭据连接控制服务；断线后指数退避重连。</p></div></div>
 <div class="chain-step"><span class="num">2</span><div class="body"><h4>平台批准与调度</h4><p>只有 approved、在线、具备能力且满足容量的 execution 节点参与会话调度。</p></div></div>
@@ -59,7 +57,6 @@
 <div class="note"><strong>准确边界</strong>平台日常链路不依赖 SSH 端口与 SSH Key；你仍需在目标机器安装节点、赋予合适的操作系统权限，并允许节点主动访问控制服务。</div>
 
 <h2 id="abilities">功能：终端、exec、文件与代理出口</h2>
-<figure class="shot" data-shot="cap-node/abilities.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">终端、exec、文件与代理出口</span></div><button class="shot-open" type="button" aria-label="放大截图：终端、exec、文件与代理出口"><img src="assets/screenshots/cap-node/abilities.png" alt="终端、exec、文件与代理出口" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-node/abilities.png</code></div></div></figure>
 <div class="table-wrap"><table><thead><tr><th>能力</th><th>行为</th></tr></thead><tbody>
 <tr><td>浏览器 PTY 终端</td><td>浏览器 WebSocket → 数据服务 → 控制服务 → 节点本机 PTY（Unix pty / Windows ConPTY）；断开时节点关闭残留 shell</td></tr>
 <tr><td>host exec</td><td>宿主机执行单条命令，返回 stdout/stderr/exit_code；超时默认 2 分钟（上限 10 分钟）、输出默认 1 MiB（上限 16 MiB）；需节点声明 <code>host_exec=true</code></td></tr>
@@ -69,7 +66,6 @@
 </tbody></table></div>
 
 <h2 id="security">功能：身份加密封存与审批</h2>
-<figure class="shot" data-shot="cap-node/security.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">身份加密封存与审批</span></div><button class="shot-open" type="button" aria-label="放大截图：身份加密封存与审批"><img src="assets/screenshots/cap-node/security.png" alt="身份加密封存与审批" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-node/security.png</code></div></div></figure>
 <div class="table-wrap"><table><thead><tr><th>措施</th><th>行为</th></tr></thead><tbody>
 <tr><td>TOTP AES-256-GCM 封存</td><td>onboard 发唯一 node_id 与 TOTP secret，服务端封存；认证带重放缓存，同一验证码不能复用</td></tr>
 <tr><td>统一 permission_denied</td><td>未知/撤销/错误/重放统一返回，避免身份枚举</td></tr>
@@ -78,7 +74,6 @@
 </tbody></table></div>
 
 <h2 id="agent-safety">功能：Agent 安全控制操作</h2>
-<figure class="shot" data-shot="cap-node/agent-safety.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">Agent 安全控制操作</span></div><button class="shot-open" type="button" aria-label="放大截图：Agent 安全控制操作"><img src="assets/screenshots/cap-node/agent-safety.png" alt="Agent 安全控制操作" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-node/agent-safety.png</code></div></div></figure>
 <p>节点上跑 Agent CLI 时，平台从配置、执行到结果全程设防，不让 Agent 拿到不该有的权限：</p>
 <div class="table-wrap"><table><thead><tr><th>控制点</th><th>行为</th></tr></thead><tbody>
 <tr><td>目录边界</td><td>Agent 配置 <code>allowed_roots</code> 与 <code>denied_patterns</code>；默认拒绝 <code>/etc/</code>、<code>/var/</code>、<code>.env</code> 等敏感路径</td></tr>
@@ -91,7 +86,6 @@
 </tbody></table></div>
 
 <h2 id="install-agent">功能：一个指令连接 Agent</h2>
-<figure class="shot" data-shot="cap-node/install-agent.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">一个指令连接 Agent</span></div><button class="shot-open" type="button" aria-label="放大截图：一个指令连接 Agent"><img src="assets/screenshots/cap-node/install-agent.png" alt="一个指令连接 Agent" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-node/install-agent.png</code></div></div></figure>
 <p>Onboard 后直接复制一条命令到目标机器：</p>
 <pre><code>curl &lt;平台地址&gt;/api/v1/public/nodes/&lt;node_id&gt;/install.sh | bash</code></pre>
 <div class="table-wrap"><table><thead><tr><th>脚本自动完成</th><th>行为</th></tr></thead><tbody>
@@ -114,6 +108,6 @@
 
 <p><a href="guide-node.html">节点管理员操作手册 →</a> · <a href="architecture.html#terminal-agent">TOTP 认证、帧协议与代理实现 →</a></p>
 
-<footer class="footer"><span><a href="cap-editor.html">← 上一篇：连接编辑器</a></span><span><a href="cap-mobile.html">下一篇：手机客户端 →</a></span></footer>
+<footer class="footer"><span><a href="cap-editor.html">← 上一篇：编辑器</a></span><span><a href="cap-mobile.html">下一篇：手机客户端 →</a></span></footer>
 </article></main></div>
 </body></html>

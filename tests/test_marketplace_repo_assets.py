@@ -16,14 +16,14 @@ import asyncio
 import base64
 import copy
 
-from monkeycode_compat.marketplace import urls
-from monkeycode_compat.marketplace.config import (
+from user_platform.marketplace import urls
+from user_platform.marketplace.config import (
     MarketplaceConsumerSettings,
     MarketplaceSettings,
     detect_platform,
     parse_repo_url,
 )
-from monkeycode_compat.marketplace.validator import (
+from user_platform.marketplace.validator import (
     validate_manifest,
     validate_mobile_assets,
     validate_mobile_release,
@@ -128,7 +128,7 @@ def test_repo_path_validation_rules():
 
 def test_node_asset_repo_path_replaces_download_url_requirement():
     # 新的通用 runtime 文件名映射到 any/any，旧 runtime 命名保持兼容。
-    from monkeycode_compat.marketplace.validator import identify_node_asset
+    from user_platform.marketplace.validator import identify_node_asset
 
     universal = identify_node_asset("node-runtime.tar.gz")
     assert universal["role"] == "runtime"
@@ -205,7 +205,7 @@ def test_node_version_manifest_with_repo_path_is_accepted():
 
 def test_normalize_release_assets_renders_gitee_urls_in_place(monkeypatch):
     monkeypatch.setattr(
-        "monkeycode_compat.marketplace.config.consumer_settings", _consumer("gitee")
+        "user_platform.marketplace.config.consumer_settings", _consumer("gitee")
     )
     data = {
         "schema": "ai-lubricant.node-release/v1", "version": "20260830-1200", "version_notes": "n",
@@ -233,7 +233,7 @@ def test_node_release_catalog_apply_release_renders_platform_urls(monkeypatch):
     import node_release_catalog as nrc
 
     monkeypatch.setattr(
-        "monkeycode_compat.marketplace.config.consumer_settings", _consumer("gitee")
+        "user_platform.marketplace.config.consumer_settings", _consumer("gitee")
     )
 
     release = {
@@ -309,7 +309,7 @@ class _FakeRepoClient:
 
 
 def _make_upload_job(version: str, files: list[dict]):
-    from monkeycode_compat.marketplace import upload_jobs
+    from user_platform.marketplace import upload_jobs
 
     job_id = upload_jobs.create_job(version, [])
     tmpdir = upload_jobs.tmp_dir(job_id)
@@ -375,7 +375,7 @@ def test_collect_install_assets_expands_universal_runtime():
     import sys
 
     sys.path.insert(0, "server")
-    from monkeycode_compat import nodes_service
+    from user_platform import nodes_service
 
     latest = {
         "version": "20260831-1200",
@@ -402,10 +402,10 @@ def test_collect_install_assets_expands_universal_runtime():
 def test_node_upload_transfer_writes_binaries_into_repo(monkeypatch, tmp_path):
     """新架构下第②阶段：二进制发布到独立仓库 GitHub Release，asset 记 download_url；
     manifest 落 store 真相源，marketplace 仓库镜像（item / index / version.json）由 publisher 异步渲染。"""
-    from monkeycode_compat.marketplace import upload_jobs
-    from monkeycode_compat.marketplace import routes as mp_routes
-    from monkeycode_compat.marketplace import github as mp_github
-    from monkeycode_compat.marketplace import release_repos
+    from user_platform.marketplace import upload_jobs
+    from user_platform.marketplace import routes as mp_routes
+    from user_platform.marketplace import github as mp_github
+    from user_platform.marketplace import release_repos
     import marketplace_store as store
 
     monkeypatch.setattr(upload_jobs, "tmp_dir", lambda job_id: str(tmp_path / job_id))
@@ -468,10 +468,10 @@ def test_node_upload_transfer_writes_binaries_into_repo(monkeypatch, tmp_path):
 
 
 def test_mobile_upload_transfer_writes_apk_into_repo(monkeypatch, tmp_path):
-    from monkeycode_compat.marketplace import upload_jobs
-    from monkeycode_compat.marketplace import routes as mp_routes
-    from monkeycode_compat.marketplace import github as mp_github
-    from monkeycode_compat.marketplace import release_repos
+    from user_platform.marketplace import upload_jobs
+    from user_platform.marketplace import routes as mp_routes
+    from user_platform.marketplace import github as mp_github
+    from user_platform.marketplace import release_repos
     import marketplace_store as store
 
     monkeypatch.setattr(upload_jobs, "tmp_dir", lambda job_id: str(tmp_path / job_id))
@@ -530,10 +530,10 @@ def test_mobile_upload_transfer_writes_apk_into_repo(monkeypatch, tmp_path):
 def test_device_control_upload_transfer_writes_apk_into_release(monkeypatch, tmp_path):
     """设备控制 App 第②阶段：APK 发布到独立仓库 Release（tag device-control-v<版本>），
     asset 记 download_url；manifest 落 store，marketplace 仓库零写入。"""
-    from monkeycode_compat.marketplace import upload_jobs
-    from monkeycode_compat.marketplace import routes as mp_routes
-    from monkeycode_compat.marketplace import github as mp_github
-    from monkeycode_compat.marketplace import release_repos
+    from user_platform.marketplace import upload_jobs
+    from user_platform.marketplace import routes as mp_routes
+    from user_platform.marketplace import github as mp_github
+    from user_platform.marketplace import release_repos
     import marketplace_store as store
 
     monkeypatch.setattr(upload_jobs, "tmp_dir", lambda job_id: str(tmp_path / job_id))
@@ -583,11 +583,11 @@ def test_device_control_upload_transfer_writes_apk_into_release(monkeypatch, tmp
 def test_device_control_ios_ipa_publishes_and_merges_by_platform(monkeypatch, tmp_path):
     """iOS 发布：IPA 走同一 Release（tag device-control-v<版本>）；同版本分次上传
     Android/iOS 时按 platform 合并，manifest tags 带上两个平台。"""
-    from monkeycode_compat.marketplace import upload_jobs
-    from monkeycode_compat.marketplace import routes as mp_routes
-    from monkeycode_compat.marketplace import github as mp_github
-    from monkeycode_compat.marketplace import release_repos
-    from monkeycode_compat.marketplace.validator import (
+    from user_platform.marketplace import upload_jobs
+    from user_platform.marketplace import routes as mp_routes
+    from user_platform.marketplace import github as mp_github
+    from user_platform.marketplace import release_repos
+    from user_platform.marketplace.validator import (
         identify_device_control_asset,
         validate_device_control_assets,
     )
@@ -719,7 +719,7 @@ def _snapshot_with_android(download_url: str) -> dict:
 def test_consumer_proxy_download_streams_release_asset(monkeypatch):
     """/consumer/download/mobile-android：服务端经资源中心代理拉 Release 资产流式回传，
     透传 Content-Length / Content-Disposition——手机不需要直连 GitHub。"""
-    from monkeycode_compat.marketplace import routes as mp_routes
+    from user_platform.marketplace import routes as mp_routes
     import mobile_release_catalog as mrc
     import providers.proxy_manager as pm
 
@@ -749,7 +749,7 @@ def test_consumer_proxy_download_streams_release_asset(monkeypatch):
 def test_consumer_proxy_download_device_control_streams(monkeypatch):
     """/consumer/download/device-control/{platform}：被控端 APK 走 platform=android，
     同口径代理下载；旧路径 device-control-android 仍是它的别名。"""
-    from monkeycode_compat.marketplace import routes as mp_routes
+    from user_platform.marketplace import routes as mp_routes
     import device_control_release_catalog as dcrc
     import providers.proxy_manager as pm
 
@@ -786,7 +786,7 @@ def test_consumer_proxy_download_device_control_streams(monkeypatch):
 def test_consumer_proxy_download_device_control_ios_ipa(monkeypatch):
     """/consumer/download/device-control/ios：设备类型参数选 iOS 侧载 IPA，
     media_type 用通用字节流，文件名/兜底长度取发布记录。"""
-    from monkeycode_compat.marketplace import routes as mp_routes
+    from user_platform.marketplace import routes as mp_routes
     import device_control_release_catalog as dcrc
     import providers.proxy_manager as pm
 
@@ -835,7 +835,7 @@ def test_consumer_proxy_download_without_release_returns_404(monkeypatch):
     """快照空且刷新仍空：404（手机端据此提示未发布，而不是拿到 HTML 错误页）。"""
     from fastapi import HTTPException
 
-    from monkeycode_compat.marketplace import routes as mp_routes
+    from user_platform.marketplace import routes as mp_routes
     import mobile_release_catalog as mrc
 
     async def fake_latest():
@@ -858,7 +858,7 @@ def test_consumer_proxy_download_without_release_returns_404(monkeypatch):
 def test_consumer_version_includes_proxy_download_url(monkeypatch):
     """/consumer/mobile-version 与 /consumer/device-control-version 都带代理下载路径；
     未发布时为空串（客户端回落 download_url / 显示未发布）。"""
-    from monkeycode_compat.marketplace import routes as mp_routes
+    from user_platform.marketplace import routes as mp_routes
     import mobile_release_catalog as mrc
     import device_control_release_catalog as dcrc
 
@@ -879,7 +879,10 @@ def test_consumer_version_includes_proxy_download_url(monkeypatch):
     monkeypatch.setattr(mrc, "get_latest_release", fake_latest)
     monkeypatch.setattr(mrc, "refresh", fake_refresh)
     payload = asyncio.run(mp_routes.consumer_mobile_version())
-    assert payload["android"]["proxy_download_url"] == "/api/v1/marketplace/consumer/download/mobile-android"
+    # 尾段带真实 APK 文件名：忽略 Content-Disposition 的手机浏览器按 URL 尾段命名文件。
+    assert payload["android"]["proxy_download_url"] == (
+        "/api/v1/marketplace/consumer/download/mobile-android/ai-lubricant-260608-android.apk"
+    )
 
     monkeypatch.setattr(mrc, "get_latest_release", empty_latest)
     monkeypatch.setattr(mrc, "refresh", empty_refresh)
@@ -889,7 +892,9 @@ def test_consumer_version_includes_proxy_download_url(monkeypatch):
     monkeypatch.setattr(dcrc, "get_latest_release", fake_latest)
     monkeypatch.setattr(dcrc, "refresh", fake_refresh)
     payload = asyncio.run(mp_routes.consumer_device_control_version())
-    assert payload["android"]["proxy_download_url"] == "/api/v1/marketplace/consumer/download/device-control/android"
+    assert payload["android"]["proxy_download_url"] == (
+        "/api/v1/marketplace/consumer/download/device-control/android/ai-lubricant-260608-android.apk"
+    )
     # device-control 现在带 ios 块（侧载 IPA，与 android 同字段）；未发布 iOS 时 download_url 为空。
     assert "ios" in payload
     assert payload["ios"]["proxy_download_url"] == ""
@@ -915,7 +920,7 @@ def _fake_fetch(data: bytes):
 
 def _make_url_upload_job(version: str, download_url: str, download_data: bytes):
     """URL 模式的 job：一条伪文件条目（source=url），无暂存文件。"""
-    from monkeycode_compat.marketplace import upload_jobs
+    from user_platform.marketplace import upload_jobs
 
     job_id = upload_jobs.create_job(version, [])
     upload_jobs.set_files(job_id, [{
@@ -936,8 +941,8 @@ def _make_url_upload_job(version: str, download_url: str, download_data: bytes):
 def test_mobile_url_transfer_records_download_url_without_repo(monkeypatch, tmp_path):
     """URL 模式第②阶段：下载外链算 sha256，asset 只记 download_url（无 repo_path），
     manifest 落 store；仓库零写入（绕开 GitHub API 大文件限制）。"""
-    from monkeycode_compat.marketplace import upload_jobs
-    from monkeycode_compat.marketplace import routes as mp_routes
+    from user_platform.marketplace import upload_jobs
+    from user_platform.marketplace import routes as mp_routes
     import marketplace_store as store
     import mobile_release_catalog
 
@@ -976,8 +981,8 @@ def test_mobile_url_transfer_records_download_url_without_repo(monkeypatch, tmp_
 
 def test_mobile_url_transfer_download_failure_marks_file_failed(monkeypatch, tmp_path):
     """外链下载失败：文件标 failed、job 标 failed、错误进 job 状态（UI 可重试）。"""
-    from monkeycode_compat.marketplace import upload_jobs
-    from monkeycode_compat.marketplace import routes as mp_routes
+    from user_platform.marketplace import upload_jobs
+    from user_platform.marketplace import routes as mp_routes
     import marketplace_store as store
 
     monkeypatch.setattr(upload_jobs, "tmp_dir", lambda job_id: str(tmp_path / job_id))
@@ -1005,7 +1010,7 @@ def test_mobile_url_transfer_download_failure_marks_file_failed(monkeypatch, tmp
 
 def test_mobile_url_transfer_rejects_non_apk_content(monkeypatch, tmp_path):
     """下载内容不是 ZIP/APK（缺 PK 头）：_fetch_url_to_file 报可读错误，文件 failed。"""
-    from monkeycode_compat.marketplace import routes as mp_routes
+    from user_platform.marketplace import routes as mp_routes
 
     class _Resp:
         status = 200
@@ -1023,7 +1028,7 @@ def test_mobile_url_transfer_rejects_non_apk_content(monkeypatch, tmp_path):
     import providers.proxy_manager as pm
 
     monkeypatch.setattr(pm, "get_proxy_manager", lambda: _Mgr())
-    from monkeycode_compat.marketplace import upload_jobs
+    from user_platform.marketplace import upload_jobs
 
     monkeypatch.setattr(upload_jobs, "tmp_dir", lambda job_id: str(tmp_path / job_id))
     job_id = _make_url_upload_job("260830", "https://host/x.apk", b"")
@@ -1048,8 +1053,8 @@ def test_mobile_url_transfer_rejects_non_apk_content(monkeypatch, tmp_path):
 
 def test_mobile_url_transfer_enforces_size_cap(monkeypatch, tmp_path):
     """下载超过 max_bytes：立即中断报错（防无限流灌盘）。"""
-    from monkeycode_compat.marketplace import routes as mp_routes
-    from monkeycode_compat.marketplace import upload_jobs
+    from user_platform.marketplace import routes as mp_routes
+    from user_platform.marketplace import upload_jobs
 
     class _Resp:
         status = 200
@@ -1081,7 +1086,7 @@ def test_mobile_url_transfer_enforces_size_cap(monkeypatch, tmp_path):
 
 def test_mobile_url_fetch_keeps_bytes_across_chunked_magic(monkeypatch, tmp_path):
     """魔数 PK\\x03\\x04 被网络层拆进多个 chunk：仍能正确识别，且逐字节落盘不丢失。"""
-    from monkeycode_compat.marketplace import routes as mp_routes
+    from user_platform.marketplace import routes as mp_routes
 
     payload = b"PK\x03\x04" + b"apk-rest" * 3
 
@@ -1119,8 +1124,8 @@ def test_mobile_url_fetch_keeps_bytes_across_chunked_magic(monkeypatch, tmp_path
 def test_mobile_url_retry_rebuilds_asset_from_tmp(monkeypatch, tmp_path):
     """上轮「下载成功、store 提交前」失败的重试：从暂存 APK 重算 digest/size，
     download_url 来自伪文件条目（URL 模式的 done-fallback 分支）。"""
-    from monkeycode_compat.marketplace import upload_jobs
-    from monkeycode_compat.marketplace import routes as mp_routes
+    from user_platform.marketplace import upload_jobs
+    from user_platform.marketplace import routes as mp_routes
     import marketplace_store as store
 
     monkeypatch.setattr(upload_jobs, "tmp_dir", lambda job_id: str(tmp_path / job_id))
@@ -1162,8 +1167,8 @@ def test_mobile_url_route_validations(monkeypatch, tmp_path):
     """路由层 URL 校验：HTTPS 强制、禁 token 类 query、basename 版本一致性。
     合法 URL 用假下载器短路第②阶段（这里只测路由校验，不真下载）。"""
     from fastapi import HTTPException
-    from monkeycode_compat.marketplace import routes as mp_routes
-    from monkeycode_compat.marketplace import upload_jobs
+    from user_platform.marketplace import routes as mp_routes
+    from user_platform.marketplace import upload_jobs
 
     monkeypatch.setattr(upload_jobs, "tmp_dir", lambda job_id: str(tmp_path / job_id))
     monkeypatch.setattr(mp_routes, "_fetch_url_to_file", _fake_fetch(b"PK\x03\x04ok"))
@@ -1206,8 +1211,8 @@ def test_hard_delete_removes_repo_binaries_and_release_manifest(monkeypatch):
     """硬删除发行版本：store 行删除，payload 携带删除前 manifest；publisher 阶段
     清理仓里的 files/ 资产与 node-releases/<v>/manifest.json（Gitee 1GB 配额不能
     留残渣）。本测试直接驱动 publisher 的 _delete_item_files 验证清理行为。"""
-    from monkeycode_compat.marketplace import publisher
-    from monkeycode_compat.marketplace import routes as mp_routes
+    from user_platform.marketplace import publisher
+    from user_platform.marketplace import routes as mp_routes
 
     client = _FakeRepoClient()
     manifest = {
@@ -1235,10 +1240,10 @@ def test_node_upload_retry_rebuilds_prior_asset_from_tmp(monkeypatch, tmp_path):
     """上轮在「Release 资产传完、store 提交前」失败的重试：store/仓库 manifest 都读不到
     done 文件的资产元数据，必须从独立仓库 Release 的现有资产取回直链（临时文件重算
     digest/size 校验一致），否则已传文件会从新 manifest 里丢失。"""
-    from monkeycode_compat.marketplace import upload_jobs
-    from monkeycode_compat.marketplace import routes as mp_routes
-    from monkeycode_compat.marketplace import github as mp_github
-    from monkeycode_compat.marketplace import release_repos
+    from user_platform.marketplace import upload_jobs
+    from user_platform.marketplace import routes as mp_routes
+    from user_platform.marketplace import github as mp_github
+    from user_platform.marketplace import release_repos
     import marketplace_store as store
 
     monkeypatch.setattr(upload_jobs, "tmp_dir", lambda job_id: str(tmp_path / job_id))
@@ -1367,7 +1372,7 @@ def _producer_settings() -> MarketplaceSettings:
 def test_write_bytes_puts_base64_blob_with_sha(monkeypatch):
     """新文件写入：先 GET 元数据（404 → 无 sha），再 PUT base64 内容。二进制
     绝不能走 read_json 的 JSON 解析路径。"""
-    from monkeycode_compat.marketplace import github as gh
+    from user_platform.marketplace import github as gh
 
     pm = _MetaProxyManager([
         _MetaResponse(404),  # _read_sha_or_none: 文件不存在
@@ -1390,7 +1395,7 @@ def test_write_bytes_puts_base64_blob_with_sha(monkeypatch):
 
 def test_write_bytes_overwrites_with_current_sha(monkeypatch):
     """已存在文件：GET 元数据拿真实 sha，PUT 带上 sha 覆盖。"""
-    from monkeycode_compat.marketplace import github as gh
+    from user_platform.marketplace import github as gh
 
     pm = _MetaProxyManager([
         _MetaResponse(200, {"type": "file", "sha": "existing-sha"}),
@@ -1407,7 +1412,7 @@ def test_write_bytes_overwrites_with_current_sha(monkeypatch):
 
 def test_delete_file_deletes_binary_asset_by_sha(monkeypatch):
     """删除二进制资产：只读元数据取 sha（不解析内容），DELETE 带 sha。"""
-    from monkeycode_compat.marketplace import github as gh
+    from user_platform.marketplace import github as gh
 
     pm = _MetaProxyManager([
         _MetaResponse(200, {"type": "file", "sha": "blob-sha"}),
@@ -1431,3 +1436,139 @@ class _PMLazy:
 
     def request(self, **kwargs):
         return self._pm.request(**kwargs)
+
+
+# ── Release asset 重传幂等（upload_release_asset 422 先删后传）───────────────
+
+
+class _Resp:
+    def __init__(self, status: int, payload: dict | None = None):
+        self.status = status
+        self._payload = payload
+
+    async def json(self):
+        if self._payload is None:
+            raise ValueError("no json body")
+        return self._payload
+
+    async def text(self):
+        return "" if self._payload is None else str(self._payload)
+
+
+class _AsyncCM:
+    """async with _http_session() as session 的薄包装，直接回放假 session。"""
+    def __init__(self, session): self._session = session
+    async def __aenter__(self): return self._session
+    async def __aexit__(self, *exc): return False
+
+
+class _RelSession:
+    """回放式假 ClientSession：按调用顺序吐响应，记录请求。"""
+
+    def __init__(self, responses: list[_Resp]):
+        self.responses = list(responses)
+        self.requests: list[tuple[str, str]] = []
+
+    class _Ctx:
+        def __init__(self, resp): self.resp = resp
+        async def __aenter__(self): return self.resp
+        async def __aexit__(self, *exc): return False
+
+    def post(self, url, **kwargs): 
+        self.requests.append(("POST", url))
+        return self._Ctx(self.responses.pop(0) if self.responses else _Resp(500))
+
+    def get(self, url, **kwargs):
+        self.requests.append(("GET", url))
+        return self._Ctx(self.responses.pop(0) if self.responses else _Resp(404))
+
+    def delete(self, url, **kwargs):
+        self.requests.append(("DELETE", url))
+        return self._Ctx(self.responses.pop(0) if self.responses else _Resp(404))
+
+    async def __aenter__(self): return self
+    async def __aexit__(self, *exc): return False
+
+
+def test_upload_release_asset_replaces_same_name_asset_on_422(monkeypatch):
+    """重传幂等：同名 asset 已在 Release 上时 GitHub 回 422——必须先查 Release
+    拿 asset id、DELETE 旧 asset、再重传一次成功。这是「过期后用已提交数据整包
+    重传」链路的服务端前提（新 job 所有文件都是 pending，不走 done 跳过路径）。"""
+    from user_platform.marketplace import github as gh
+
+    session = _RelSession([
+        _Resp(422, {"message": "already_exists"}),      # 第一次 POST 上传：撞同名
+        _Resp(200, {"assets": [{"id": 77, "name": "app.apk"}]}),  # GET release by id
+        _Resp(204),                                      # DELETE 旧 asset
+        _Resp(201, {"browser_download_url": "https://x/app.apk", "size": 3}),  # 重传成功
+    ])
+    # github.py 的 Releases 函数用 ..git_clients._http_session（async with session.post(...)）
+    import user_platform.git_clients as gc
+    monkeypatch.setattr(gc, "_http_session", lambda: _AsyncCM(session))
+
+    result = asyncio.run(gh.upload_release_asset(
+        "https://uploads.github.com/repos/o/r/releases/9/assets{?name,label}",
+        "tok", "app.apk", b"PK\x03",
+    ))
+    assert result["browser_download_url"].endswith("app.apk")
+    methods = [m for m, _ in session.requests]
+    assert methods == ["POST", "GET", "DELETE", "POST"]
+    # DELETE 打的是 api.github.com 的 asset 端点，不是 uploads.github.com
+    delete_url = session.requests[2][1]
+    assert delete_url == "https://api.github.com/repos/o/r/releases/assets/77"
+
+
+def test_upload_release_asset_raises_when_retry_still_fails(monkeypatch):
+    """删了旧 asset 重传仍失败：按原路径抛 GitClientError，不吞错。"""
+    from user_platform.git_clients import GitClientError
+    from user_platform.marketplace import github as gh
+
+    session = _RelSession([
+        _Resp(422, {"message": "already_exists"}),
+        _Resp(200, {"assets": [{"id": 77, "name": "app.apk"}]}),
+        _Resp(204),
+        _Resp(422, {"message": "still_bad"}),
+    ])
+    import user_platform.git_clients as gc
+    monkeypatch.setattr(gc, "_http_session", lambda: _AsyncCM(session))
+
+    import pytest
+    with pytest.raises(GitClientError):
+        asyncio.run(gh.upload_release_asset(
+            "https://uploads.github.com/repos/o/r/releases/9/assets{?name,label}",
+            "tok", "app.apk", b"PK\x03",
+        ))
+
+
+def test_upload_job_sweep_keeps_live_task(monkeypatch):
+    """sweep 不杀仍活着的转传任务（2GB/URL 模式超 30 分钟是合法长任务），
+    只回收终态或任务已死的过期 job。"""
+    import time as _time
+    from user_platform.marketplace import upload_jobs
+
+    upload_jobs._jobs.clear()
+    upload_jobs._tasks.clear()
+    upload_jobs._last_sweep_at = 0.0
+    monkeypatch.setattr(upload_jobs, "tmp_dir", lambda job_id: f"/tmp/nonexistent-{job_id}")
+
+    old = _time.time() - upload_jobs._TTL_SECONDS - 10
+    live_id = upload_jobs.create_job("v1", [])
+    dead_id = upload_jobs.create_job("v2", [])
+    upload_jobs._jobs[live_id]["created_at"] = old
+    upload_jobs._jobs[dead_id]["created_at"] = old
+
+    class _FakeTask:
+        def done(self): return False
+
+    upload_jobs._tasks[live_id] = _FakeTask()  # type: ignore[assignment]
+
+    upload_jobs.sweep_expired()
+    assert upload_jobs.get_job(live_id) is not None, "仍活着的任务不能被清"
+    assert upload_jobs.get_job(dead_id) is None, "无任务且过期的 job 应被清"
+
+    # TTL 内的 job 不动
+    fresh_id = upload_jobs.create_job("v3", [])
+    upload_jobs.sweep_expired()
+    assert upload_jobs.get_job(fresh_id) is not None
+    upload_jobs._jobs.clear()
+    upload_jobs._tasks.clear()

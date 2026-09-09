@@ -18,8 +18,8 @@ _proj = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _proj not in sys.path:
     sys.path.insert(0, _proj)
 
-# 直接按文件加载，绕开 monkeycode_compat 包级 __init__（服务端全量初始化）。
-_sd_path = os.path.join(_proj, "monkeycode_compat", "stack_detector.py")
+# 直接按文件加载，绕开 user_platform 包级 __init__（服务端全量初始化）。
+_sd_path = os.path.join(_proj, "user_platform", "stack_detector.py")
 _spec = importlib.util.spec_from_file_location("stack_detector_standalone", _sd_path)
 sd = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(sd)
@@ -96,7 +96,8 @@ def test_mobile_flutter_repo():
              "ios/Podfile", "android/app/src/main/AndroidManifest.xml"]
     profile = _run(sd.detect_stack(paths, _fetch_from({})))
     assert profile["primary_language"] == "dart"
-    assert "mobile_app" in profile["project_types"]
+    # 两端原生目录都有 → 双平台标签。
+    assert {"ios", "android"} <= set(profile["project_types"])
     assert "pub" in profile["package_managers"]
 
 
@@ -258,7 +259,9 @@ def test_react_native_classified_as_mobile_not_web_frontend():
     assert {"react-native", "expo"} <= set(profile["frameworks"])
     # RN 内含 react 依赖但不是 web 前端——裸 react 应被压掉。
     assert "react" not in profile["frameworks"]
-    assert "mobile_app" in profile["project_types"]
+    # RN 裸工程两端目录都有 → 双平台标签，不再出泛化的 mobile_app。
+    assert {"ios", "android"} <= set(profile["project_types"])
+    assert "mobile_app" not in profile["project_types"]
     assert "web_frontend" not in profile["project_types"]
 
 
@@ -271,17 +274,20 @@ def test_expo_managed_workflow_mobile_app_without_native_manifest():
     profile = _run(sd.detect_stack(paths, _fetch_from(texts)))
     assert "expo" in profile["frameworks"]
     assert "mobile_app" in profile["project_types"]
+    assert "ios" not in profile["project_types"]
+    assert "android" not in profile["project_types"]
 
 
 def test_flutter_framework_tag_from_pubspec_sdk_signal():
-    paths = ["pubspec.yaml", "lib/main.dart", "android/app/build.gradle"]
+    paths = ["pubspec.yaml", "lib/main.dart", "android/app/build.gradle",
+             "android/app/src/main/AndroidManifest.xml"]
     texts = {"pubspec.yaml": (
         "name: myapp\nenvironment:\n  sdk: '>=3.0.0 <4.0.0'\n"
         "dependencies:\n  flutter:\n    sdk: flutter\n  cupertino_icons: ^1.0.2\n"
     )}
     profile = _run(sd.detect_stack(paths, _fetch_from(texts)))
     assert "flutter" in profile["frameworks"]
-    assert "mobile_app" in profile["project_types"]
+    assert "android" in profile["project_types"]
     assert "pub" in profile["package_managers"]
     # cupertino_icons 依赖键被解析（证明 pubspec 扫描覆盖依赖段）。
     assert "pubspec.yaml" in profile["evidence"]
@@ -298,3 +304,36 @@ def test_dart_cli_package_not_tagged_flutter():
     assert "flutter" not in profile["frameworks"]
     assert "mobile_app" not in profile["project_types"]
     assert profile["primary_language"] == "dart"
+
+
+# ── 移动平台细分：ios / android ──────────────────────────────────────────────
+def test_ios_native_only_project():
+    # Xcode 工程 + storyboard，无任何 android 目录 → 只标 ios。
+    paths = ["Podfile", "MyApp.xcodeproj/project.pbxproj",
+             "MyApp/AppDelegate.swift", "MyApp/Base.lproj/Main.storyboard",
+             "MyApp/Info.plist"]
+    profile = _run(sd.detect_stack(paths, _fetch_from({})))
+    assert "ios" in profile["project_types"]
+    assert "android" not in profile["project_types"]
+    assert "mobile_app" not in profile["project_types"]
+    assert profile["primary_language"] == "swift"
+
+
+def test_android_native_only_project():
+    # Gradle android 工程，无 iOS 目录 → 只标 android。
+    paths = ["app/build.gradle", "app/src/main/AndroidManifest.xml",
+             "app/src/main/java/com/x/MainActivity.kt",
+             "gradle/wrapper/gradle-wrapper.properties"]
+    profile = _run(sd.detect_stack(paths, _fetch_from({})))
+    assert "android" in profile["project_types"]
+    assert "ios" not in profile["project_types"]
+    assert "mobile_app" not in profile["project_types"]
+    assert profile["primary_language"] == "kotlin"
+
+
+def test_ios_workspace_and_xib_signals():
+    # 无 xcodeproj（xcworkspace 管理）、storyboard/xib 都算 iOS 证据。
+    paths = ["App.xcworkspace/contents.xcins", "App/Screens.xib",
+             "App/ViewController.swift"]
+    profile = _run(sd.detect_stack(paths, _fetch_from({})))
+    assert "ios" in profile["project_types"]

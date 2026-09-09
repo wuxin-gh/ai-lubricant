@@ -18,7 +18,7 @@ _proj = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _proj not in sys.path:
     sys.path.insert(0, _proj)
 
-from monkeycode_compat import git_clients
+from user_platform import git_clients
 
 
 def _git_entries(n: int, first_sha: str) -> list[dict]:

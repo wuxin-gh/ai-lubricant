@@ -19,9 +19,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from monkeycode_compat import task_message_store
-from monkeycode_compat import task_service as task_service_module
-from monkeycode_compat.task_service import TaskService
+from user_platform import task_message_store
+from user_platform import task_service as task_service_module
+from user_platform.task_service import TaskService
 
 TASK_ID = uuid.uuid4()
 

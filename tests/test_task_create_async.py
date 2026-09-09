@@ -23,8 +23,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from monkeycode_compat import task_service as task_service_module
-from monkeycode_compat.task_service import TaskService
+from user_platform import task_service as task_service_module
+from user_platform.task_service import TaskService
 
 TASK_ID = uuid.uuid4()
 USER_ID = uuid.uuid4()
@@ -300,7 +300,7 @@ async def test_deferred_create_without_parent_key_raises(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_deferred_retryable_failure_marks_dispatch_failed(monkeypatch):
-    from monkeycode_compat.node_client import NodeServerUnavailable
+    from user_platform.node_client import NodeServerUnavailable
 
     client = _Client(raise_exc=NodeServerUnavailable("down"))
     task, _emitted = _install(monkeypatch, client)
@@ -319,7 +319,7 @@ async def test_deferred_retryable_failure_marks_dispatch_failed(monkeypatch):
 async def test_deferred_terminal_failure_cancels_pending_first_turn(monkeypatch):
     """永久派发失败时，预落库的首条消息不能永远停在 pending（回放会把
     未投递的消息渲染成发送中）。"""
-    from monkeycode_compat.node_client.errors import Code, RPCError
+    from user_platform.node_client.errors import Code, RPCError
 
     client = _Client(raise_exc=RPCError(Code.PERMISSION_DENIED, "node rejected"))
     task, _emitted = _install(monkeypatch, client)

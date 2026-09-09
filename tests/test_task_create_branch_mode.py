@@ -3,8 +3,8 @@ from __future__ import annotations
 import uuid
 from types import SimpleNamespace
 
-from monkeycode_compat.routes_task import CreateTaskReq
-from monkeycode_compat.task_service import TaskService
+from user_platform.routes_task import CreateTaskReq
+from user_platform.task_service import TaskService
 
 
 def _task() -> SimpleNamespace:

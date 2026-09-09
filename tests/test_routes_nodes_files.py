@@ -4,7 +4,7 @@ import json
 import pytest
 from fastapi import HTTPException
 
-from monkeycode_compat import routes_nodes_files as files
+from user_platform import routes_nodes_files as files
 
 
 class FakeNodeClient:

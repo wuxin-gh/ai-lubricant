@@ -8,7 +8,7 @@ from loguru import logger
 
 import builtin_tool_store
 from mcp_runtime.plugin_loader import PluginContext, PluginRegistrar, current_request_token
-from monkeycode_compat.models_webhook_event import ProjectWebhookEvent
+from user_platform.models_webhook_event import ProjectWebhookEvent
 
 _ALLOWED_SEVERITIES = {"critical", "high", "medium", "low"}
 _MAX_FINDINGS = 500
@@ -72,7 +72,7 @@ async def _complete_review(args: dict, _ctx: PluginContext) -> dict:
     # Release the review node slot the moment the review reports completion so
     # the node can host the next queued review immediately.
     try:
-        from monkeycode_compat.review_node_service import review_node_service
+        from user_platform.review_node_service import review_node_service
 
         await review_node_service.release_review_slot(event_id=str(event.id))
     except Exception:

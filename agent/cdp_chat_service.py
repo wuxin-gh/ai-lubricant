@@ -41,7 +41,7 @@ from agent.api import (
     _require_ch,
     _normalize_reasoning_effort,
 )
-from monkeycode_compat.node_client.approvals import ApprovalDenied, ApprovalTimeout
+from user_platform.node_client.approvals import ApprovalDenied, ApprovalTimeout
 from agent.config import AgentConfig
 from agent.context_manager import rebuild_history_messages, attach_tool_result
 from agent import conversation_store, scene_context
@@ -837,7 +837,7 @@ async def client_resolve_approval(
     _require_conv_owned_by_client 把住；code_run 的 action.node_id=="" 跳过节点门。
     """
     _require_ch()
-    from monkeycode_compat.node_client.approvals import approval_registry
+    from user_platform.node_client.approvals import approval_registry
 
     _require_internal(authorization, x_internal_token)
     client_id = (x_cdp_client_id or "").strip()

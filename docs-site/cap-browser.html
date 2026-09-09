@@ -15,7 +15,7 @@
     <a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a>
   </nav>
   <div class="nav-group">能力详解</div><nav>
-    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
+    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
   </nav>
   <div class="nav-group">操作手册</div><nav>
     <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
@@ -47,7 +47,6 @@
 </tbody></table></div>
 
 <h2 id="tools">功能：12 个 CDP 工具</h2>
-<figure class="shot" data-shot="cap-browser/tools.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">12 个 CDP 工具</span></div><button class="shot-open" type="button" aria-label="放大截图：12 个 CDP 工具"><img src="assets/screenshots/cap-browser/tools.png" alt="12 个 CDP 工具" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-browser/tools.png</code></div></div></figure>
 <div class="table-wrap"><table><thead><tr><th>工具</th><th>能力</th></tr></thead><tbody>
 <tr><td><code>browser_get_tabs</code></td><td>列出已连接的浏览器标签页（ID/URL/标题）</td></tr>
 <tr><td><code>browser_scan</code></td><td>返回当前活动标签的优化 HTML/文本及标签列表</td></tr>
@@ -73,14 +72,12 @@
 <p>每帧按连接身份校验：Agent 是否对该 client 授权、页面是否属于该 client（会话级隔离）。</p>
 
 <h2 id="tokens">功能：两类 token 不能混用</h2>
-<figure class="shot" data-shot="cap-browser/tokens.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">两类 token 不能混用</span></div><button class="shot-open" type="button" aria-label="放大截图：两类 token 不能混用"><img src="assets/screenshots/cap-browser/tokens.png" alt="两类 token 不能混用" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-browser/tokens.png</code></div></div></figure>
 <div class="table-wrap"><table><thead><tr><th>token</th><th>用途</th><th>绑定对象</th></tr></thead><tbody>
 <tr><td>连接 token</td><td>扩展 ↔ 平台的 WebSocket 握手</td><td>单个扩展连接</td></tr>
 <tr><td>MCP 访问 token</td><td>访问 <code>/mcp/cdp-bridge/sse</code></td><td>必须绑定具体 CDP client；未绑定报 "not authorized to operate any CDP client"</td></tr>
 </tbody></table></div>
 
 <h2 id="usage">怎么用</h2>
-<figure class="shot" data-shot="cap-browser/usage.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">怎么用</span></div><button class="shot-open" type="button" aria-label="放大截图：怎么用"><img src="assets/screenshots/cap-browser/usage.png" alt="怎么用" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-browser/usage.png</code></div></div></figure>
 <ol>
 <li>在 <code>/console/resources</code> 创建 CDP 客户端，拿到绑定该 client 的 MCP token。</li>
 <li>Chrome 安装 MV3 扩展并用连接 token 握手（使用隔离 Chrome profile，不连个人日常浏览器）。</li>

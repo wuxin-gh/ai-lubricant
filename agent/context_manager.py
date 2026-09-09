@@ -328,6 +328,93 @@ def attach_tool_result(
     call["status"] = "done"
 
 
+# ── Agent → 用户 文件/图片展示（outbound media parts）──────────────────────
+# Agent 通过 ask_user(attachments) 把工作区文件 / 公网 URL / base64 二进制交给
+# 用户展示；二进制经 attachment_store 落成 attachment。这里把工具/问题事件里的
+# 附件形状结果抽成消息 media part 并认领归属——形状驱动，不认工具名。
+# chat 路径（agent/api.py）与定时任务路径（agent/scheduler.py）共用，避免两边
+# 各抄一份日后漂移。
+
+async def _media_part_from_result(
+    data: Any, sink: list[dict[str, Any]], caller: str | None, conv_id: str,
+) -> None:
+    """一个「附件形状」的结果 dict → media part + 认领归属。
+
+    形状驱动，不认工具名：任何工具的返回只要带 ``kind=url|attachment``，就抽成
+    media part。这样 show_file / ask_user / 未来任何产出媒体的工具共用一套逻辑，
+    不必每加一个工具就在这里加一个 if 分支。
+
+    - ``url``：公网 URL，直接透传成 media part（带 url，无 attachment_id）。
+    - ``attachment``：经 attachment_store 登记的，带 attachment_id；同时把未认领
+      的附件认领给当前会话用户（caller），context_ref=conv_id。仅 owner=NULL 时
+      认领，防越权抢占。
+
+    media part 统一 ``type:"attachment"``，客户端按 mime_type 决定内联图片
+    还是下载卡。
+    """
+    if not isinstance(data, dict):
+        return
+    kind = data.get("kind")
+    mime = str(data.get("mime_type") or "")
+    if kind == "url":
+        url = data.get("url")
+        if not url:
+            return
+        part = {
+            "type": "attachment",
+            "url": url,
+            "name": data.get("name"),
+            "mime_type": mime,
+        }
+    elif kind == "attachment":
+        attachment_id = data.get("id") or data.get("attachment_id")
+        if attachment_id is None:
+            return
+        part = {
+            "type": "attachment",
+            "attachment_id": attachment_id,
+            "name": data.get("name"),
+            "mime_type": mime,
+            "size": data.get("size"),
+            "status": data.get("status"),
+            "expires_at": data.get("expires_at"),
+        }
+        if caller:
+            try:
+                import attachment_store
+                await attachment_store.claim_for_owner(int(attachment_id), caller, context_ref=conv_id)
+            except Exception:  # noqa: BLE001 — 认领失败不阻断对话
+                logger.warning(
+                    "[attachment] claim failed id=%s caller=%s", attachment_id, caller, exc_info=True,
+                )
+    else:
+        return
+    # 去重：同一 attachment_id / url 只保留一张卡（流里重连回放可能重复到达）。
+    key = part.get("attachment_id") or part.get("url")
+    if not any((p.get("attachment_id") or p.get("url")) == key for p in sink):
+        sink.append(part)
+
+
+async def _collect_attachment_media(
+    event: dict, sink: list[dict[str, Any]], caller: str | None, conv_id: str,
+) -> None:
+    """工具结果事件 → media part(s)。
+
+    两种载荷形状都收，与工具名无关：
+
+    - 结果自身就是附件（``kind=url|attachment``）—— 旧 show_file 的形状。
+    - 结果带 ``media`` 列表（每项一个附件形状）—— ask_user 的形状。
+    """
+    data = event.get("data")
+    if not isinstance(data, dict):
+        return
+    await _media_part_from_result(data, sink, caller, conv_id)
+    media = data.get("media")
+    if isinstance(media, list):
+        for item in media:
+            await _media_part_from_result(item, sink, caller, conv_id)
+
+
 def rebuild_history_messages(
     history: list[dict],
     *,

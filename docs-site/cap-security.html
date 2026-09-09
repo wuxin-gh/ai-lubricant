@@ -15,7 +15,7 @@
     <a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a>
   </nav>
   <div class="nav-group">能力详解</div><nav>
-    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
+    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
   </nav>
   <div class="nav-group">操作手册</div><nav>
     <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
@@ -56,7 +56,6 @@
 </ul>
 
 <h2 id="tokens">功能：token 只存哈希且绑实例（MCP 保护）</h2>
-<figure class="shot" data-shot="cap-security/tokens.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">token 只存哈希且绑实例（MCP 保护）</span></div><button class="shot-open" type="button" aria-label="放大截图：token 只存哈希且绑实例（MCP 保护）"><img src="assets/screenshots/cap-security/tokens.png" alt="token 只存哈希且绑实例（MCP 保护）" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-security/tokens.png</code></div></div></figure>
 <div class="table-wrap"><table><thead><tr><th>token 类型</th><th>绑定对象</th><th>行为</th></tr></thead><tbody>
 <tr><td>MCP 访问 token</td><td>—</td><td>明文仅创建时显示一次，库中存 sha256；泄库无法还原</td></tr>
 <tr><td>CDP token</td><td>具体 CDP client</td><td>调用时再次检查 client 属于该实例、启用且有连接 token</td></tr>
@@ -75,7 +74,6 @@
 </ul>
 
 <h2 id="node">功能：节点身份封存与审批</h2>
-<figure class="shot" data-shot="cap-security/node.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">节点身份封存与审批</span></div><button class="shot-open" type="button" aria-label="放大截图：节点身份封存与审批"><img src="assets/screenshots/cap-security/node.png" alt="节点身份封存与审批" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-security/node.png</code></div></div></figure>
 <div class="table-wrap"><table><thead><tr><th>措施</th><th>行为</th></tr></thead><tbody>
 <tr><td>TOTP AES-256-GCM 封存</td><td>onboard 发唯一 node_id 与 secret，服务端封存；认证带重放缓存，同一验证码不能复用</td></tr>
 <tr><td>统一 permission_denied</td><td>未知/撤销/错误/重放统一返回，避免身份枚举</td></tr>
@@ -85,7 +83,6 @@
 </tbody></table></div>
 
 <h2 id="request">功能：请求侧防护</h2>
-<figure class="shot" data-shot="cap-security/request.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">请求侧防护</span></div><button class="shot-open" type="button" aria-label="放大截图：请求侧防护"><img src="assets/screenshots/cap-security/request.png" alt="请求侧防护" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-security/request.png</code></div></div></figure>
 <div class="table-wrap"><table><thead><tr><th>能力</th><th>行为</th></tr></thead><tbody>
 <tr><td>请求级观测</td><td>一次调用对应一个 request_id，每次渠道尝试单独成行：账号、路径、状态、错误、耗时、首 Token、各类 Token</td></tr>
 <tr><td>认证头脱敏</td><td>请求日志认证头默认脱敏；管理操作日志写入前剥离敏感字段</td></tr>

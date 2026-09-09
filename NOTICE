@@ -6,11 +6,11 @@
 
 主仓库中的自研部分 —— 数据服务与渠道聚合（`server/`、`providers/`、
 `limits/`、`integrations/` 等）、Agent 运行时（`agent/`、`mcp/`、
-`mcp_runtime/`、`mcp_builtin/`）、桌面壳（`desktop/`）、`monkeycode_compat/`
+`mcp_runtime/`、`mcp_builtin/`）、桌面壳（`desktop/`）、`user_platform/`
 （除下文特别注明外）与文档站（`docs-site/`）—— 为本项目原创代码，采用
 Business Source License 1.1 授权（见 LICENSE）。
 
-`monkeycode_compat/git_clients.py` 为对既有公开文档的净室重写（clean-room
+`user_platform/git_clients.py` 为对既有公开文档的净室重写（clean-room
 reimplementation），未复制任何上游项目代码，不承载上游许可证义务。
 
 ## 独立子仓库（submodule）

@@ -1,7 +1,7 @@
 from channel_template_service import apply_channel_template
-from monkeycode_compat.marketplace import config as marketplace_config
-from monkeycode_compat.marketplace.channel_template_export import build_manifest, resolve_requested_providers
-from monkeycode_compat.marketplace.validator import validate_manifest
+from user_platform.marketplace import config as marketplace_config
+from user_platform.marketplace.channel_template_export import build_manifest, resolve_requested_providers
+from user_platform.marketplace.validator import validate_manifest
 
 
 def _channel_manifest() -> dict:
@@ -86,7 +86,7 @@ def test_channel_template_rejects_unknown_icon_key():
 
 
 def test_build_manifest_strips_data_url_icon():
-    from monkeycode_compat.marketplace.channel_template_export import build_manifest
+    from user_platform.marketplace.channel_template_export import build_manifest
     cfg = {
         "remark": "测试渠道",
         "base_url": "https://api.example.com/v1",
@@ -248,7 +248,7 @@ def test_resolve_requested_providers_filters_to_selection_and_flags_unknown():
 
 
 def test_channel_import_job_tracks_explicit_progress_and_single_active_job():
-    from monkeycode_compat.marketplace import channel_import_jobs as jobs
+    from user_platform.marketplace import channel_import_jobs as jobs
 
     # 隔离模块级内存表，避免测试间或开发进程遗留状态。
     jobs._jobs.clear()
@@ -278,7 +278,7 @@ def test_channel_import_job_tracks_explicit_progress_and_single_active_job():
 
 
 def test_channel_import_job_records_per_provider_failure():
-    from monkeycode_compat.marketplace import channel_import_jobs as jobs
+    from user_platform.marketplace import channel_import_jobs as jobs
 
     jobs._jobs.clear()
     jobs._tasks.clear()
@@ -307,9 +307,9 @@ def _patch_channel_import_env(monkeypatch):
 
     import db
     import limit_policy_store
-    from monkeycode_compat.marketplace import channel_catalog
-    from monkeycode_compat.marketplace import channel_import_jobs as jobs
-    from monkeycode_compat.marketplace import routes
+    from user_platform.marketplace import channel_catalog
+    from user_platform.marketplace import channel_import_jobs as jobs
+    from user_platform.marketplace import routes
 
     jobs._jobs.clear()
     jobs._tasks.clear()
@@ -370,8 +370,8 @@ def test_channel_import_job_writes_store_without_github_or_raw_refresh(monkeypat
     """导入 job 只写 PG 真相源；GitHub 镜像归 publisher，raw 全程不可达也不受影响。"""
     import asyncio
 
-    from monkeycode_compat.marketplace import channel_import_jobs as jobs
-    from monkeycode_compat.marketplace import routes
+    from user_platform.marketplace import channel_import_jobs as jobs
+    from user_platform.marketplace import routes
 
     stored = _patch_channel_import_env(monkeypatch)
     job_id, conflict = jobs.create_job(["agnes"], overwrite=True)
@@ -395,8 +395,8 @@ def test_channel_import_job_surfaces_store_failure_as_item_failure(monkeypatch):
     import asyncio
 
     import marketplace_store as store
-    from monkeycode_compat.marketplace import channel_import_jobs as jobs
-    from monkeycode_compat.marketplace import routes
+    from user_platform.marketplace import channel_import_jobs as jobs
+    from user_platform.marketplace import routes
 
     _patch_channel_import_env(monkeypatch)
 
@@ -420,7 +420,7 @@ def test_channel_import_job_surfaces_store_failure_as_item_failure(monkeypatch):
 
 def test_explain_git_write_error_classifies_token_and_404_cases():
     """token 缺写权限 / 404 / 其余 三类错误各自给出可执行提示，且不含 token。"""
-    from monkeycode_compat.marketplace.routes import _explain_git_write_error, _explain_write_failures
+    from user_platform.marketplace.routes import _explain_git_write_error, _explain_write_failures
 
     tokenless = (
         "PUT https://api.github.com/repos/o/r/contents/modules/channels/index.json "
@@ -499,7 +499,7 @@ def test_node_version_manifest_is_accepted():
 
 
 def test_node_version_rejects_editor_cli_and_channel_fields():
-    from monkeycode_compat.marketplace.validator import _NODE_COMPONENTS
+    from user_platform.marketplace.validator import _NODE_COMPONENTS
     assert "editor-cli" not in _NODE_COMPONENTS
 
 
@@ -552,7 +552,7 @@ def test_node_version_rejects_secret_fields():
 
 
 def test_node_release_version_json_is_accepted_and_rejects_secrets():
-    from monkeycode_compat.marketplace.validator import validate_node_release
+    from user_platform.marketplace.validator import validate_node_release
 
     manifest = {
         "schema": "ai-lubricant.node-release/v1",
@@ -568,7 +568,7 @@ def test_node_release_version_json_is_accepted_and_rejects_secrets():
 
 
 def test_node_release_accepts_legacy_schema():
-    from monkeycode_compat.marketplace.validator import validate_node_release
+    from user_platform.marketplace.validator import validate_node_release
 
     manifest = {
         "schema": "model-api.node-release/v1",
@@ -582,7 +582,7 @@ def test_node_release_accepts_legacy_schema():
 
 def test_node_version_accepts_date_suffix_format_and_rejects_garbage():
     """打包脚本默认用 YYYYMMDD-HHMM 版本号，validator 必须接受；同时兼容历史 semver。"""
-    from monkeycode_compat.marketplace.validator import _is_node_version
+    from user_platform.marketplace.validator import _is_node_version
 
     # 日期后缀格式（打包脚本默认产物）
     assert _is_node_version("20260813-1430")
@@ -599,7 +599,7 @@ def test_node_version_accepts_date_suffix_format_and_rejects_garbage():
 
 def test_node_release_accepts_date_suffix_version():
     """version.json 用日期后缀版本号也要过 validate_node_release。"""
-    from monkeycode_compat.marketplace.validator import validate_node_release
+    from user_platform.marketplace.validator import validate_node_release
 
     manifest = {
         "schema": "ai-lubricant.node-release/v1",
@@ -669,7 +669,7 @@ def test_coverage_projects_each_platform_with_its_own_version():
 
 
 def test_node_release_accepts_per_asset_version_and_rejects_garbage():
-    from monkeycode_compat.marketplace.validator import validate_node_release
+    from user_platform.marketplace.validator import validate_node_release
 
     manifest = {
         "schema": "ai-lubricant.node-release/v1",
@@ -687,7 +687,7 @@ def test_node_release_accepts_per_asset_version_and_rejects_garbage():
 
 def test_render_node_release_merges_latest_per_platform():
     """3 个版本各覆盖部分平台时，version.json 要含每个平台各自的最新版本。"""
-    from monkeycode_compat.marketplace.render import render_node_release
+    from user_platform.marketplace.render import render_node_release
 
     def asset(filename, role, platform, arch, component="node", fmt="executable", digest="a"):
         return {
@@ -751,7 +751,7 @@ def test_render_node_release_merges_latest_per_platform():
 
 
 def test_identify_node_asset_covers_all_kinds():
-    from monkeycode_compat.marketplace.validator import identify_node_asset
+    from user_platform.marketplace.validator import identify_node_asset
     assert identify_node_asset("node-execution-linux-amd64")["role"] == "execution"
     assert identify_node_asset("agent-compose-node-management-windows-arm64.exe")["role"] == "management"
     assert identify_node_asset("agent-compose-runtime-darwin-arm64.tar.gz")["role"] == "runtime"

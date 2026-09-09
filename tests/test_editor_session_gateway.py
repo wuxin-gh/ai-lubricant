@@ -8,7 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 import main
-from monkeycode_compat import routes_editors
+from user_platform import routes_editors
 
 
 EDITOR = {"id": "ed_test", "provider": "codex", "status": "active"}

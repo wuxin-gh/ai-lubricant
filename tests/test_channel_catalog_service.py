@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from monkeycode_compat.marketplace import channel_catalog
+from user_platform.marketplace import channel_catalog
 
 
 def test_catalog_always_merges_custom_system_and_remote(monkeypatch):

@@ -14,8 +14,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from monkeycode_compat import task_service as task_service_module
-from monkeycode_compat.task_service import TaskService
+from user_platform import task_service as task_service_module
+from user_platform.task_service import TaskService
 
 
 TASK_ID = uuid.uuid4()
@@ -81,7 +81,7 @@ class _Client:
         # helper clears the stale handle and re-dispatches.
         self.start_calls.append(session_id)
         if session_id == "stale-session":
-            from monkeycode_compat.node_client.errors import Code, RPCError
+            from user_platform.node_client.errors import Code, RPCError
 
             raise RPCError(Code.NOT_FOUND, f"session {session_id} is not placed on any node")
         return {"accepted": True}
@@ -261,7 +261,7 @@ async def test_send_task_message_redispatches_stale_placement(monkeypatch):
     unbound node-side). The first send then gets ``not_found``; the handle must
     be cleared and re-dispatched once so the message lands instead of 500ing.
     """
-    from monkeycode_compat.node_client.errors import Code, RPCError
+    from user_platform.node_client.errors import Code, RPCError
 
     task = _task(node_session_id="stale-session")
     client = _Client()
@@ -297,7 +297,7 @@ async def test_send_task_message_stale_placement_retries_only_once(monkeypatch):
     not a "task has no runtime" 409 — the handle was just rebuilt and the node
     cannot honour it, so the client re-sends after the node returns.
     """
-    from monkeycode_compat.node_client.errors import Code, RPCError
+    from user_platform.node_client.errors import Code, RPCError
 
     stale = RPCError(Code.NOT_FOUND, "session is not placed on any node")
     client = _Client(send_errors=[stale, stale])
@@ -322,7 +322,7 @@ async def test_send_task_message_stale_placement_retries_only_once(monkeypatch):
 @pytest.mark.asyncio
 async def test_send_task_message_unavailable_maps_to_node_server_unavailable(monkeypatch):
     """Node offline mid-send is retryable, so it must not surface as a 500."""
-    from monkeycode_compat.node_client.errors import Code, RPCError
+    from user_platform.node_client.errors import Code, RPCError
 
     offline = RPCError(Code.UNAVAILABLE, "node node-1 for session x is offline")
     client = _Client(send_errors=[offline])
@@ -470,7 +470,7 @@ async def test_existing_title_is_never_overwritten(monkeypatch):
 @pytest.mark.asyncio
 async def test_failed_send_does_not_backfill_title(monkeypatch):
     """A message that never reaches the runtime must not name the task."""
-    from monkeycode_compat.node_client.errors import Code, RPCError
+    from user_platform.node_client.errors import Code, RPCError
 
     offline = RPCError(Code.UNAVAILABLE, "node offline")
     client = _Client(send_errors=[offline])
@@ -562,7 +562,7 @@ async def test_start_task_runtime_keeps_handle_when_node_offline(monkeypatch):
     node-offline (UNAVAILABLE → 503, handle preserved). Clearing a valid handle
     on a transient offline would discard a session the user could resume.
     """
-    from monkeycode_compat.node_client.errors import Code, RPCError
+    from user_platform.node_client.errors import Code, RPCError
 
     client = _Client()
     # Override the probe to report the node as offline for the existing handle.
@@ -588,7 +588,7 @@ async def test_start_task_runtime_keeps_handle_when_node_offline(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_start_task_runtime_node_server_unavailable(monkeypatch):
-    from monkeycode_compat.node_client import NodeServerUnavailable
+    from user_platform.node_client import NodeServerUnavailable
 
     client = _Client(raise_exc=NodeServerUnavailable("down"))
     task = _install(monkeypatch, client)
@@ -667,7 +667,7 @@ async def test_dispatch_node_offline_is_retryable_and_shows_reason(monkeypatch):
     ``workspace_state='pending'``, so the UI showed neither the offline reason
     nor a retry path and the recovery worker (pending-only) skipped it.
     """
-    from monkeycode_compat.node_client.errors import Code, RPCError
+    from user_platform.node_client.errors import Code, RPCError
 
     offline = RPCError(Code.UNAVAILABLE, "node node-1 is offline")
     client = _Client(raise_exc=offline)
@@ -695,7 +695,7 @@ async def test_dispatch_node_rejected_is_terminal_but_still_shows_reason(monkeyp
     ``dispatch_failed`` so the detail page shows the cause instead of a bare
     "未启动".
     """
-    from monkeycode_compat.node_client.errors import Code, RPCError
+    from user_platform.node_client.errors import Code, RPCError
 
     rejected = RPCError(Code.FAILED_PRECONDITION, "node node-1 is not approved")
     client = _Client(raise_exc=rejected)
@@ -729,7 +729,7 @@ async def test_start_task_runtime_requires_node(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_runtime_worker_recovers_storage_state_task(monkeypatch):
-    from monkeycode_compat import task_runtime_worker as worker_module
+    from user_platform import task_runtime_worker as worker_module
 
     client = _Client()
     task = _install(monkeypatch, client)
@@ -773,7 +773,7 @@ async def test_runtime_worker_recovers_storage_state_task(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_runtime_worker_skips_when_node_client_disabled(monkeypatch):
-    from monkeycode_compat import task_runtime_worker as worker_module
+    from user_platform import task_runtime_worker as worker_module
 
     client = _Client()
     client.enabled = False
@@ -792,8 +792,8 @@ async def test_runtime_worker_skips_when_node_client_disabled(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_runtime_worker_schedules_retry_on_unavailable(monkeypatch):
-    from monkeycode_compat.node_client import NodeServerUnavailable
-    from monkeycode_compat import task_runtime_worker as worker_module
+    from user_platform.node_client import NodeServerUnavailable
+    from user_platform import task_runtime_worker as worker_module
 
     client = _Client(raise_exc=NodeServerUnavailable("down"))
     task = _install(monkeypatch, client)
@@ -835,7 +835,7 @@ async def test_runtime_worker_heals_processing_task_with_stale_handle(monkeypatc
     clears the stale handle, and re-dispatches so the task recovers without the
     user clicking retry on the detail page.
     """
-    from monkeycode_compat import task_runtime_worker as worker_module
+    from user_platform import task_runtime_worker as worker_module
 
     client = _Client()
     task = _task(status="processing", node_session_id="stale-session")
@@ -886,7 +886,7 @@ async def test_runtime_worker_leaves_healthy_processing_task_alone(monkeypatch):
     dispatch helper short-circuits and the worker does zero dispatch work.
     Re-dispatching a healthy task would create a duplicate session on the node.
     """
-    from monkeycode_compat import task_runtime_worker as worker_module
+    from user_platform import task_runtime_worker as worker_module
 
     client = _Client()
     task = _task(status="processing", node_session_id="live-session")

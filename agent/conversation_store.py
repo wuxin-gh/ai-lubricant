@@ -294,7 +294,7 @@ async def list_conversations_admin(
     """管理端游标分页：按 updated_at 倒序，cursor 是上一页末条的 updated_at 字符串。
 
     返回 {conversations, page:{cursor, has_next_page}}。
-    多取 1 条判断 has_next_page（与 monkeycode audit 分页同口径）。
+    多取 1 条判断 has_next_page（与 user_platform audit 分页同口径）。
     """
     await _require()
     fetch_n = max(1, int(limit)) + 1

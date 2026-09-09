@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -21,6 +22,7 @@ from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from loguru import logger
 
+from agent.context_manager import attach_tool_result, _collect_attachment_media
 from db import PostgresClient
 
 # repeat 类型 → APScheduler 触发器
@@ -131,6 +133,67 @@ def _heal_history(row: dict) -> list[dict]:
     return raw if isinstance(raw, list) else []
 
 
+async def _start_run(job_id: int, *, task_kind: str, triggered_by: str) -> int | None:
+    """开一条执行记录行（status='running'），返回 run_id；DB 不可用时 None。"""
+    pool = getattr(PostgresClient, "pool", None)
+    if not pool:
+        return None
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "INSERT INTO agent_scheduled_task_runs(job_id, task_kind, triggered_by, status) "
+                "VALUES($1, $2, $3, 'running') RETURNING id",
+                job_id, task_kind, triggered_by,
+            )
+        return int(row["id"]) if row else None
+    except Exception as e:
+        logger.warning(f"定时任务 _start_run 写入失败: job_id={job_id} error={e}")
+        return None
+
+
+# _finish_run 只接受这些列；其余 kwargs 忽略（防误传）。
+_RUN_FINISH_FIELDS = (
+    "status", "exit_code", "stdout", "stderr", "result_text",
+    "conversation_id", "duration_ms", "error",
+)
+
+
+async def _finish_run(run_id: int | None, *, status: str, **fields) -> None:
+    """收尾一条执行记录：写 status + 任意提供的列。run_id 为 None 时 no-op。
+
+    可被多次调用并合并（幂等）：_scheduled_run 中途写 conversation_id，外层执行器
+    结尾再写 status/result_text/duration。大文本写入时截断，防撑爆（与 _heal_script 的
+    [:4000] 截断同口径，stdout/stderr 放宽到 16KB 以便排查脚本输出）。
+    """
+    if run_id is None:
+        return
+    pool = getattr(PostgresClient, "pool", None)
+    if not pool:
+        return
+    updates: dict[str, Any] = {"status": status}
+    for k, v in fields.items():
+        if k in _RUN_FINISH_FIELDS and v is not None:
+            updates[k] = v
+    if updates.get("stdout") is not None:
+        updates["stdout"] = str(updates["stdout"])[:16000]
+    if updates.get("stderr") is not None:
+        updates["stderr"] = str(updates["stderr"])[:16000]
+    if updates.get("result_text") is not None:
+        updates["result_text"] = str(updates["result_text"])[:2000]
+    if updates.get("error") is not None:
+        updates["error"] = str(updates["error"])[:2000]
+    set_parts = [f"{k}=${i+2}" for i, k in enumerate(updates)]
+    values = list(updates.values())
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                f"UPDATE agent_scheduled_task_runs SET {', '.join(set_parts)} WHERE id=$1",
+                run_id, *values,
+            )
+    except Exception as e:
+        logger.warning(f"定时任务 _finish_run 更新失败: run_id={run_id} status={status} error={e}")
+
+
 async def _finalize_job(
     job_id: int, cron_expression: str, result_text: str,
     *, last_exit_code: int | None = None, last_stderr: str | None = None,
@@ -154,8 +217,12 @@ async def _finalize_job(
         )
 
 
-async def _execute_job(job_id: int) -> None:
-    """APScheduler 执行入口：按 task_kind 分流（prompt / script），收尾统一。"""
+async def _execute_job(job_id: int, *, triggered_by: str = "scheduler") -> None:
+    """APScheduler 执行入口：按 task_kind 分流（prompt / script），收尾统一。
+
+    ``triggered_by`` 仅用于落执行记录（scheduler=到点、manual=立即运行）；APScheduler
+    注册时只传 job_id，走默认 "scheduler"。
+    """
     pool = getattr(PostgresClient, "pool", None)
     if not pool:
         logger.error(f"定时任务 {job_id} 执行失败: 数据库连接池不可用")
@@ -173,9 +240,9 @@ async def _execute_job(job_id: int) -> None:
     row = dict(record)
     task_kind = (row.get("task_kind") or "prompt").lower()
     if task_kind == "script":
-        await _execute_script_job(row)
+        await _execute_script_job(row, triggered_by=triggered_by)
     else:
-        await _execute_prompt_job(row)
+        await _execute_prompt_job(row, triggered_by=triggered_by)
     logger.info(f"定时任务完成: id={job_id}")
 
 
@@ -190,7 +257,10 @@ def _scheduled_scene(row: dict):
     })
 
 
-async def _scheduled_run(row: dict, prompt: str, *, max_turns: int) -> list:
+async def _scheduled_run(
+    row: dict, prompt: str, *, max_turns: int,
+    run_id: int | None = None, triggered_by: str = "scheduler",
+) -> list:
     """按定时任务的场景/模型跑一轮 Agent。prompt 任务与自愈诊断共用。
 
     - 场景段（scene）说明「现场没有人」：ask_user 问不到人、结论要自己落地。
@@ -198,6 +268,10 @@ async def _scheduled_run(row: dict, prompt: str, *, max_turns: int) -> list:
       主 Agent，让无人值守跑批能用比交互态更便宜/更稳的模型。
     - system_prompt = Agent 人设 + 场景段。人设此前在定时态整段丢失（调度侧没传，
       run_task 也不会自己去读），这里显式拼好；两者必须一起传，只传场景段会把人设顶掉。
+    - 对话持久化（run_id 提供时）：镜像 chat 路径的渐进落库——建 kind="scheduled" 会话
+      + user/assistant 占位，on_event 累积 content/reasoning/tool_calls/media/usage，
+      1.5s 节流写回，结尾 done。ClickHouse 不可用则整段跳过（对话丢失但任务照跑），
+      run 行 conversation_id 留空，详情页显示「对话未记录」。
     """
     from agent.agent_main import GenericAgent
 
@@ -221,32 +295,220 @@ async def _scheduled_run(row: dict, prompt: str, *, max_turns: int) -> list:
     from agent import scene_context
 
     system_prompt = scene_context.append_prompt(agent._agent_system_prompt, scene)
-    return await agent.run_task(
-        prompt, system_prompt=system_prompt, max_turns=max_turns, llm=llm,
-    )
+    effective_model = getattr(llm, "model", "") or ""
+
+    # ── 对话持久化（best-effort；CH 不可用即降级为不落库）──
+    conversation_id: str | None = None
+    assistant_msg_id: int | None = None
+    collected_tool_calls: list[dict] = []
+    collected_tool_results: list = []
+    collected_media: list[dict] = []
+    collected_usage: dict | None = None
+    collected_reasoning = ""
+    collected_content = ""
+    _last_persist_ts = 0.0  # 节流：正文/思考高频到达时最多每 1.5s 落一次中间态。
+
+    from agent import conversation_store
+
+    owner = row.get("user_id")
+    owner_str = str(owner) if owner is not None else None
+    try:
+        conv = await conversation_store.create_conversation(
+            title=f"定时任务 {row.get('name')} #{row.get('id')}",
+            system_prompt=system_prompt,
+            model=effective_model,
+            agent_id=agent_id,
+            kind="scheduled",
+            chat_settings=scene_context.persist(scene),
+            user_id=owner_str,
+        )
+        conversation_id = conv["id"]
+        # user 轮是 get_messages_page_by_user_turns 的分页锚点，必须先建。
+        await conversation_store.add_message(conversation_id, "user", content=prompt)
+        assistant_msg = await conversation_store.add_message(
+            conversation_id, "assistant", "", status="streaming",
+        )
+        assistant_msg_id = assistant_msg["id"]
+    except Exception as e:
+        # 覆盖 ClickHouseUnavailable 及一切 CH 故障：对话记不下来不能拦住任务执行。
+        conversation_id = None
+        assistant_msg_id = None
+        logger.warning(f"定时任务对话持久化不可用，本轮不记录对话: job={row.get('id')} error={e}")
+
+    async def _persist_progress() -> None:
+        """把已累积的内容渐进写回 assistant 消息（status 仍留 streaming）。
+
+        与 chat 路径（api.py _stream_conversation_turn）同口径：审批挂起 / 进程重启 /
+        连接中断时，已产生的内容仍在库里，而不是一条空壳。
+        """
+        nonlocal _last_persist_ts
+        if assistant_msg_id is None:
+            return
+        try:
+            await conversation_store.update_message(
+                assistant_msg_id,
+                content=collected_content,
+                tool_calls=collected_tool_calls or None,
+                tool_results=collected_tool_results or None,
+                media=collected_media or None,
+                status="streaming",
+                reasoning=collected_reasoning,
+            )
+            _last_persist_ts = time.monotonic()
+        except Exception:
+            pass  # 中途落库失败不能中断主流程
+
+    on_event = None
+    if assistant_msg_id is not None:
+
+        async def on_event(event: dict) -> None:  # noqa: F811 — 单一定义
+            nonlocal collected_usage, collected_reasoning, collected_content, _last_persist_ts
+            etype = event.get("type")
+            if etype == "tool_call":
+                collected_tool_calls.append({
+                    # id 是 assistant.tool_calls 与 tool_results 的相关键；历史回放
+                    # 靠它还原调用形状，缺了整条调用只能丢弃。
+                    "id": event.get("id"),
+                    "name": event.get("name"),
+                    "args": event.get("args"),
+                    "status": "running",
+                })
+                # 工具调用是天然检查点：立即落库。
+                await _persist_progress()
+            elif etype == "reasoning":
+                collected_reasoning += str(event.get("text") or "")
+                if time.monotonic() - _last_persist_ts > 1.5:
+                    await _persist_progress()
+            elif etype == "content":
+                collected_content += str(event.get("text") or "")
+                if time.monotonic() - _last_persist_ts > 1.5:
+                    await _persist_progress()
+            elif etype == "tool_result":
+                # 按 call_id 配对（agent_loop 的 index 是「本轮第几个」，跨轮重置，
+                # 按 index 配会把第二轮 result 错配到第一轮 call，永久转圈）。
+                attach_tool_result(
+                    collected_tool_calls, collected_tool_results,
+                    call_id=event.get("id"),
+                    index=event.get("index"),
+                    result=event.get("data"),
+                )
+                await _collect_attachment_media(event, collected_media, owner_str, conversation_id)
+                await _persist_progress()
+            elif etype == "question":
+                # ask_user 在无人值守场景必然没人答，但问题本身要留在历史里。
+                data = event.get("data") if isinstance(event.get("data"), dict) else {}
+                q = str(data.get("question") or event.get("message") or "")
+                if q:
+                    collected_content = f"{collected_content}\n\n{q}".strip("\n")
+                await _collect_attachment_media(event, collected_media, owner_str, conversation_id)
+                await _persist_progress()
+            elif etype == "done" and isinstance(event.get("usage"), dict):
+                collected_usage = event["usage"]
+
+    try:
+        result = await agent.run_task(
+            prompt, system_prompt=system_prompt, max_turns=max_turns, llm=llm,
+            on_event=on_event,
+        )
+    except asyncio.CancelledError:
+        if assistant_msg_id is not None:
+            try:
+                await conversation_store.update_message(
+                    assistant_msg_id, status="error", error="已中止",
+                    reasoning=collected_reasoning,
+                )
+            except Exception:
+                pass
+        raise
+    except Exception as e:
+        if assistant_msg_id is not None:
+            try:
+                await conversation_store.update_message(
+                    assistant_msg_id, status="error", error=str(e)[:2000],
+                    reasoning=collected_reasoning,
+                )
+            except Exception:
+                pass
+        raise
+
+    # 正常结束：最终态写回（accumulated content 为准——最后一项 data 只是结束标记）。
+    if assistant_msg_id is not None:
+        try:
+            await conversation_store.update_message(
+                assistant_msg_id,
+                content=collected_content,
+                tool_calls=collected_tool_calls or None,
+                tool_results=collected_tool_results or None,
+                media=collected_media or None,
+                status="done",
+                model=effective_model,
+                usage=collected_usage,
+                reasoning=collected_reasoning,
+            )
+        except Exception:
+            pass  # 收尾落库失败不能掩盖执行结果
+
+    # run 行先记 conversation_id（status/duration 由外层执行器结尾再写）。
+    if run_id is not None and conversation_id:
+        await _finish_run(run_id, status="running", conversation_id=conversation_id)
+
+    return result
 
 
-async def _execute_prompt_job(row: dict) -> None:
+def _prompt_run_status(result: list) -> str:
+    """从 agent_runner_loop 的结束标记派生执行记录的 status。
+
+    结束标记集见 agent_loop.py 的 yield：CURRENT_TASK_DONE（正常）/ ERROR /
+    MAX_TURNS_EXCEEDED / EXITED。EXITED 是主动退出（goal 模式等）标 aborted；
+    MAX_TURNS_EXCEEDED 意味着没做完，标 failed。
+    """
+    last = result[-1] if result else None
+    if isinstance(last, dict):
+        r = str(last.get("result") or "")
+        if r == "ERROR":
+            return "failed"
+        if r == "MAX_TURNS_EXCEEDED":
+            return "failed"
+        if r == "EXITED":
+            return "aborted"
+    return "completed"
+
+
+async def _execute_prompt_job(row: dict, *, triggered_by: str = "scheduler") -> None:
     """prompt 模式：背景块 + task_prompt 交给 GenericAgent 跑（历史行为 + 背景前缀）。"""
     job_id = int(row["id"])
+    run_id = await _start_run(job_id, task_kind="prompt", triggered_by=triggered_by)
+    t0 = time.monotonic()
     prompt = f"{_background_block(row)}\n\n{row.get('task_prompt') or ''}".strip()
     result_text = ""
     try:
-        result = await _scheduled_run(row, prompt, max_turns=40)
+        result = await _scheduled_run(row, prompt, max_turns=40, run_id=run_id)
         if result:
             result_text = json.dumps(result[-1], ensure_ascii=False, default=str)[:2000]
         else:
             result_text = "status: completed\nsummary: no output"
+        await _finish_run(
+            run_id, status=_prompt_run_status(result), result_text=result_text,
+            duration_ms=int((time.monotonic() - t0) * 1000),
+        )
     except asyncio.CancelledError:
         result_text = "status: aborted\nsummary: task cancelled"
+        await _finish_run(
+            run_id, status="aborted", result_text=result_text, error="task cancelled",
+            duration_ms=int((time.monotonic() - t0) * 1000),
+        )
         raise
     except Exception as e:
         result_text = f"status: failed\nsummary: {type(e).__name__}: {e}"
         logger.error(f"定时任务执行失败: id={job_id} error={e}")
+        await _finish_run(
+            run_id, status="failed", result_text=result_text, error=str(e)[:2000],
+            duration_ms=int((time.monotonic() - t0) * 1000),
+        )
     await _finalize_job(job_id, row.get("cron_expression") or "", result_text)
 
 
-async def _execute_script_job(row: dict, *, _heal_attempted: bool = False) -> None:
+async def _execute_script_job(row: dict, *, _heal_attempted: bool = False, triggered_by: str = "scheduler") -> None:
     """script 模式：哈希锁校验 → 执行 → 非零退出码按 on_error 触发自愈。"""
     from agent.scheduled_script import is_script_approved, run_scheduled_script
 
@@ -254,6 +516,9 @@ async def _execute_script_job(row: dict, *, _heal_attempted: bool = False) -> No
     cron = row.get("cron_expression") or ""
     agent_id = row.get("agent_id")
     failures = int(row.get("consecutive_failures") or 0)
+
+    run_id = await _start_run(job_id, task_kind="script", triggered_by=triggered_by)
+    t0 = time.monotonic()
 
     # 哈希锁：未授权或脚本被改动过（AI/人）→ 拒跑并 disable，逼一次显式人工授权。
     if not is_script_approved(row):
@@ -265,17 +530,31 @@ async def _execute_script_job(row: dict, *, _heal_attempted: bool = False) -> No
                     "last_result=$2, enabled=false WHERE id=$1",
                     job_id, "status: blocked\nsummary: script not approved (approve-script required)",
                 )
+        await _finish_run(
+            run_id, status="blocked",
+            result_text="status: blocked\nsummary: script not approved (approve-script required)",
+            duration_ms=int((time.monotonic() - t0) * 1000),
+        )
         logger.warning(f"定时任务 {job_id} 脚本未授权/哈希失配，已禁用等待人工授权")
         return
 
     try:
         run_result = await run_scheduled_script(row, agent_id=agent_id)
     except asyncio.CancelledError:
+        await _finish_run(
+            run_id, status="aborted", error="task cancelled",
+            duration_ms=int((time.monotonic() - t0) * 1000),
+        )
         raise
     except Exception as e:
         logger.error(f"定时任务脚本执行异常: id={job_id} error={e}")
+        result_text = f"status: failed\nsummary: {type(e).__name__}: {e}"
+        await _finish_run(
+            run_id, status="failed", result_text=result_text, error=str(e)[:2000],
+            duration_ms=int((time.monotonic() - t0) * 1000),
+        )
         await _finalize_job(
-            job_id, cron, f"status: failed\nsummary: {type(e).__name__}: {e}",
+            job_id, cron, result_text,
             last_exit_code=None, consecutive_failures=failures + 1,
         )
         return
@@ -287,6 +566,11 @@ async def _execute_script_job(row: dict, *, _heal_attempted: bool = False) -> No
     # 非零退出码（含超时/denied：exit_code 为 None 也当失败）即触发失败分支。
     if exit_code == 0:
         result_text = f"status: completed\nexit_code: 0\n{stdout[:1800]}".strip()
+        await _finish_run(
+            run_id, status="completed", exit_code=0,
+            stdout=stdout, stderr="", result_text=result_text[:2000],
+            duration_ms=run_result.get("duration_ms") or int((time.monotonic() - t0) * 1000),
+        )
         await _finalize_job(
             job_id, cron, result_text[:2000],
             last_exit_code=0, last_stderr="", consecutive_failures=0,
@@ -301,6 +585,11 @@ async def _execute_script_job(row: dict, *, _heal_attempted: bool = False) -> No
 
     if _heal_attempted or on_error == "none":
         # 二次失败不再自愈；on_error=none 记录即止。
+        await _finish_run(
+            run_id, status="failed", exit_code=exit_code,
+            stdout=stdout, stderr=stderr, result_text=result_text[:2000],
+            duration_ms=run_result.get("duration_ms") or int((time.monotonic() - t0) * 1000),
+        )
         await _finalize_job(
             job_id, cron, result_text[:2000],
             last_exit_code=exit_code, last_stderr=stderr,
@@ -308,6 +597,12 @@ async def _execute_script_job(row: dict, *, _heal_attempted: bool = False) -> No
         )
         return
 
+    # 即将进入自愈：先把本轮脚本失败落到 run 行（自愈诊断会另起一行 triggered_by=heal）。
+    await _finish_run(
+        run_id, status="failed", exit_code=exit_code,
+        stdout=stdout, stderr=stderr, result_text=result_text[:2000],
+        duration_ms=run_result.get("duration_ms") or int((time.monotonic() - t0) * 1000),
+    )
     await _heal_script(row, run_result, base_failures=failures)
 
 
@@ -325,6 +620,11 @@ async def _heal_script(row: dict, run_result: dict, *, base_failures: int) -> No
     exit_code = run_result.get("exit_code")
     stdout = (run_result.get("stdout") or "")[:4000]
     stderr = (run_result.get("stderr") or "")[:4000]
+
+    # 自愈诊断单独记一条执行记录（triggered_by=heal），与脚本失败那条分开，
+    # 这样列表里能清楚看到「这次跑挂了 → 紧接着 AI 自愈了一轮」。
+    heal_run_id = await _start_run(job_id, task_kind="prompt", triggered_by="heal")
+    heal_t0 = time.monotonic()
 
     history = _heal_history(row)
     diagnosis = ""
@@ -349,15 +649,25 @@ async def _heal_script(row: dict, run_result: dict, *, base_failures: int) -> No
             f"--- stderr ---\n{stderr}\n"
         )
         # 自愈诊断同样是无人值守：与 prompt 任务共用一条路，拿到同样的场景段、
-        # 同样的定时模型和同样的 Agent 人设。
-        result = await _scheduled_run(row, heal_prompt, max_turns=20)
+        # 同样的定时模型和同样的 Agent 人设。run_id 让本轮诊断对话也落库可回放。
+        result = await _scheduled_run(
+            row, heal_prompt, max_turns=20, run_id=heal_run_id, triggered_by="heal",
+        )
         if result:
             diagnosis = json.dumps(result[-1], ensure_ascii=False, default=str)[:1500]
     except asyncio.CancelledError:
+        await _finish_run(
+            heal_run_id, status="aborted", error="task cancelled",
+            duration_ms=int((time.monotonic() - heal_t0) * 1000),
+        )
         raise
     except Exception as e:
         diagnosis = f"heal failed: {type(e).__name__}: {e}"
         logger.error(f"定时任务自愈异常: id={job_id} error={e}")
+        await _finish_run(
+            heal_run_id, status="failed", result_text=diagnosis[:2000], error=str(e)[:2000],
+            duration_ms=int((time.monotonic() - heal_t0) * 1000),
+        )
 
     # 重新读行：propose_script_fix 可能已把新脚本写入 script_code + approved_hash。
     pool = getattr(PostgresClient, "pool", None)
@@ -381,11 +691,21 @@ async def _heal_script(row: dict, run_result: dict, *, base_failures: int) -> No
     # 自动重跑：仅当 diagnose_fix_retry + 修复已即时生效（allow_ai_script_fix=true 路径，
     # script_code 已换且仍 enabled）。否则记录诊断，等下一周期或人工授权。
     if on_error == "diagnose_fix_retry" and applied and fresh.get("enabled") and is_script_approved(fresh):
+        # 自愈成功 + 即将重跑：本轮自愈诊断记 completed，重跑会另开一条 run 行。
+        await _finish_run(
+            heal_run_id, status="completed", result_text=diagnosis[:2000],
+            duration_ms=int((time.monotonic() - heal_t0) * 1000),
+        )
         fresh["consecutive_failures"] = base_failures + 1
         fresh["heal_history"] = history
-        await _execute_script_job(fresh, _heal_attempted=True)
+        await _execute_script_job(fresh, _heal_attempted=True, triggered_by=triggered_by)
         return
 
+    heal_status = "completed" if diagnosis and not diagnosis.startswith("heal failed") else "failed"
+    await _finish_run(
+        heal_run_id, status=heal_status, result_text=diagnosis[:2000],
+        duration_ms=int((time.monotonic() - heal_t0) * 1000),
+    )
     await _finalize_job(
         job_id, cron,
         f"status: failed\nexit_code: {exit_code}\ndiagnosis: {diagnosis[:1200]}"[:2000],
@@ -442,6 +762,17 @@ class AgentScheduler:
         except RuntimeError:
             # 没有运行中的事件循环，延迟加载
             asyncio.ensure_future(self._reload_jobs_from_db())
+        # 执行记录保留清理：启动清一次历史超额行，之后每天一次（每任务最近 200 条）。
+        try:
+            asyncio.get_running_loop().create_task(self._cleanup_old_runs())
+            self._scheduler.add_job(
+                self._cleanup_old_runs,
+                trigger=IntervalTrigger(days=1),
+                id="scheduled-runs-cleanup",
+                replace_existing=True,
+            )
+        except RuntimeError:
+            asyncio.ensure_future(self._cleanup_old_runs())
         logger.info("AgentScheduler 启动")
 
     def shutdown(self, wait: bool = True) -> None:
@@ -653,7 +984,7 @@ class AgentScheduler:
             return False
         if user_id is not None and not await self.job_owned_by(job_id, user_id):
             return False
-        asyncio.create_task(_execute_job(job_id))
+        asyncio.create_task(_execute_job(job_id, triggered_by="manual"))
         return True
 
     async def get_task(self, job_id: int) -> dict | None:
@@ -678,6 +1009,73 @@ class AgentScheduler:
             except (TypeError, ValueError):
                 job["heal_history"] = []
         return job
+
+    # ------------------------------------------------------------------
+    # 执行记录（agent_scheduled_task_runs）
+    # ------------------------------------------------------------------
+
+    async def list_runs(self, job_id: int, *, limit: int = 50, cursor: int | None = None) -> list[dict]:
+        """某任务的执行记录列表，按 run_at 倒序。cursor = 上一页最早的 id（取更老的）。"""
+        pool = getattr(PostgresClient, "pool", None)
+        if not pool:
+            return []
+        page = max(1, min(int(limit), 100))
+        params: list[Any] = [job_id, page]
+        cursor_clause = ""
+        if cursor is not None:
+            params.append(int(cursor))
+            cursor_clause = f" AND id < ${len(params)}"
+        sql = (
+            "SELECT id, run_at, task_kind, triggered_by, status, exit_code, "
+            "duration_ms, conversation_id, "
+            "CASE WHEN result_text IS NULL THEN NULL ELSE substring(result_text, 1, 200) END AS result_snippet "
+            "FROM agent_scheduled_task_runs WHERE job_id=$1" + cursor_clause +
+            f" ORDER BY run_at DESC LIMIT $2"
+        )
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
+        result = []
+        for row in rows:
+            d = dict(row)
+            if d.get("run_at") is not None:
+                d["run_at"] = str(d["run_at"])
+            result.append(d)
+        return result
+
+    async def get_run(self, run_id: int) -> dict | None:
+        """单条执行记录全字段（含 stdout/stderr/conversation_id）。归属由调用方先校验。"""
+        pool = getattr(PostgresClient, "pool", None)
+        if not pool:
+            return None
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM agent_scheduled_task_runs WHERE id=$1", run_id)
+        if not row:
+            return None
+        d = dict(row)
+        for k in ("run_at", "created_at"):
+            if d.get(k) is not None:
+                d[k] = str(d[k])
+        return d
+
+    async def _cleanup_old_runs(self) -> None:
+        """每任务保留最近 200 条执行记录，删更老的。启动跑一次 + 每日一次。
+
+        不在 _finish_run 里顺手清（每次执行都跑窗口函数太贵），日级足够。
+        """
+        pool = getattr(PostgresClient, "pool", None)
+        if not pool:
+            return
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "DELETE FROM agent_scheduled_task_runs WHERE id IN ("
+                    " SELECT id FROM ("
+                    "  SELECT id, row_number() OVER (PARTITION BY job_id ORDER BY run_at DESC) AS rn"
+                    "  FROM agent_scheduled_task_runs"
+                    " ) t WHERE rn > 200)"
+                )
+        except Exception as e:
+            logger.warning(f"清理定时任务执行记录失败: {e}")
 
     async def approve_script(self, job_id: int) -> bool:
         """人工授权脚本：把当前 script_code（或 pending_script_code）提升为授权态。

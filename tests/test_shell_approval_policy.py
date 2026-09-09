@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from monkeycode_compat.node_client.tools import (
+from user_platform.node_client.tools import (
     PRESET_APPROVAL_CATALOG,
     command_key_for,
     command_requires_confirmation,
@@ -94,7 +94,7 @@ def test_custom_command_validator_rejects_compound_and_dangerous() -> None:
     # script blocks, empty, oversized.
     from fastapi import HTTPException
 
-    from monkeycode_compat.routes_shell_approval import _validate_command_key
+    from user_platform.routes_shell_approval import _validate_command_key
 
     # Solo safe commands normalize through.
     assert _validate_command_key("Get-ChildItem", "powershell") == "get-childitem"

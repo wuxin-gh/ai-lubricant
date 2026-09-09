@@ -19,8 +19,8 @@ import aiohttp
 from loguru import logger
 
 from db import PostgresClient
-from monkeycode_compat.marketplace import config as mp_config
-from monkeycode_compat.marketplace.validator import validate_node_release
+from user_platform.marketplace import config as mp_config
+from user_platform.marketplace.validator import validate_node_release
 
 SNAPSHOT_KEY = "node_release_snapshot"
 MAX_FILE_BYTES = 256 * 1024
@@ -59,7 +59,7 @@ async def apply_release(release: dict[str, Any], *, publish: bool = True) -> dic
     平台渲染出绝对 ``download_url``，下游（select/coverage/升级帧）零改动。
     """
     global _snapshot
-    from monkeycode_compat.marketplace import urls
+    from user_platform.marketplace import urls
 
     errors = validate_node_release(urls.normalize_release_assets(copy.deepcopy(release)))
     if errors:
@@ -83,7 +83,7 @@ async def apply_release(release: dict[str, Any], *, publish: bool = True) -> dic
 
 
 def _raw_url() -> str:
-    from monkeycode_compat.marketplace import urls
+    from user_platform.marketplace import urls
 
     return urls.consumer_raw_url("node-releases/version.json")
 
@@ -164,7 +164,7 @@ def node_upgrade_status(
     进入可比空间，本兜底就不再生效。
     """
     # 复用市场校验器对发布号格式的判定，避免本模块重复正则。
-    from monkeycode_compat.marketplace.validator import _NODE_VERSION_RE
+    from user_platform.marketplace.validator import _NODE_VERSION_RE
 
     def _is_release_tag(v: str) -> bool:
         return bool(_NODE_VERSION_RE.match((v or "").strip()))
@@ -228,6 +228,44 @@ def coverage(latest: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+async def _render_from_store() -> dict[str, Any]:
+    """writable 部署：store 是真相源，从 store 渲染 version.json。
+
+    ``include_test=True``——writable 部署把测试版当正常版纳入本部署升级链路。
+    不读仓库 raw：仓库那份 ``include_test=False``，读它会把 ``apply_release`` 刚
+    写入的测试版资产从快照里冲掉。
+    """
+    import marketplace_store as store
+    from user_platform.marketplace.render import render_node_release
+
+    if not await store.is_populated():
+        raise RuntimeError("store 未填充（bootstrap 前）")
+    manifests = await store.list_manifests("node-versions", include_hidden=True)
+    payload, errors = render_node_release(manifests, include_test=True)
+    if errors:
+        raise RuntimeError("version.json 渲染失败: " + "; ".join(errors))
+    return payload
+
+
+async def _fetch_from_repo() -> dict[str, Any]:
+    """只读部署：从仓库 raw 拉 version.json（仓库已 exclude test，自然不含测试版）。"""
+    from providers.proxy_manager import get_proxy_manager
+
+    resp = await get_proxy_manager().request(
+        url=_raw_url(),
+        method="GET",
+        headers={"User-Agent": "ai-lubricant-node-release"},
+        timeout=aiohttp.ClientTimeout(total=FETCH_TIMEOUT_SECONDS),
+        proxy_config_id=mp_config.settings.proxy_id or None,
+    )
+    if resp.status != 200:
+        raise RuntimeError(f"version.json returned HTTP {resp.status}")
+    raw = await resp.read()
+    if len(raw) > MAX_FILE_BYTES:
+        raise RuntimeError(f"version.json exceeds {MAX_FILE_BYTES} bytes")
+    return json.loads(raw.decode("utf-8"))
+
+
 async def refresh(*, publish: bool = True) -> dict[str, Any]:
     global _snapshot
     settings = mp_config.consumer_settings
@@ -235,25 +273,17 @@ async def refresh(*, publish: bool = True) -> dict[str, Any]:
         return {"ok": False, "error": "节点版本源未启用", **await get_latest_release()}
     async with _lock:
         try:
-            from providers.proxy_manager import get_proxy_manager
-
-            resp = await get_proxy_manager().request(
-                url=_raw_url(),
-                method="GET",
-                headers={"User-Agent": "ai-lubricant-node-release"},
-                timeout=aiohttp.ClientTimeout(total=FETCH_TIMEOUT_SECONDS),
-                proxy_config_id=mp_config.settings.proxy_id or None,
+            # writable 部署走 store 渲染（含测试版，当正常版）；只读部署走仓库 raw
+            # （仓库那份 exclude test，自然不含测试版——别人无法感觉到）。
+            data = (
+                await _render_from_store()
+                if mp_config.settings.writable
+                else await _fetch_from_repo()
             )
-            if resp.status != 200:
-                raise RuntimeError(f"version.json returned HTTP {resp.status}")
-            raw = await resp.read()
-            if len(raw) > MAX_FILE_BYTES:
-                raise RuntimeError(f"version.json exceeds {MAX_FILE_BYTES} bytes")
-            data = json.loads(raw.decode("utf-8"))
             # 入仓资产的 repo_path 按消费侧平台（github/gitee）渲染绝对 download_url，
             # 再交给校验——校验器与下游永远看到合法 HTTPS 地址；旧资产（Release 直链
             # 时代）无 repo_path，保留原 download_url。
-            from monkeycode_compat.marketplace import urls
+            from user_platform.marketplace import urls
 
             data = urls.normalize_release_assets(data)
             errors = validate_node_release(data)
@@ -275,7 +305,7 @@ async def refresh(*, publish: bool = True) -> dict[str, Any]:
                 await runtime_sync.publish(runtime_sync.EVENT_NODE_RELEASE, "__all__")
             if next_version and previous_version and next_version != previous_version:
                 # 只在已知旧版本后发现一个不同的新版本时触发；首次启动加载不制造假通知。
-                from monkeycode_compat.notify_core import emit_notification_background
+                from user_platform.notify_core import emit_notification_background
                 emit_notification_background(
                     "node.new_version",
                     params={

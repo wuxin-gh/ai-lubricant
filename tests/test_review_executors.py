@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from monkeycode_compat.review_executors import (
+from user_platform.review_executors import (
     capability_matrix,
     get_review_framework,
     missing_capabilities,

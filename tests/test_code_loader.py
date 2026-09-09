@@ -202,7 +202,7 @@ class NeedHelper:
 
 def test_catalog_sample_code_loads_and_runs():
     """目录预设里的文档化样例源码必须能 exec、能实例化、能跑通 echo。"""
-    from monkeycode_compat.marketplace.channel_catalog import _code_entry
+    from user_platform.marketplace.channel_catalog import _code_entry
 
     sample = _code_entry()["preset"]["code"]
     assert sample and sample.strip()

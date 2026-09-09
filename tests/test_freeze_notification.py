@@ -51,7 +51,7 @@ def _capture_notifications(monkeypatch) -> list[dict]:
 
     _notify_freeze 是函数内 import，所以补丁必须打在 notify_core 模块上。
     """
-    from monkeycode_compat import notify_core
+    from user_platform import notify_core
 
     captured: list[dict] = []
 

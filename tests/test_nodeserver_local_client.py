@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from monkeycode_compat.node_client import NodeServerUnavailable, RPCError, get_local_node_client
-from monkeycode_compat.node_client.client import NodeClient
+from user_platform.node_client import NodeServerUnavailable, RPCError, get_local_node_client
+from user_platform.node_client.client import NodeClient
 
 
 class _FakeResponse:
@@ -53,7 +53,7 @@ def remote_client(monkeypatch):
     """A NodeClient with mocked aiohttp and a fresh capture."""
     from dataclasses import replace
 
-    from monkeycode_compat import config
+    from user_platform import config
 
     monkeypatch.setattr(
         config,
@@ -236,7 +236,7 @@ async def test_remote_http_error_without_code_raises_unavailable(remote_client):
 async def test_remote_missing_config_raises_unavailable(monkeypatch):
     from dataclasses import replace
 
-    from monkeycode_compat import config
+    from user_platform import config
 
     monkeypatch.setattr(
         config,

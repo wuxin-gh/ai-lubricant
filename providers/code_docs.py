@@ -48,7 +48,7 @@ def _read(path: Path) -> str:
 def _minimal_sample_code() -> str:
     """最小样例的源码来自渠道目录预设（与创建渠道时回填编辑器的那份同源）。"""
     try:
-        from monkeycode_compat.marketplace.channel_catalog import _code_entry
+        from user_platform.marketplace.channel_catalog import _code_entry
 
         return str((_code_entry().get("preset") or {}).get("code") or "")
     except Exception as exc:  # noqa: BLE001

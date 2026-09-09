@@ -11,18 +11,18 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from tortoise import Tortoise
 
-from monkeycode_compat.models_webhook import ProjectWebhook
-from monkeycode_compat.models_webhook_event import ProjectWebhookEvent
-from monkeycode_compat.routes_webhook_receive import router
+from user_platform.models_webhook import ProjectWebhook
+from user_platform.models_webhook_event import ProjectWebhookEvent
+from user_platform.routes_webhook_receive import router
 
 
 @pytest_asyncio.fixture
 async def app_db():
     await Tortoise.init(
         db_url="sqlite://:memory:",
-        modules={"monkeycode_compat": [
-            "monkeycode_compat.models_webhook",
-            "monkeycode_compat.models_webhook_event",
+        modules={"user_platform": [
+            "user_platform.models_webhook",
+            "user_platform.models_webhook_event",
         ]},
     )
     await Tortoise.generate_schemas()

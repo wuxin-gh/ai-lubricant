@@ -68,6 +68,10 @@ SCHEME_TOKEN = "token"
 # ── 事件类型（spec §9）──────────────────────────────────────────────────────
 EVENT_CONTROL_REVOKED = "control-revoked"
 EVENT_CAPABILITIES_CHANGED = "capabilities-changed"
+# app 在会话内上报设备态（无障碍开关变化等），服务端 merge 进 device_info 落库，
+# 网页不必等下次 register 即可看到实时开关状态。v0 专用，未在 spec §9 列出但走
+# 同一 event 前向兼容铰链（未知 kind 忽略），旧服务端收到不会报错。
+EVENT_DEVICE_STATUS = "device_status"
 
 # ── 命令词汇表（spec §8）────────────────────────────────────────────────────
 # 服务端不得下发设备未在 capabilities 里声明的 cmd；真下发了设备会回

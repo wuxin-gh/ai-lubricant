@@ -10,7 +10,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from starlette.testclient import TestClient
 
-from monkeycode_compat import routes_node_bootstrap
+from user_platform import routes_node_bootstrap
 
 
 def _client() -> TestClient:
@@ -90,7 +90,7 @@ def test_install_script_method_override_renders_container_for_standalone_node():
     The Docker tab requests ``?method=docker`` on the same credential; the render
     must switch to the local-build container shape without touching the record.
     """
-    from monkeycode_compat.nodes_service import render_install_script
+    from user_platform.nodes_service import render_install_script
 
     standalone_bootstrap = {
         "node_id": "node-abc",

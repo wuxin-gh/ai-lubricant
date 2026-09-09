@@ -1108,7 +1108,7 @@ async def enrich_principal_descriptions(principals: list[dict]) -> list[dict]:
     desc_by_principal: dict[int, str] = {}
     async with PostgresClient.pool.acquire() as conn:
         if task_ids:
-            # mc_tasks 与 mcp_users 同库（monkeycode_compat 的 Tortoise 表建在同一 PG）。
+            # mc_tasks 与 mcp_users 同库（user_platform 的 Tortoise 表建在同一 PG）。
             try:
                 rows = await conn.fetch(
                     "SELECT mcp_user_id, content FROM mc_tasks "
@@ -1484,7 +1484,7 @@ async def _user_group_ids(user_id: str | None) -> list[str]:
     if not user_id:
         return []
     try:
-        from monkeycode_compat.models import TeamGroupMember
+        from user_platform.models import TeamGroupMember
     except Exception:  # noqa: BLE001 — compat 层未启用时无分组概念
         return []
     try:
@@ -1511,11 +1511,18 @@ async def can_use_service(*, user_id: str | None, service_id: int, groups: list[
     gid_list = [str(g) for g in (groups if groups is not None else await _user_group_ids(user_id))]
     async with PostgresClient.pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT user_id, group_ids FROM mcp_services WHERE id=$1",
+            "SELECT user_id, group_ids, builtin FROM mcp_services WHERE id=$1",
             int(service_id),
         )
     if not row:
         return False
+    if bool(row.get("builtin")):
+        # 内置工具（cdp-bridge/mail/device-control）是平台提供的能力，不需要
+        # 额外的 service grant 才能进入创建任务/编辑器的「添加 MCP」候选；真正
+        # 能操作哪些浏览器/邮箱/设备由工具插件读取 principal 的 param grants
+        # 校验。否则 authorization/options 虽然正确返回了内置工具，用户点选时
+        # 会在 normalize_mcp_bindings 这里被错误判成 mcp_not_authorized。
+        return True
     # 1. 自己的个人服务
     if row["user_id"] is not None and str(row["user_id"]) == str(user_id):
         return True
@@ -1523,16 +1530,17 @@ async def can_use_service(*, user_id: str | None, service_id: int, groups: list[
     svc_groups = [str(g) for g in (row["group_ids"] or [])]
     if gid_list and any(g in svc_groups for g in gid_list):
         return True
-    # 3. 服务级授权（mcp_service_users，principal 与服务的关系）
+    # 3. 服务级授权（mcp_grants 的 service 行：该用户的某个 principal 被授权该服务）
     async with PostgresClient.pool.acquire() as conn:
         granted = await conn.fetchval(
             """
-            SELECT 1 FROM mcp_service_users su
-            JOIN mcp_users u ON u.id=su.user_id
-            WHERE su.service_id=$1 AND u.owner_user_id=$2 AND u.enabled=TRUE
+            SELECT 1 FROM mcp_grants g
+            JOIN mcp_users u ON u.id=g.principal_id
+            WHERE g.grant_key=$1 AND g.grant_value=$2
+              AND u.owner_user_id=$3 AND u.enabled=TRUE
             LIMIT 1
             """,
-            int(service_id), str(user_id),
+            GRANT_SERVICE_KEY, str(int(service_id)), str(user_id),
         )
     return bool(granted)
 
@@ -1567,29 +1575,39 @@ def _param_row_to_dict(row) -> dict:
 
 
 async def list_principal_params(principal_id: int) -> list[dict]:
-    """返回 principal 的全部操作参数 [{param_key, param_value, created_at}]。"""
+    """返回 principal 的全部操作参数 [{param_key, param_value, created_at}]。
+
+    读 mcp_grants 的 param 行（grant_key != 'service'）。多值语义已天然支持：
+    同一 param_key 多行 = 绑多个实例；旧 UNIQUE(principal_id, param_key) 单值
+    约束随存储迁移解除。调用方（如 set_principal_params 的单值写入）各自维持
+    自己的语义，数据层不再锁死。
+    """
     from db import PostgresClient
 
     if not PostgresClient.pool:
         return []
     async with PostgresClient.pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT param_key, param_value, created_at FROM mcp_user_params "
-            "WHERE principal_id=$1 ORDER BY id",
-            int(principal_id),
+            "SELECT grant_key AS param_key, grant_value AS param_value, created_at "
+            "FROM mcp_grants WHERE principal_id=$1 AND grant_key<>$2 ORDER BY grant_key, id",
+            int(principal_id), GRANT_SERVICE_KEY,
         )
     return [_param_row_to_dict(r) for r in rows]
 
 
 async def get_principal_param(principal_id: int, key: str) -> str | None:
-    """driver 鉴权定位用：取 principal 的某个参数值，无则 None。"""
+    """driver 鉴权定位用：取 principal 的某个参数值，无则 None。
+
+    单值返回（取首行）以兼容现有插件读法；多值场景用 get_principal_grant_values。
+    """
     from db import PostgresClient
 
     if not PostgresClient.pool:
         return None
     async with PostgresClient.pool.acquire() as conn:
         return await conn.fetchval(
-            "SELECT param_value FROM mcp_user_params WHERE principal_id=$1 AND param_key=$2",
+            "SELECT grant_value FROM mcp_grants "
+            "WHERE principal_id=$1 AND grant_key=$2 ORDER BY id LIMIT 1",
             int(principal_id), str(key),
         )
 
@@ -1602,6 +1620,42 @@ _PARAM_DETAIL_TYPE = {
     "mail_account_id": "mail_account",
     "device_id": "device",
 }
+
+# param_key → 前端展示标签（grants 编辑器的实例区用）。与 _PARAM_DETAIL_TYPE 同源
+# 维护，authorization/options 端点经 param_kind_catalog() 下发，前端不再硬编码。
+_PARAM_LABEL = {
+    "cdp_client_id": "CDP 浏览器客户端",
+    "mail_account_id": "邮箱账户",
+    "device_id": "设备",
+}
+
+
+def param_kind_catalog() -> list[dict]:
+    """可绑定的 param 类型目录（从 mcp_builtin.catalog 的 required_param 派生）。
+
+    authorization/options 端点下发，前端 grants 编辑器据此动态渲染实例绑定区，
+    消除前端硬编码 PARAM_KINDS 与后端声明源漂移的问题。catalog 是纯声明模块，
+    无 DB 依赖，导入安全。
+    """
+    try:
+        from mcp_builtin.catalog import BUILTIN_SERVICE_SPECS
+    except Exception:  # noqa: BLE001 — catalog 不可用时退化为已知 param 集
+        return [
+            {"key": k, "label": _PARAM_LABEL.get(k, k), "resource_type": v}
+            for k, v in _PARAM_DETAIL_TYPE.items()
+        ]
+    seen: dict[str, str] = {}
+    for spec in BUILTIN_SERVICE_SPECS:
+        if spec.required_param:
+            seen.setdefault(spec.required_param, spec.name)
+    return [
+        {
+            "key": key,
+            "label": _PARAM_LABEL.get(key, key),
+            "resource_type": _PARAM_DETAIL_TYPE.get(key, key),
+        }
+        for key in seen
+    ]
 
 
 async def set_principal_params(
@@ -1664,10 +1718,13 @@ async def set_principal_params(
                     if not row:
                         raise ValueError(f"参数 {key}={value} 指向的资源不存在或无权访问")
 
-            await conn.execute("DELETE FROM mcp_user_params WHERE principal_id=$1", int(principal_id))
+            await conn.execute(
+                "DELETE FROM mcp_grants WHERE principal_id=$1 AND grant_key<>$2",
+                int(principal_id), GRANT_SERVICE_KEY,
+            )
             for key, value in normalized:
                 await conn.execute(
-                    "INSERT INTO mcp_user_params(principal_id, param_key, param_value) VALUES($1,$2,$3)",
+                    "INSERT INTO mcp_grants(principal_id, grant_key, grant_value) VALUES($1,$2,$3)",
                     int(principal_id), key, value,
                 )
     return await list_principal_params(principal_id)
@@ -1677,6 +1734,7 @@ async def list_owned_resource_principal_params(owner_user_id: str) -> dict[int, 
     """资源页只读概览：当前 owner 的工具资源分别配给了哪些 principals（按 param）。
 
     返回 {resource_id: [{principal_id, name, param_key, param_value}]}。
+    读 mcp_grants 的 param 行（grant_key != 'service'）。
     """
     from db import PostgresClient
 
@@ -1685,17 +1743,18 @@ async def list_owned_resource_principal_params(owner_user_id: str) -> dict[int, 
     async with PostgresClient.pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT p.param_key, p.param_value, u.id AS principal_id, u.name,
-                   r.id AS resource_id
-            FROM mcp_user_params p
-            JOIN mcp_users u ON u.id=p.principal_id
-            JOIN builtin_tool_resources r ON r.id=p.param_value::bigint
-            WHERE p.param_key IN ('cdp_client_id', 'mail_account_id')
-              AND u.enabled=TRUE AND u.owner_user_id=$1
-              AND r.owner_user_id=$1
+            SELECT g.grant_key AS param_key, g.grant_value AS param_value,
+                   u.id AS principal_id, u.name, r.id AS resource_id
+            FROM mcp_grants g
+            JOIN mcp_users u ON u.id=g.principal_id
+            JOIN builtin_tool_resources r ON r.id=g.grant_value::bigint
+            WHERE g.grant_key IN ('cdp_client_id', 'mail_account_id')
+              AND g.grant_key <> $1
+              AND u.enabled=TRUE AND u.owner_user_id=$2
+              AND r.owner_user_id=$2
             ORDER BY u.name, u.id
             """,
-            str(owner_user_id),
+            GRANT_SERVICE_KEY, str(owner_user_id),
         )
     result: dict[int, list[dict]] = {}
     for row in rows:
@@ -1704,6 +1763,245 @@ async def list_owned_resource_principal_params(owner_user_id: str) -> dict[int, 
             "param_key": row["param_key"], "param_value": row["param_value"],
         })
     return result
+
+
+# ── MCP principal 统一授权表（mcp_grants）──
+# 合并 mcp_user_params（param）与 mcp_service_users（service）的单一授权形态。
+# grant_key='service' → grant_value=mcp_services.id（服务级授权，sse/custom 判权、
+# 任务/agent 派发推导 spec 的依据）；grant_key=param_key（cdp_client_id 等）→
+# grant_value=builtin_tool_resources.id（实例绑定；多行=多实例，无行=工具侧默认全量）。
+# 表是纯存储：绑定几个、默认全量与否是插件侧校验语义，这里只读写行。
+
+GRANT_SERVICE_KEY = "service"
+
+
+def _grant_row_to_dict(row) -> dict:
+    d = dict(row)
+    if d.get("created_at") is not None:
+        d["created_at"] = d["created_at"].isoformat()
+    return d
+
+
+async def resolve_identity_to_principal(token: str) -> int | None:
+    """把 token 解析到其绑定的 principal id（principal kind 直取；identity kind 经
+    agent/task → principal 反查）。
+
+    cdp_bridge / mail / device_control 三个内置插件各自重复了这套解析（且都只认
+    agent），这里收口为单一函数：principal 直取；identity 的 agent 走
+    get_agent_mcp_principal_id，task 走 tasks.mcp_user_id（替代 issue-workflow 旧实现
+    拿 "agent" 类型装 task id 的 hack）。没绑 / 解析失败返回 None，交给调用方按
+    外部 token 路径兜底。
+    """
+    import builtin_tool_store
+
+    resolved = await builtin_tool_store.resolve_token(token)
+    if not resolved:
+        return None
+    kind = resolved.get("kind")
+    if kind == "principal":
+        target = resolved.get("target") or {}
+        tid = target.get("id")
+        return int(tid) if tid is not None else None
+    if kind != "identity":
+        return None
+    meta = resolved.get("token") or {}
+    target_type = meta.get("target_type")
+    target_id = meta.get("target_id")
+    if target_type == "agent" and target_id and str(target_id).isdigit():
+        return await get_agent_mcp_principal_id(int(target_id))
+    if target_type == "task" and target_id:
+        # 延迟导入避免循环（task_service 依赖链较重）。
+        from user_platform.task_service import Task
+        try:
+            task_row = await Task.filter(id=str(target_id)).first()
+        except Exception:
+            return None
+        if task_row is None:
+            return None
+        pid = getattr(task_row, "mcp_user_id", None)
+        return int(pid) if pid is not None else None
+    return None
+
+
+async def resolve_token_owner_user_id(token: str) -> str | None:
+    """把 token 解析到它背后的 C 端用户 id（「默认全量」回退要用：owner 名下资源）。
+
+    - principal token：mcp_users.owner_user_id（平台级 principal 为 NULL → None）。
+    - agent identity：agents.user_id。
+    - task identity：tasks.user_id。
+    其余形态（node/user identity、外部 service token 等）→ None（没有全量语义）。
+    """
+    import builtin_tool_store
+
+    resolved = await builtin_tool_store.resolve_token(token)
+    if not resolved:
+        return None
+    kind = resolved.get("kind")
+    from db import PostgresClient
+    if not PostgresClient.pool:
+        return None
+    if kind == "principal":
+        target = resolved.get("target") or {}
+        tid = target.get("id")
+        if tid is None:
+            return None
+        owner = await PostgresClient.pool.fetchval(
+            "SELECT owner_user_id::text FROM mcp_users WHERE id=$1", int(tid),
+        )
+        return owner or None
+    if kind == "identity":
+        meta = resolved.get("token") or {}
+        target_type = meta.get("target_type")
+        target_id = meta.get("target_id")
+        if target_type == "agent" and target_id and str(target_id).isdigit():
+            owner = await PostgresClient.pool.fetchval(
+                "SELECT user_id FROM agents WHERE id=$1", int(target_id),
+            )
+            return str(owner) if owner else None
+        if target_type == "task" and target_id:
+            owner = await PostgresClient.pool.fetchval(
+                "SELECT user_id::text FROM tasks WHERE id=$1", str(target_id),
+            )
+            return owner or None
+    return None
+
+
+async def list_principal_grants(principal_id: int) -> list[dict]:
+    """返回 principal 的全部授权行 [{grant_key, grant_value, created_at}]。"""
+    from db import PostgresClient
+
+    if not PostgresClient.pool:
+        return []
+    async with PostgresClient.pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT grant_key, grant_value, created_at FROM mcp_grants "
+            "WHERE principal_id=$1 ORDER BY grant_key, id",
+            int(principal_id),
+        )
+    return [_grant_row_to_dict(r) for r in rows]
+
+
+async def get_principal_grant_values(principal_id: int, key: str) -> list[str]:
+    """多值读取：principal 在某 grant_key 下的全部值（实例绑定的多客户端支持）。"""
+    from db import PostgresClient
+
+    if not PostgresClient.pool:
+        return []
+    async with PostgresClient.pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT grant_value FROM mcp_grants WHERE principal_id=$1 AND grant_key=$2 "
+            "ORDER BY id",
+            int(principal_id), str(key),
+        )
+    return [row["grant_value"] for row in rows]
+
+
+async def principal_has_service_grant(principal_id: int, service_id: int) -> bool:
+    """点查：principal 是否被授权该服务（mcp_grants 的 service 行）。"""
+    from db import PostgresClient
+
+    if not PostgresClient.pool:
+        return False
+    async with PostgresClient.pool.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT 1 FROM mcp_grants "
+            "WHERE principal_id=$1 AND grant_key=$2 AND grant_value=$3 LIMIT 1",
+            int(principal_id), GRANT_SERVICE_KEY, str(int(service_id)),
+        ) is not None
+
+
+async def set_principal_grants(
+    principal_id: int,
+    grants: list[dict],
+    *,
+    owner_user_id: str | None = None,
+) -> list[dict]:
+    """全量替换 principal 的授权行（service + param 一次提交）。
+
+    校验沿用 set_principal_params 的口径：
+      - grant_key='service' → grant_value 必须是 enabled 的 mcp_services.id；
+      - param 类 grant_key（cdp_client_id 等，_PARAM_DETAIL_TYPE 声明的）→ grant_value
+        必须是存在且（owner 给定时）归属正确的 enabled builtin_tool_resources 行。
+    principal 不存在抛 LookupError；校验失败抛 ValueError。service 行与 param 行同存
+    是合法形态（服务授权 + 实例收窄），param 行不再隐含 service 行。
+    """
+    from db import PostgresClient
+
+    if not PostgresClient.pool:
+        raise RuntimeError("Database not available")
+    normalized: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for raw in grants:
+        key = str(raw.get("grant_key") or "").strip()
+        value = str(raw.get("grant_value") or "").strip()
+        if not key or not value:
+            raise ValueError("grant_key/grant_value 不能为空")
+        if (key, value) in seen:
+            raise ValueError(f"重复的授权行: {key}={value}")
+        seen.add((key, value))
+        normalized.append((key, value))
+
+    async with PostgresClient.pool.acquire() as conn:
+        async with conn.transaction():
+            if owner_user_id is None:
+                exists = await conn.fetchval(
+                    "SELECT 1 FROM mcp_users WHERE id=$1", int(principal_id),
+                )
+            else:
+                exists = await conn.fetchval(
+                    "SELECT 1 FROM mcp_users WHERE id=$1 "
+                    "AND (owner_user_id=$2 OR owner_user_id IS NULL)",
+                    int(principal_id), str(owner_user_id),
+                )
+            if not exists:
+                raise LookupError("MCP principal 不存在")
+
+            for key, value in normalized:
+                if key == GRANT_SERVICE_KEY:
+                    row = await conn.fetchrow(
+                        "SELECT 1 FROM mcp_services WHERE id=$1 AND enabled=TRUE",
+                        int(value),
+                    )
+                    if not row:
+                        raise ValueError(f"服务授权 {value} 指向的服务不存在或未启用")
+                    continue
+                detail_type = _PARAM_DETAIL_TYPE.get(key)
+                if detail_type is None:
+                    # 未知 param key：mcp_services.required_param 声明了它就放行
+                    # （builtin 服务行的 required_param 是合法 key 的目录源），
+                    # 否则拒绝，防手插任意 key。
+                    declared = await conn.fetchval(
+                        "SELECT 1 FROM mcp_services WHERE required_param=$1 AND builtin=TRUE LIMIT 1",
+                        key,
+                    )
+                    if not declared:
+                        raise ValueError(f"未知的 grant_key: {key}")
+                    continue
+                if owner_user_id is None:
+                    row = await conn.fetchrow(
+                        "SELECT 1 FROM builtin_tool_resources "
+                        "WHERE id=$1 AND resource_type=$2 "
+                        "AND COALESCE((data->>'enabled')::boolean, TRUE)=TRUE",
+                        int(value), detail_type,
+                    )
+                else:
+                    row = await conn.fetchrow(
+                        "SELECT 1 FROM builtin_tool_resources "
+                        "WHERE id=$1 AND resource_type=$2 "
+                        "AND COALESCE((data->>'enabled')::boolean, TRUE)=TRUE "
+                        "AND owner_user_id=$3",
+                        int(value), detail_type, str(owner_user_id),
+                    )
+                if not row:
+                    raise ValueError(f"参数 {key}={value} 指向的资源不存在或无权访问")
+
+            await conn.execute("DELETE FROM mcp_grants WHERE principal_id=$1", int(principal_id))
+            for key, value in normalized:
+                await conn.execute(
+                    "INSERT INTO mcp_grants(principal_id, grant_key, grant_value) VALUES($1,$2,$3)",
+                    int(principal_id), key, value,
+                )
+    return await list_principal_grants(principal_id)
 
 
 async def list_mcp_users(*, mask_token: bool = True) -> list[dict]:
@@ -1943,12 +2241,12 @@ async def get_agent_mcp_principal_id(agent_id: int) -> int | None:
 
 
 async def list_agent_ids_authorized_for_cdp_client(client_id: str) -> set[int]:
-    """反查：绑定的 principal 有 ``cdp_client_id`` param 指向该客户端的 enabled agent id 集。
+    """反查：绑定的 principal 有 ``cdp_client_id`` grant 指向该客户端的 enabled agent id 集。
 
     这是「谁真正能操作这个浏览器」的口径——agent 的 browser_* 工具在运行时按其
-    principal 的 cdp_client_id param 定位会话池（见 cdp_bridge_plugin._principal_cdp_client_id），
-    没有该 param 的 agent 即便被客户端勾选也调不动。client_id = cdp_client 明细行 id
-    的字符串（mcp_user_params.param_value 存的就是字符串）。
+    principal 的 cdp_client_id grant 定位会话池（见 cdp_bridge_plugin._principal_cdp_client_id），
+    没有该 grant 的 agent 即便被客户端勾选也调不动。client_id = cdp_client 明细行 id
+    的字符串（mcp_grants.grant_value 存的就是字符串）。
     """
     from db import PostgresClient
 
@@ -1958,9 +2256,9 @@ async def list_agent_ids_authorized_for_cdp_client(client_id: str) -> set[int]:
     async with PostgresClient.pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT a.id FROM agents a "
-            "JOIN mcp_user_params p ON p.principal_id = a.mcp_user_id "
+            "JOIN mcp_grants p ON p.principal_id = a.mcp_user_id "
             "WHERE a.enabled = TRUE "
-            "AND p.param_key = 'cdp_client_id' AND p.param_value = $1",
+            "AND p.grant_key = 'cdp_client_id' AND p.grant_value = $1",
             cid,
         )
     return {int(r["id"]) for r in rows}
@@ -2123,43 +2421,72 @@ async def delete_mcp_user(user_id: int) -> bool:
 
 
 async def list_service_users(service_id: int) -> list[int]:
-    """返回某服务已授权的 MCP 用户 id 列表。"""
+    """返回某服务已授权的 MCP 用户 id 列表（mcp_grants 的 service 行）。"""
     from db import PostgresClient
 
     if not PostgresClient.pool:
         return []
     async with PostgresClient.pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT user_id FROM mcp_service_users WHERE service_id=$1 ORDER BY user_id",
-            service_id,
+            "SELECT principal_id::int AS user_id FROM mcp_grants "
+            "WHERE grant_key=$1 AND grant_value=$2 ORDER BY principal_id",
+            GRANT_SERVICE_KEY, str(int(service_id)),
         )
-    return [r["user_id"] for r in rows]
+    return [row["user_id"] for row in rows]
+
 
 
 async def list_services_for_mcp_user(user_id: int) -> list[int]:
-    """Return service ids currently authorized for one shared MCP user."""
+    """Return service ids currently authorized for one shared MCP user.
+
+    读 mcp_grants（grant_key=GRANT_SERVICE_KEY）——与 mcp_service_users 同义，
+    Phase 2 把 service 级授权的真相源切到统一 grants 表。旧表冻结（Phase 4 删）。
+    """
     from db import PostgresClient
     if not PostgresClient.pool:
         return []
     async with PostgresClient.pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT service_id FROM mcp_service_users WHERE user_id=$1 ORDER BY service_id", user_id
+            "SELECT grant_value::int AS service_id FROM mcp_grants "
+            "WHERE principal_id=$1 AND grant_key=$2 ORDER BY grant_value::int",
+            int(user_id), GRANT_SERVICE_KEY,
         )
     return [row["service_id"] for row in rows]
 
 
+async def mcp_user_granted_service(user_id: int, service_id: int) -> bool:
+    """该 principal 是否被授权这个服务（mcp_grants 的 service 行点查）。
+
+    网关 _check_service_auth 对 custom/sse/stdio 服务按此判权——与 agent 侧
+    resolve_effective_services 的 granted_ids 同一真相源，保证「挂得上的服务
+    调得通、挂不上的调不通」。点查而非拉全列表：网关每请求都要过这里。
+    """
+    from db import PostgresClient
+    if not PostgresClient.pool:
+        return False
+    async with PostgresClient.pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT 1 FROM mcp_grants "
+            "WHERE principal_id=$1 AND grant_key=$2 AND grant_value=$3 LIMIT 1",
+            int(user_id), GRANT_SERVICE_KEY, str(int(service_id)),
+        )
+    return row is not None
+
+
 async def set_services_for_mcp_user(user_id: int, service_ids: list[int]) -> tuple[list[int], list[int]]:
-    """Atomically replace one user's allowed services and return (before, after)."""
+    """Atomically replace one user's allowed services and return (before, after).
+
+    写 mcp_grants 的 service 行（真相源已切统一授权表）。语义与旧 mcp_service_users
+    版本完全一致，包括撤销授权时联动清理 cdp_client runtime 配置——那是业务行为，
+    不随存储形态迁移丢失。param 行不受影响（本函数只动 grant_key='service'）。
+    """
     from db import PostgresClient
     if not PostgresClient.pool:
         raise RuntimeError("Database not available")
     unique_ids = list(dict.fromkeys(int(service_id) for service_id in service_ids))
     async with PostgresClient.pool.acquire() as conn:
         async with conn.transaction():
-            before_rows = await conn.fetch(
-                "SELECT service_id FROM mcp_service_users WHERE user_id=$1", user_id
-            )
-            before = [row["service_id"] for row in before_rows]
+            before = await list_services_for_mcp_user(int(user_id))
             if unique_ids:
                 found_rows = await conn.fetch(
                     "SELECT id FROM mcp_services WHERE id=ANY($1::int[])", unique_ids
@@ -2174,11 +2501,15 @@ async def set_services_for_mcp_user(user_id: int, service_ids: list[int]) -> tup
                     "DELETE FROM mcp_runtime_configs WHERE config_type='cdp_client' AND data->>'user_id'=$1 AND service_id=ANY($2::int[])",
                     str(user_id), list(removed),
                 )
-            await conn.execute("DELETE FROM mcp_service_users WHERE user_id=$1", user_id)
+            # 只清 service 行，param 行（实例绑定）不动。
+            await conn.execute(
+                "DELETE FROM mcp_grants WHERE principal_id=$1 AND grant_key=$2",
+                int(user_id), GRANT_SERVICE_KEY,
+            )
             for service_id in unique_ids:
                 await conn.execute(
-                    "INSERT INTO mcp_service_users(service_id, user_id) VALUES($1, $2)",
-                    service_id, user_id,
+                    "INSERT INTO mcp_grants(principal_id, grant_key, grant_value) VALUES($1,$2,$3)",
+                    int(user_id), GRANT_SERVICE_KEY, str(service_id),
                 )
     return before, unique_ids
 
@@ -2186,9 +2517,10 @@ async def set_services_for_mcp_user(user_id: int, service_ids: list[int]) -> tup
 async def set_service_users(service_id: int, user_ids: list[int]) -> list[int]:
     """全量替换某服务的授权用户（事务内 DELETE + INSERT）。
 
-    只写授权关系本身。cdp_client/mail_account 实例的清理由用户删除/停用路径负责，
-    不在此处联动删除实例（服务级用户集现在由实例 user_ids 反推，见
-    recompute_service_users_from_resources）。只插入仍存在的用户，避免 FK 冲突。
+    写 mcp_grants 的 service 行。只写授权关系本身。cdp_client/mail_account 实例的
+    清理由用户删除/停用路径负责，不在此处联动删除实例（服务级用户集现在由实例
+    user_ids 反推，见 recompute_service_users_from_resources）。只插入仍存在的
+    用户，避免 FK 冲突。param 行不受影响。
     """
     from db import PostgresClient
 
@@ -2203,16 +2535,16 @@ async def set_service_users(service_id: int, user_ids: list[int]) -> list[int]:
                 )
                 existing = {row["id"] for row in existing_rows}
                 unique_ids = [uid for uid in unique_ids if uid in existing]
-            await conn.execute("DELETE FROM mcp_service_users WHERE service_id=$1", service_id)
+            await conn.execute(
+                "DELETE FROM mcp_grants WHERE grant_key=$1 AND grant_value=$2",
+                GRANT_SERVICE_KEY, str(int(service_id)),
+            )
             for uid in unique_ids:
                 await conn.execute(
-                    "INSERT INTO mcp_service_users(service_id, user_id) VALUES($1, $2) "
-                    "ON CONFLICT(service_id, user_id) DO NOTHING",
-                    service_id,
-                    uid,
+                    "INSERT INTO mcp_grants(principal_id, grant_key, grant_value) VALUES($1,$2,$3) "
+                    "ON CONFLICT (principal_id, grant_key, grant_value) DO NOTHING",
+                    int(uid), GRANT_SERVICE_KEY, str(int(service_id)),
                 )
-            # mcp_service_users 是普通服务级鉴权的唯一真相源（grants 表已移除，
-            # principal 的内置工具资源绑定走 mcp_user_params，与 service 级授权无关）。
     return await list_service_users(service_id)
 
 
@@ -2235,6 +2567,7 @@ async def get_service_auth(service_id: int) -> dict:
 
     ``allowed_tokens`` is runtime-only authentication material. API responses may
     use ``allowed_user_ids`` to expose identities without serializing tokens.
+    授权用户集读 mcp_grants 的 service 行（真相源已切统一授权表）。
     """
     from db import PostgresClient
 
@@ -2246,11 +2579,11 @@ async def get_service_auth(service_id: int) -> dict:
         )
         rows = await conn.fetch(
             """
-            SELECT u.id, u.token FROM mcp_service_users su
-            JOIN mcp_users u ON u.id = su.user_id
-            WHERE su.service_id=$1 AND u.enabled=TRUE
+            SELECT u.id, u.token FROM mcp_grants g
+            JOIN mcp_users u ON u.id = g.principal_id
+            WHERE g.grant_key=$1 AND g.grant_value=$2 AND u.enabled=TRUE
             """,
-            service_id,
+            GRANT_SERVICE_KEY, str(int(service_id)),
         )
     return {
         "auth_enabled": bool(enabled),

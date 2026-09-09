@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from monkeycode_compat import routes_editors_workspace
-from monkeycode_compat.node_client.tunnel import TunnelResponse
+from user_platform import routes_editors_workspace
+from user_platform.node_client.tunnel import TunnelResponse
 
 
 @pytest.mark.asyncio

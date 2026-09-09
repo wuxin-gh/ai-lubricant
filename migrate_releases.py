@@ -66,9 +66,9 @@ def _module_latest(manifests: list[dict]) -> dict | None:
 
 async def migrate_module(module: str, *, tag_prefix: str, release_name_tpl: str, apply: bool) -> bool:
     import marketplace_store as store
-    from monkeycode_compat.marketplace import config as mp_config
-    from monkeycode_compat.marketplace import github as mp_github
-    from monkeycode_compat.marketplace import release_repos
+    from user_platform.marketplace import config as mp_config
+    from user_platform.marketplace import github as mp_github
+    from user_platform.marketplace import release_repos
 
     loader = {
         "node-versions": release_repos.load_node_release_repo,
@@ -174,7 +174,7 @@ async def migrate_module(module: str, *, tag_prefix: str, release_name_tpl: str,
 
 async def _download(url: str) -> tuple[bytes, str]:
     """流式下载 raw 资产，返回 (内容, sha256:hex)。经 proxy_manager 统一出网。"""
-    from monkeycode_compat.marketplace.github import _HTTP_TIMEOUT  # noqa: F401  保持超时口径一致
+    from user_platform.marketplace.github import _HTTP_TIMEOUT  # noqa: F401  保持超时口径一致
 
     from providers.proxy_manager import get_proxy_manager
 

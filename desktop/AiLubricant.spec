@@ -57,19 +57,19 @@ datas = [
 
 hiddenimports = [
     # ── Tortoise ORM: models registered by string path ────────────────────
-    # monkeycode_compat/database.py:15-31 MODEL_MODULES
-    "monkeycode_compat.models",
-    "monkeycode_compat.models_task",
-    "monkeycode_compat.models_project",
-    "monkeycode_compat.models_git",
-    "monkeycode_compat.models_skill",
-    "monkeycode_compat.models_notify",
-    "monkeycode_compat.models_team_admin",
-    "monkeycode_compat.models_resources",
-    "monkeycode_compat.models_webhook",
-    "monkeycode_compat.models_webhook_event",
-    "monkeycode_compat.models_review",
-    "monkeycode_compat.models_tunnel",
+    # user_platform/database.py:15-31 MODEL_MODULES
+    "user_platform.models",
+    "user_platform.models_task",
+    "user_platform.models_project",
+    "user_platform.models_git",
+    "user_platform.models_skill",
+    "user_platform.models_notify",
+    "user_platform.models_team_admin",
+    "user_platform.models_resources",
+    "user_platform.models_webhook",
+    "user_platform.models_webhook_event",
+    "user_platform.models_review",
+    "user_platform.models_tunnel",
     # node_server/database.py:17 — the node ledger app
     "node_server.store",
     # Tortoise selects its dialect dynamically

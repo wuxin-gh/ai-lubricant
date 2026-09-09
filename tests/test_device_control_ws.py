@@ -249,6 +249,38 @@ async def test_capabilities_changed_event_updates_ctx(fresh_driver, monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_device_status_event_merges_into_device_info(fresh_driver, monkeypatch):
+    """device_status 事件把上报字段 merge 进 ctx.device_info（无障碍开关等）。
+
+    app 在会话内上报无障碍开关变化走 device_status kind，服务端 merge 后网页
+    无需等下次 register 即可看到。resource_id 在 fake 下为 None，落库分支被
+    is-not-None 守卫跳过——这里只验内存 merge。
+    """
+    monkeypatch.setattr("builtin_tool_store.authenticate_device", _auth_ok)
+    ws = FakeWebSocket()
+    task = asyncio.create_task(_run_ws(ws))
+    await ws.push(_register_frame())
+    await asyncio.sleep(0.02)
+
+    ctx = fresh_driver.get("dev_x")
+    assert ctx.device_info.get("model") == "Pixel 8"
+    assert "accessibility_enabled" not in ctx.device_info
+
+    await ws.push({"type": proto.TYPE_EVENT, "kind": proto.EVENT_DEVICE_STATUS,
+                   "data": {"accessibility_enabled": False}})
+    await asyncio.sleep(0.02)
+    assert ctx.device_info.get("accessibility_enabled") is False
+    # 既有字段不丢：merge 而非 replace。
+    assert ctx.device_info.get("model") == "Pixel 8"
+
+    task.cancel()
+    try:
+        await task
+    except (asyncio.CancelledError, Exception):
+        pass
+
+
+@pytest.mark.asyncio
 async def test_duplicate_register_is_fatal(fresh_driver, monkeypatch):
     """一条连接上的第二次 register close 4007（spec §4.3）。"""
     monkeypatch.setattr("builtin_tool_store.authenticate_device", _auth_ok)

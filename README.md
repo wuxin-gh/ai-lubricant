@@ -151,7 +151,7 @@ print(response.choices[0].message.content)
 
 ## 鸣谢
 
-- [MonkeyCode（chaitin/MonkeyCode）](https://github.com/chaitin/MonkeyCode) —— `monkeycode_compat` 兼容层与用户门户前端的上游基础（AGPL-3.0）。
+- [MonkeyCode（chaitin/MonkeyCode）](https://github.com/chaitin/MonkeyCode) —— `user_platform` 兼容层与用户门户前端的上游基础（AGPL-3.0）。
 - [jaychempan/Agent-Leaderboard](https://github.com/jaychempan/Agent-Leaderboard) —— 资源中心接入的 Agent 榜单数据源。
 - [hello-generic-agent（datawhalechina）](https://github.com/datawhalechina/hello-generic-agent) —— 本平台 Agent 运行时（GenericAgent）架构的上游参考。
 

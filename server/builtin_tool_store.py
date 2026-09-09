@@ -722,6 +722,39 @@ async def revoke_device(resource_id: int) -> dict | None:
     return device_present(resource) if resource else None
 
 
+async def update_device_runtime(
+    resource_id: int,
+    *,
+    device_info: dict | None = None,
+    last_seen_at: str | None = None,
+    last_error: str | None = None,
+    last_error_at: str | None = None,
+) -> dict | None:
+    """落库设备运行态：register/断连/device_status 事件时刷新。
+
+    在线快照（online/device_info/last_seen）只活在每个 Uvicorn worker 的 driver
+    内存里——一旦设备离线或进程重启，网页就只剩配对时那条空 device_info。把
+    app 上报的 device_info（版本/系统/机型/无障碍开关/上次错误）与 last_seen_at
+    落到 data JSONB，离线后网页仍能展示「最后一次上报 / 最后在线 / 上次错误」。
+
+    只 merge 传入的字段，其余（token_hash/enabled/device_id/...）原样保留。
+    用 update_resource 的读改写以复用 revision 自增，不破坏既有并发口径。
+    """
+    patch: dict[str, Any] = {}
+    if device_info is not None:
+        patch["device_info"] = device_info
+    if last_seen_at is not None:
+        patch["last_seen_at"] = last_seen_at
+    if last_error is not None:
+        patch["last_error"] = last_error
+    if last_error_at is not None:
+        patch["last_error_at"] = last_error_at
+    if not patch:
+        return None
+    resource = await update_resource(int(resource_id), patch)
+    return device_present(resource) if resource else None
+
+
 async def mail_upstream_accounts() -> list[dict]:
     """产出 mail 插件期望的 upstream_accounts：账户 + 其地址列表（含 secret 真值）。
 

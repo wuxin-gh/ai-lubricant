@@ -2,8 +2,8 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="连接编辑器能力详解：Claude Code / Codex / OpenCode 等主流编码 CLI 接入、项目与任务上下文、多 task 隔离环境、编辑器与终端、Git identity。">
-  <title>连接编辑器 · 能力详解 · Ai Lubricant</title>
+  <meta name="description" content="编辑器能力详解：Claude Code / Codex / OpenCode 等主流编码 CLI 接入、项目与任务上下文、三种执行环境（隔离 / 共用 / 系统）、会话隔离、编辑器与终端、Git identity。">
+  <title>编辑器 · 能力详解 · Ai Lubricant</title>
   <link rel="stylesheet" href="assets/docs.css?v=20260831-3"><script src="assets/docs.js?v=20260831-3" defer></script>
 </head>
 <body>
@@ -15,7 +15,7 @@
     <a href="index.html"><span class="ic">⌂</span>产品首页</a><a href="solutions.html"><span class="ic">◎</span>场景方案</a>
   </nav>
   <div class="nav-group">能力详解</div><nav>
-    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>连接编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
+    <a href="cap-llm-server.html"><span class="ic">⚖</span>大模型网关</a><a href="cap-code-channel.html"><span class="ic">⌨</span>自定义代码渠道</a><a href="cap-agent.html"><span class="ic">⌘</span>Agent</a><a href="cap-editor.html"><span class="ic">▭</span>编辑器</a><a href="cap-node.html"><span class="ic">◇</span>节点</a><a href="cap-mobile.html"><span class="ic">▣</span>手机客户端</a><a href="cap-browser.html"><span class="ic">🌐</span>浏览器控制</a><a href="cap-device-control.html"><span class="ic">📲</span>Android/iOS 控制</a><a href="cap-mail.html"><span class="ic">✉</span>邮箱</a><a href="cap-security.html"><span class="ic">🛡</span>安全防护</a><a href="cap-resource-center.html"><span class="ic">🧰</span>资源中心</a>
   </nav>
   <div class="nav-group">操作手册</div><nav>
     <a href="guide-developer.html"><span class="ic">⌘</span>开发者</a><a href="users-admin.html"><span class="ic">♙</span>平台管理员</a><a href="guide-node.html"><span class="ic">◇</span>节点管理员</a><a href="users-mobile.html"><span class="ic">▣</span>移动端</a>
@@ -26,13 +26,14 @@
 </aside>
 <main class="main"><div class="topbar"><button id="theme-toggle" type="button">☾ 深色</button><button id="print-page" type="button">⎙ 打印</button></div>
 <article class="content">
-<header class="hero"><h1>连接编辑器</h1><p class="desc">为每个项目提供可持续的工作环境：主流编码 CLI 接入、浏览器内编辑器、终端、文件管理，都在同一个项目上下文里。</p></header>
+<header class="hero"><h1>编辑器</h1><p class="desc">为每个项目提供可持续的工作环境：主流编码 CLI 接入、三种执行环境按需选择、浏览器内编辑器、终端与文件管理，都在同一个项目上下文里。</p></header>
 
 <div class="table-wrap"><table>
-<thead><tr><th>问题</th><th>自己搭的方案</th><th>平台连接编辑器</th></tr></thead>
+<thead><tr><th>问题</th><th>自己搭的方案</th><th>平台编辑器</th></tr></thead>
 <tbody>
 <tr><td>编码工具接自有渠道</td><td>改每个工具的配置/代码适配中转</td><td>只改 base URL，平台按客户端模板补齐协议与字段</td></tr>
 <tr><td>工作上下文</td><td>片段粘贴进聊天，每次从空白开始</td><td>项目/任务/编辑器/文件共享同一工作区</td></tr>
+<tr><td>执行环境</td><td>换个平台就得重搭环境、迁移远程连接</td><td>三种环境档位各按所需；系统环境<strong>接入现有的环境，无需迁移远程连接</strong></td></tr>
 <tr><td>任务并行</td><td>同一目录跑多个任务互相污染</td><td>每个 session 独立 runtime 进程，目录隔离</td></tr>
 <tr><td>文件与终端</td><td>自己开 SSH/SFTP</td><td>浏览器内直接用，走节点受控连接</td></tr>
 <tr><td>提交身份</td><td>Agent 用全局 Git 身份</td><td>Git identity 按用户/项目关联</td></tr>
@@ -51,14 +52,37 @@
 </tbody></table></div>
 <p>细节见 <a href="cap-llm-server.html#preset">大模型网关的客户端模板</a>；调用方视角的接入说明见 <a href="users-api.html#coding-clients">API 指南</a>。</p>
 
-<h2 id="envs">功能：更多编辑器与多环境选择</h2>
-<figure class="shot" data-shot="cap-editor/envs.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">更多编辑器与多环境选择</span></div><button class="shot-open" type="button" aria-label="放大截图：更多编辑器与多环境选择"><img src="assets/screenshots/cap-editor/envs.png" alt="更多编辑器与多环境选择" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-editor/envs.png</code></div></div></figure>
+<h2 id="editors">功能：更多编辑器形态</h2>
+<figure class="shot" data-shot="cap-editor/editors.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">更多编辑器形态</span></div><button class="shot-open" type="button" aria-label="放大截图：更多编辑器形态"><img src="assets/screenshots/cap-editor/editors.png" alt="更多编辑器形态" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-editor/editors.png</code></div></div></figure>
 <div class="table-wrap"><table><thead><tr><th>能力</th><th>行为</th></tr></thead><tbody>
 <tr><td>更新的编辑器支持</td><td>除 Claude Code / Codex / OpenCode 外，新增 <strong>Cursor CLI（ACP）</strong>与 <strong>Gemini CLI</strong> 作为编辑器和 review 执行端；编辑器清单随节点上报的 editor capabilities 动态发现，自定义编辑器 Agent 可引入新形态</td></tr>
-<tr><td>分支模式（环境选择）</td><td>创建编辑器时按 <code>default / existing / auto</code> 选择分支策略：用项目默认分支、指定既有分支、或自动开工作分支——同一项目可并存多个环境</td></tr>
 <tr><td>编辑器多选一</td><td>同一项目可创建多个不同 provider 的编辑器并行工作，互不串工作区</td></tr>
+<tr><td>分支模式</td><td>创建编辑器时按 <code>default / existing / auto</code> 选择分支策略：用项目默认分支、指定既有分支、或自动开工作分支——同一项目可并存多个分支</td></tr>
 <tr><td>资源随编辑器下发</td><td>MCP、技能、插件、项目提示词按编辑器单独配置，编辑即生效</td></tr>
 </tbody></table></div>
+
+<h2 id="envs">功能：三种执行环境</h2>
+<figure class="shot" data-shot="cap-editor/envs.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">三种执行环境</span></div><button class="shot-open" type="button" aria-label="放大截图：三种执行环境"><img src="assets/screenshots/cap-editor/envs.png" alt="三种执行环境" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-editor/envs.png</code></div></div></figure>
+<p>创建任务时先选环境档位（界面里对应「隔离环境 / 共用环境 / 系统内置」）——它决定编辑器会话跑在哪个 HOME 里、装好的东西归谁所有。三档的区别：</p>
+<div class="table-wrap"><table><thead><tr><th></th><th>隔离环境</th><th>共用环境</th><th>系统环境</th></tr></thead><tbody>
+<tr><td>跑在哪</td><td>每次任务新建的一次性 HOME，用完即回收</td><td>你命名的持久 HOME，固定在创建它的节点上</td><td>节点操作者的真实本机 HOME</td></tr>
+<tr><td>复用什么</td><td>什么都不带，每次干净开始</td><td>技能 / MCP / 插件配置一次，装好的依赖与 CLI 登录态跨任务复用</td><td>操作者已装的工具、登录态与配置目录原样可用</td></tr>
+<tr><td>谁维护</td><td>平台自动回收，零配置</td><td>你在环境页维护期望集合，同步到节点；已装 / 待同步 / 多余一目了然</td><td>节点操作者为主，平台可看清单、增量安装</td></tr>
+<tr><td>适合</td><td>默认档；并行任务互不干扰</td><td>长期项目，工具链与登录态要积累</td><td>接入现有的环境，无需迁移远程连接</td></tr>
+</tbody></table></div>
+<p class="note"><strong>一句话区分</strong>隔离是「每次重来」，共用是「你搭好反复用」，系统是「直接用操作者已经搭好的那台」。任务里临时取消某个资源只是那一次不激活，不会动共用环境本身。</p>
+
+<h3>系统环境：接入现有的环境，无需迁移远程连接</h3>
+<p>把一台已经配好的机器交给 Agent，传统做法要么把环境搬进容器沙箱（迁移即失真、登过的账号又得重来），要么自己搭 SSH 与远程连接（开端口、发密钥、NAT 后面还够不着）。系统环境两个都不要：节点装上即可，任务直接跑在操作者的真实本机 HOME 里——已装的 CLI、登录过的账号、<code>~/.claude</code>、<code>~/.agents</code>、<code>~/.mcp.json</code> 等配置目录原样可用。现有的环境长什么样，任务拿到的就是什么样。</p>
+<div class="table-wrap"><table><thead><tr><th>行为</th><th>说明</th></tr></thead><tbody>
+<tr><td>看得见</td><td>节点扫描本机 HOME 并上报清单：技能 / 插件 / MCP，含版本、来源编辑器与 HOME 相对路径——系统环境的任务实际会拿到什么，一清二楚，不是黑盒</td></tr>
+<tr><td>增量安装</td><td>平台资源可装进本机 HOME；同名默认跳过，覆盖需显式勾选——不默认动操作者已有的东西</td></tr>
+<tr><td>卸载有边界</td><td>只能卸载平台装过的（节点按自己的安装清单复核，拒绝其余一切）；操作者手装的不受影响</td></tr>
+<tr><td>凭据不落本机</td><td>任务勾选的技能 / MCP 不会写入本机配置；每个任务的 MCP 凭据按任务私有下发，永不写进操作者的 <code>~/.mcp.json</code>，多个任务共享同一环境也不会互串凭据</td></tr>
+<tr><td>归档入库</td><td>本机自有的技能 / 插件可一键打包归档为平台资源，其他节点与共用环境即可复用</td></tr>
+</tbody></table></div>
+<div class="info"><strong>开启方式</strong>宿主机安装的节点默认开启；容器节点默认关闭（容器里的 HOME 是镜像的，不是操作者的）。容器节点需要时，启动时设置 <code>AGENT_COMPOSE_NODE_ALLOW_SYSTEM_ENV=on</code>（或 <code>--allow-system-env=on</code>）后重启，节点会重新上报该能力位。未开启的节点，系统档会被拒绝派发。</div>
+<p>系统环境的本机清单与安装/卸载/归档，在节点详情的「系统内置环境」Tab 操作；共用环境的配置在「环境」Tab。详见 <a href="guide-node.html">节点管理员手册</a>。</p>
 
 <h2 id="review">功能：代码 review</h2>
 <figure class="shot" data-shot="cap-editor/review.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">代码 review</span></div><button class="shot-open" type="button" aria-label="放大截图：代码 review"><img src="assets/screenshots/cap-editor/review.png" alt="代码 review" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-editor/review.png</code></div></div></figure>
@@ -80,8 +104,8 @@
 <tr><td>Git identity</td><td>提交身份与用户/项目关联</td></tr>
 </tbody></table></div>
 
-<h2 id="session-isolation">功能：多 task 隔离</h2>
-<figure class="shot" data-shot="cap-editor/session-isolation.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">多 task 隔离</span></div><button class="shot-open" type="button" aria-label="放大截图：多 task 隔离"><img src="assets/screenshots/cap-editor/session-isolation.png" alt="多 task 隔离" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-editor/session-isolation.png</code></div></div></figure>
+<h2 id="session-isolation">功能：会话隔离</h2>
+<figure class="shot" data-shot="cap-editor/session-isolation.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">会话隔离</span></div><button class="shot-open" type="button" aria-label="放大截图：会话隔离"><img src="assets/screenshots/cap-editor/session-isolation.png" alt="会话隔离" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-editor/session-isolation.png</code></div></div></figure>
 <div class="table-wrap"><table><thead><tr><th>机制</th><th>行为</th></tr></thead><tbody>
 <tr><td>session = 独立 runtime 进程</td><td>工作目录相互隔离，任务并行不打架</td></tr>
 <tr><td>任务子 Key 收窄</td><td>可用模型、编辑器、策略与速率限制派生成收窄的子 Key，任务级不越权</td></tr>
@@ -90,17 +114,15 @@
 </tbody></table></div>
 
 <h2 id="node">功能：节点接入即为工作区</h2>
-<figure class="shot" data-shot="cap-editor/node.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">节点接入即为工作区</span></div><button class="shot-open" type="button" aria-label="放大截图：节点接入即为工作区"><img src="assets/screenshots/cap-editor/node.png" alt="节点接入即为工作区" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-editor/node.png</code></div></div></figure>
 <p>旧笔记本、办公室台式机装上节点程序即可作为执行环境——NAT 后面也行，不需要公网 IP 或开端口。普通任务不独占节点，容量由节点侧 <code>max_sessions</code> 控制。详见 <a href="cap-node.html">节点能力详解</a>。</p>
 
 <h2 id="remote">功能：手机发起与跟踪</h2>
-<figure class="shot" data-shot="cap-editor/remote.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">手机发起与跟踪</span></div><button class="shot-open" type="button" aria-label="放大截图：手机发起与跟踪"><img src="assets/screenshots/cap-editor/remote.png" alt="手机发起与跟踪" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-editor/remote.png</code></div></div></figure>
 <p>手机上选项目、模型与节点发起任务，查看执行轨迹与产物。移动端适合发起、跟踪、复核，不替代桌面编辑器。详见 <a href="cap-mobile.html">手机客户端详解</a>。</p>
 
 <h2 id="usage">怎么用</h2>
-<figure class="shot" data-shot="cap-editor/usage.png"><div class="frame"><div class="chrome"><i></i><i></i><i></i><span class="addr">怎么用</span></div><button class="shot-open" type="button" aria-label="放大截图：怎么用"><img src="assets/screenshots/cap-editor/usage.png" alt="怎么用" loading="lazy"></button><div class="pending"><span class="tag">截图待补</span><br>把截图放到该路径，或把 <code>src</code> 改成实际图片地址<br><code>assets/screenshots/cap-editor/usage.png</code></div></div></figure>
 <ol>
-<li>从项目详情的「编辑器」Tab 创建编辑器，选工作节点与环境配置。</li>
+<li>创建任务时先选执行环境（隔离 / 共用 / 系统内置），再填任务内容；系统档只有已开启的节点可派发。</li>
+<li>从项目详情的「编辑器」Tab 创建编辑器，选工作节点与分支模式。</li>
 <li>进入 <code>/console/editor/:editorId</code>，新建/恢复会话。</li>
 <li>用完停止会话，释放节点容量。完整步骤见 <a href="guide-developer.html#editor">开发者手册</a>。</li>
 </ol>

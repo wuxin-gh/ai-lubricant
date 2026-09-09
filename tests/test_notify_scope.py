@@ -20,8 +20,8 @@ import pytest
 import pytest_asyncio
 from tortoise import Tortoise
 
-from monkeycode_compat.models_notify import NotifyChannel, NotifySubscription
-from monkeycode_compat.notify_service import notify_service
+from user_platform.models_notify import NotifyChannel, NotifySubscription
+from user_platform.notify_service import notify_service
 
 
 def _configured(rows: list[dict]) -> list[dict]:
@@ -38,7 +38,7 @@ def _configured(rows: list[dict]) -> list[dict]:
 async def tortoise_db():
     await Tortoise.init(
         db_url="sqlite://:memory:",
-        modules={"monkeycode_compat": ["monkeycode_compat.models_notify"]},
+        modules={"user_platform": ["user_platform.models_notify"]},
     )
     await Tortoise.generate_schemas()
     try:

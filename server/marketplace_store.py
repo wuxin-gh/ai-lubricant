@@ -1,7 +1,7 @@
 """市场条目编辑真相源（marketplace_items）+ 发布 outbox（marketplace_publish_jobs）。
 
 市场管理页的 CRUD 事务落这里，保存即生效；GitHub 仓库退化为发布镜像，由后台
-publisher（monkeycode_compat/marketplace/publisher.py）消费 outbox 把当前 store
+publisher（user_platform/marketplace/publisher.py）消费 outbox 把当前 store
 状态异步推送上去。此前保存一条模板要 7-9 次串行 GitHub RTT（GET sha + PUT ×
 item/index/marker + 渠道目录全量重拉）全在请求里，现在写路径零出网。
 
@@ -233,7 +233,7 @@ async def upsert_item(module: str, manifest: dict) -> dict:
     manifest 校验由调用方（路由层 validate_manifest）负责，这里只管落库。
     """
     from db import PostgresClient
-    from monkeycode_compat.marketplace.validator import index_summary
+    from user_platform.marketplace.validator import index_summary
 
     item_id = str(manifest.get("id") or "")
     if not item_id:
@@ -320,7 +320,7 @@ async def replace_module(module: str, manifests: list[dict]) -> dict:
     单事务：全部行写完后一次性入队——每条 upsert、每条删除各一个 job。
     """
     from db import PostgresClient
-    from monkeycode_compat.marketplace.validator import index_summary
+    from user_platform.marketplace.validator import index_summary
 
     keep_ids: set[str] = set()
     written: list[str] = []
@@ -373,7 +373,7 @@ async def replace_module(module: str, manifests: list[dict]) -> dict:
 async def recompute_summaries(module: str) -> int:
     """rebuild-index：全部行按 manifest 重算 summary 并入队 refresh。"""
     from db import PostgresClient
-    from monkeycode_compat.marketplace.validator import index_summary
+    from user_platform.marketplace.validator import index_summary
 
     async with PostgresClient.pool.acquire() as conn:
         rows = await conn.fetch(
@@ -605,7 +605,7 @@ async def bootstrap_items(items: list[tuple[str, dict]]) -> int:
     行保留。启动 bootstrap 必须用 ``bootstrap_items_no_overwrite``，避免导入窗口
     覆盖管理员刚保存的新值。"""
     from db import PostgresClient
-    from monkeycode_compat.marketplace.validator import index_summary
+    from user_platform.marketplace.validator import index_summary
 
     if not PostgresClient.pool or not items:
         return 0
@@ -640,7 +640,7 @@ async def bootstrap_items_no_overwrite(items: list[tuple[str, dict]]) -> int:
     """启动 bootstrap 的 DO NOTHING 版本：store 已有的行（导入窗口内管理员刚保存的）
     原样保留，只用仓库内容填空。"""
     from db import PostgresClient
-    from monkeycode_compat.marketplace.validator import index_summary
+    from user_platform.marketplace.validator import index_summary
 
     if not PostgresClient.pool or not items:
         return 0

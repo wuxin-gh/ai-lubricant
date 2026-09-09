@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from monkeycode_compat import notify_core, notify_service
+from user_platform import notify_core, notify_service
 import rate_limiter
 from rate_limiter import AccountClient, ModelClientPool, ProviderPool
 

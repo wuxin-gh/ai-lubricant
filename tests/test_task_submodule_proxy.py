@@ -20,8 +20,8 @@ _proj = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _proj not in sys.path:
     sys.path.insert(0, _proj)
 
-from monkeycode_compat import task_service as task_service_module  # noqa: E402
-from monkeycode_compat.git_service import git_service as git_service_inst  # noqa: E402
+from user_platform import task_service as task_service_module  # noqa: E402
+from user_platform.git_service import git_service as git_service_inst  # noqa: E402
 
 TASK_ID = uuid.uuid4()
 
@@ -49,7 +49,7 @@ def _patch_identity(monkeypatch, *, load_identity, fetch_blob):
     """
     monkeypatch.setattr(git_service_inst, "load_identity_for_read", load_identity)
     monkeypatch.setattr(git_service_inst, "_build_repo_options", lambda _identity: SimpleNamespace())
-    monkeypatch.setattr("monkeycode_compat.git_clients.fetch_blob", fetch_blob)
+    monkeypatch.setattr("user_platform.git_clients.fetch_blob", fetch_blob)
 
 
 @pytest.mark.asyncio

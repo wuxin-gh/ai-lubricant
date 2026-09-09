@@ -25,8 +25,8 @@ class RuntimeWorker:
         self.running = True
         # The supervisor/reconciler are imported only in this process. The main
         # API service must never import these executors during its lifespan.
-        from monkeycode_compat.tunnel_supervisor import tunnel_supervisor
-        from monkeycode_compat.tunnel_runtime_manager import (
+        from user_platform.tunnel_supervisor import tunnel_supervisor
+        from user_platform.tunnel_runtime_manager import (
             configure_lease,
             tunnel_runtime_reconciler,
         )
@@ -48,8 +48,8 @@ class RuntimeWorker:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
-        from monkeycode_compat.tunnel_runtime_manager import tunnel_runtime_reconciler
-        from monkeycode_compat.tunnel_supervisor import tunnel_supervisor
+        from user_platform.tunnel_runtime_manager import tunnel_runtime_reconciler
+        from user_platform.tunnel_supervisor import tunnel_supervisor
 
         await tunnel_runtime_reconciler.stop()
         await tunnel_supervisor.stop()
@@ -59,7 +59,7 @@ class RuntimeWorker:
         self._wake.set()
 
     async def _run(self) -> None:
-        from monkeycode_compat.tunnel_runtime_manager import reconcile_all
+        from user_platform.tunnel_runtime_manager import reconcile_all
 
         while self.running:
             try:

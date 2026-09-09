@@ -307,10 +307,10 @@ async def lifespan(_app: FastAPI):
             logger.info("[conversation_store] ClickHouse ready, schema ensured")
             # 任务详情页对话内容表。与 agent 对话同库，借用同一个客户端：
             # 状态/索引留 Postgres mc_task_events，内容 append 到 CH task_messages。
-            # 未启用 CH 时任务侧自动回落到 PG payload 列（见 monkeycode_compat/
+            # 未启用 CH 时任务侧自动回落到 PG payload 列（见 user_platform/
             # task_message_store.py），只是没有 append-only 帧轨迹。
             try:
-                from monkeycode_compat import task_message_store as _task_msgs
+                from user_platform import task_message_store as _task_msgs
                 await _conv_client.ensure_task_messages_schema()
                 _task_msgs.attach_client(_conv_client)
                 logger.info("[task-messages] ClickHouse ready, schema ensured")
@@ -330,18 +330,18 @@ async def lifespan(_app: FastAPI):
     except Exception:
         logger.exception("[conversation_store] init failed; agent/chat conversations unavailable")
 
-    # MonkeyCode 兼容层初始化（建 mc_* 表 + 可选系统用户）。默认关闭；
+    # upstream 兼容层初始化（建 mc_* 表 + 可选系统用户）。默认关闭；
     # compat_enabled=false 时 init() 直接跳过，失败只 log 不影响主服务。
     try:
-        import monkeycode_compat
-        await monkeycode_compat.init()
+        import user_platform
+        await user_platform.init()
     except Exception:
-        logger.exception("[monkeycode-compat] init failed; main service continues")
+        logger.exception("[user-platform] init failed; main service continues")
 
     # 通知出站 worker：回灌未推送 outbox → set Event → 消费循环。独立于 compat 开关，
     # 用 db pool 原生 SQL（node-server 进程也能 emit，主进程统一消费推送）。
     try:
-        from monkeycode_compat import notify_core
+        from user_platform import notify_core
         await notify_core.start()
     except Exception:
         logger.exception("[notify] outbox worker start failed; outbound notifications unavailable")
@@ -382,7 +382,7 @@ async def lifespan(_app: FastAPI):
     await config.Config.refresh_api_keys_cache()
 
     # 渠道目录先加载数据库最后成功快照，再由后台任务预同步 GitHub；添加渠道只读本地目录。
-    from monkeycode_compat.marketplace import channel_catalog
+    from user_platform.marketplace import channel_catalog
     from admin import _channel_catalog_builtin_entries
     channel_catalog.configure_builtin_loader(_channel_catalog_builtin_entries)
     await channel_catalog.load_snapshot()
@@ -411,21 +411,35 @@ async def lifespan(_app: FastAPI):
     # WDA 自动续签扫描器：每 6h 扫一遍已认领 iOS 设备，到期窗口内自动派发 renew
     # job（护栏：data.ios.last_auto_renew_at 12h 防风暴 + running snapshot 幂等）。
     # compat 关闭时循环内部自查退出。
-    from monkeycode_compat import ios_auto_renew
+    from user_platform import ios_auto_renew
     ios_wda_renew_task = asyncio.create_task(
         ios_auto_renew.sync_loop(), name="ios-wda-auto-renew"
     )
 
     # 外部榜单候选池：默认关闭的 opt-in 同步。循环内部先查开关，未配置市场管理或
     # 未打开 leaderboard_sync_enabled 的部署只是空转复查配置，不抓取、不写库。
-    from monkeycode_compat.marketplace import leaderboard_sync
+    from user_platform.marketplace import leaderboard_sync
     leaderboard_sync_task = asyncio.create_task(
         leaderboard_sync.sync_loop(), name="leaderboard-sync"
     )
 
+    # 内容源定时同步（agency-agents / agency-agents-zh / agentscope）：与 leaderboard
+    # 同款 asyncio 后台循环。各源的 enabled/interval_hours 在市场管理配置里；默认全关，
+    # 未打开时空转每小时复查，不抓取。已在跑时由模块级 _progress.running 挡重入。
+    from user_platform.marketplace import agency_agents_convert, agentscope_convert
+    agency_agents_sync_task = asyncio.create_task(
+        agency_agents_convert.sync_loop(), name="agency-agents-sync"
+    )
+    agency_agents_zh_sync_task = asyncio.create_task(
+        agency_agents_convert.sync_loop(repo="jnMetaCode/agency-agents-zh"), name="agency-agents-zh-sync"
+    )
+    agentscope_sync_task = asyncio.create_task(
+        agentscope_convert.sync_loop(), name="agentscope-sync"
+    )
+
     # 消费侧市场读缓存：索引与根 marker 后台预热，单条 manifest read-through；
     # 管理端写路径立即失效。首轮即预热，启动不阻塞（冷启动首请求与现拉行为一致）。
-    from monkeycode_compat.marketplace import consumer_cache
+    from user_platform.marketplace import consumer_cache
     consumer_cache_task = asyncio.create_task(
         consumer_cache.sync_loop(), name="marketplace-consumer-cache-sync"
     )
@@ -434,14 +448,23 @@ async def lifespan(_app: FastAPI):
     # 后台 publisher 把当前 store 状态异步镜像到 GitHub（外部消费者读仓库 raw）。
     # 只读部署（未配 token）两个任务内部自判退出。bootstrap 先于 publisher 数据依赖，
     # 但二者都是幂等异步任务，无需严格先后——读路径在 store 空时回落旧 GitHub 读取。
-    from monkeycode_compat.marketplace import bootstrap as marketplace_bootstrap
-    from monkeycode_compat.marketplace import publisher as marketplace_publisher
+    from user_platform.marketplace import bootstrap as marketplace_bootstrap
+    from user_platform.marketplace import publisher as marketplace_publisher
     marketplace_bootstrap_task = asyncio.create_task(
         marketplace_bootstrap.bootstrap_once(), name="marketplace-bootstrap"
     )
     marketplace_publisher_task = asyncio.create_task(
         marketplace_publisher.worker_loop(), name="marketplace-publisher"
     )
+
+    # 回收上次进程崩溃/重启遗留的上传暂存目录：第①阶段收文件写盘半截就崩，
+    # cleanup_job 没被调用，2GB 的半截文件留在 temp 里把磁盘吃满。内存 _jobs
+    # 重启即空，孤儿目录只能靠启动时扫一遍暂存根目录回收（运行时再由 _maybe_sweep 兜底）。
+    try:
+        from user_platform.marketplace import upload_jobs
+        upload_jobs.sweep_orphan_dirs()
+    except Exception:
+        logger.exception("[upload-jobs] orphan temp sweep failed")
 
     # Tokenizer 词表版本检查：只发 HEAD 比对 ETag 并记录状态，绝不自动下载。
     # 词表可达数十 MB，而估算函数在请求热路径上，下载必须由管理员手动触发。
@@ -597,7 +620,7 @@ async def lifespan(_app: FastAPI):
         while True:
             try:
                 await asyncio.sleep(interval)
-                from monkeycode_compat.node_client import get_local_node_client
+                from user_platform.node_client import get_local_node_client
 
                 closed = await PostgresClient.reap_stale_editor_sessions(
                     pending_timeout_seconds=pending_timeout,
@@ -631,8 +654,8 @@ async def lifespan(_app: FastAPI):
         while True:
             try:
                 await asyncio.sleep(interval)
-                from monkeycode_compat.node_client import get_local_node_client
-                from monkeycode_compat.nodes_service import nodes_service
+                from user_platform.node_client import get_local_node_client
+                from user_platform.nodes_service import nodes_service
 
                 if not get_local_node_client().enabled:
                     continue
@@ -705,7 +728,23 @@ async def lifespan(_app: FastAPI):
 
     loop_lag_probe = asyncio.create_task(_loop_lag_probe(), name="loop-lag-probe")
 
+    # 局域网发现（UDP 广播应答，见 lan_discovery.py / docs/lan-discovery.md）。
+    # 失败只 warning 不阻断启动；loopback HTTP bind 时自动抑制响应。
+    try:
+        from lan_discovery import start_lan_discovery
+
+        await start_lan_discovery()
+    except Exception:
+        logger.exception("[lan-discovery] startup failed; main service continues")
+
     yield
+
+    try:
+        from lan_discovery import stop_lan_discovery
+
+        await stop_lan_discovery()
+    except Exception:
+        logger.exception("[lan-discovery] shutdown failed")
 
     if orphan_reservation_reaper:
         orphan_reservation_reaper.cancel()
@@ -753,6 +792,24 @@ async def lifespan(_app: FastAPI):
         leaderboard_sync_task.cancel()
         try:
             await leaderboard_sync_task
+        except asyncio.CancelledError:
+            pass
+    if agency_agents_sync_task:
+        agency_agents_sync_task.cancel()
+        try:
+            await agency_agents_sync_task
+        except asyncio.CancelledError:
+            pass
+    if agency_agents_zh_sync_task:
+        agency_agents_zh_sync_task.cancel()
+        try:
+            await agency_agents_zh_sync_task
+        except asyncio.CancelledError:
+            pass
+    if agentscope_sync_task:
+        agentscope_sync_task.cancel()
+        try:
+            await agentscope_sync_task
         except asyncio.CancelledError:
             pass
     if consumer_cache_task:
@@ -827,12 +884,12 @@ async def lifespan(_app: FastAPI):
     except Exception:
         logger.exception("[conversation_store] shutdown failed")
     try:
-        import monkeycode_compat
-        await _shutdown_step("monkeycode_compat", monkeycode_compat.close())
+        import user_platform
+        await _shutdown_step("user_platform", user_platform.close())
     except Exception:
-        logger.exception("[monkeycode-compat] shutdown failed")
+        logger.exception("[user-platform] shutdown failed")
     try:
-        from monkeycode_compat import notify_core
+        from user_platform import notify_core
         await _shutdown_step("notify_worker", notify_core.stop())
     except Exception:
         logger.exception("[notify] outbox worker shutdown failed")
@@ -861,7 +918,7 @@ async def _capture_user_session_cookie(request, call_next):
     _start = _time.perf_counter()
     try:
         from admin import set_current_user_cookie
-        from monkeycode_compat.session import USER_SESSION_COOKIE
+        from user_platform.session import USER_SESSION_COOKIE
         set_current_user_cookie(request.cookies.get(USER_SESSION_COOKIE))
     except Exception:
         pass
@@ -1749,7 +1806,7 @@ async def _enforce_api_key_usage_limit(apikey: dict, *, include_children: bool, 
 def _notify_usage_threshold(apikey: dict, dimension: str, used: int, limit: int) -> None:
     """密钥用量达阈值 → 通知（best-effort）。dedupe 1h，避免额度打满后每次请求刷屏。"""
     try:
-        from monkeycode_compat.notify_core import emit_notification_background
+        from user_platform.notify_core import emit_notification_background
         key_id = str(apikey.get("id"))
         emit_notification_background(
             "api_key.usage_threshold",
@@ -1803,7 +1860,7 @@ async def _task_id_for_editor_session(session: dict | None) -> str:
     if not session_id:
         return ""
     try:
-        from monkeycode_compat.models_task import Task
+        from user_platform.models_task import Task
 
         task = await Task.filter(
             source_editor_session_id=session_id,
@@ -6314,11 +6371,24 @@ app.include_router(mcp_router)
 # MCP Runtime 合并进主程序：SSE 网关（对外，token 鉴权）+ 管理 API（各路由自带
 # _require_admin）。原独立子进程（supervisor + 127.0.0.1:8003 回环）已退役，
 # 改为进程内挂载；插件在主 lifespan 里 restore_active_plugins() 注册进 registry 内存单例。
+from fastapi import WebSocket as _FastApiWebSocket
 from mcp_runtime.sse_gateway import router as mcp_runtime_sse_router
+from mcp_runtime.sse_gateway import device_ws as _device_ws_handler
 from mcp_runtime.admin_api import router as mcp_runtime_admin_router
 
 app.include_router(mcp_runtime_sse_router)
 app.include_router(mcp_runtime_admin_router)
+
+
+@app.websocket("/ws/device")
+async def _device_ws_root_alias(websocket: _FastApiWebSocket):
+    """旧版 app 拨的是 `ws://host/ws/device`（无 `/mcp` 前缀），而真实路由在
+    `/mcp/device-control/ws/device`——路径不匹配，app 永远 403、卡在「连接中」。
+    这里挂一条根级别名兜底到同一 handler，旧 app 不重装、重启服务即连。
+    新版 app 已改拨规范路径，本别名仅为存量兼容。
+    """
+    await _device_ws_handler(websocket, "device-control")
+
 
 # 资源镜像（skill / 插件）：服务端把市场资源 clone 成 tar.gz 存档，节点按 digest
 # 命中缓存后按需拉取。fetch 端点不走 admin 鉴权（节点用 mirror token），其余管理
@@ -6332,21 +6402,21 @@ app.include_router(resources_router)
 async def mcp_runtime_health() -> dict:
     return {"ok": True, "service": "mcp-runtime"}
 
-# Optional MonkeyCode platform routes (/api/v1/users). Disabled by default;
+# Optional upstream platform routes (/api/v1/users). Disabled by default;
 # mounted only when AI_LUBRICANT_COMPAT_ENABLED is set. Import is lazy and
 # failure-tolerant — it never blocks the main app or the /v1 pipeline.
 try:
-    import monkeycode_compat
-    monkeycode_compat.mount_routes(app)
+    import user_platform
+    user_platform.mount_routes(app)
 except Exception:
-    logger.exception("[monkeycode-compat] mount skipped")
+    logger.exception("[user-platform] mount skipped")
 
 
 # ── 前端 SPA 静态资源与路由回退 ──────────────────────────────────────────
 # 生产环境：将 user-frontend/dist 作为 SPA 资产目录暴露，并对未匹配的
 # 浏览器路径回退到 index.html，避免刷新 /console、/manager 等子路由时 404。
 # 用户门户(/console)与管理后台(/manager)共用同一套 React SPA 源码
-# (user-frontend submodule，vendored MonkeyCode 前端，AGPL)，
+# (user-frontend submodule，vendored upstream 前端，AGPL)，
 # 构建产物输出到 user-frontend/dist。
 _ADMIN_DIST_DIR = BASE_DIR / "user-frontend" / "dist"
 _ADMIN_INDEX_FILE = _ADMIN_DIST_DIR / "index.html"

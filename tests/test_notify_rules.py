@@ -15,7 +15,7 @@ import pytest
 import pytest_asyncio
 from tortoise import Tortoise
 
-from monkeycode_compat.notify_service import notify_service
+from user_platform.notify_service import notify_service
 
 _PLATFORM = "00000000-0000-0000-0000-0000000009f1"
 
@@ -24,7 +24,7 @@ _PLATFORM = "00000000-0000-0000-0000-0000000009f1"
 async def tortoise_db():
     await Tortoise.init(
         db_url="sqlite://:memory:",
-        modules={"monkeycode_compat": ["monkeycode_compat.models_notify"]},
+        modules={"user_platform": ["user_platform.models_notify"]},
     )
     await Tortoise.generate_schemas()
     try:
@@ -65,7 +65,7 @@ async def test_catalogue_entries_carry_category_and_scope():
 
 @pytest.mark.asyncio
 async def test_legacy_events_are_preserved():
-    """Prior MonkeyCode events must not be dropped (existing subscriptions)."""
+    """Prior upstream events must not be dropped (existing subscriptions)."""
     types = {e["type"] for e in notify_service.list_event_types()}
     for legacy in (
         "task.created", "task.ended", "vm.expiring_soon", "quota.refreshed",

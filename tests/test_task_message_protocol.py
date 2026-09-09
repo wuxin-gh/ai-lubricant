@@ -17,8 +17,8 @@ from types import SimpleNamespace
 import pytest
 from tortoise.exceptions import IntegrityError
 
-from monkeycode_compat import task_service as task_service_module
-from monkeycode_compat.task_service import TaskService
+from user_platform import task_service as task_service_module
+from user_platform.task_service import TaskService
 
 TASK_ID = uuid.uuid4()
 
@@ -280,13 +280,16 @@ async def test_switch_task_model_moves_selection_to_head(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_switch_task_model_rejects_target_outside_added_set(monkeypatch):
-    """集合外目标直接失败——绝不静默回退到 legal[0]（回退曾让 UI 假成功）。"""
+async def test_switch_task_model_adds_target_outside_snapshot(monkeypatch):
+    """集合外目标：只要父 Key 目录里合法就直接切到头部——不要求先经「添加模型」
+    进集合，旧成员保序跟在后面，白名单同步为并集。下拉列表口径是 Key 目录，
+    切换永不收窄列表，故这里绝不能 reject。"""
     service = TaskService()
+    whitelist_updates: list[tuple[int, list[str]]] = []
     task = SimpleNamespace(
         id=TASK_ID,
-        api_key_id=None,
-        parent_api_key_id=None,
+        api_key_id=7,
+        parent_api_key_id=1,
         models_snapshot=["model-a"],
         save=lambda **_kw: _async_return(None),
     )
@@ -294,11 +297,38 @@ async def test_switch_task_model_rejects_target_outside_added_set(monkeypatch):
     async def owned(user_id, task_id, role=None):
         return task
 
-    monkeypatch.setattr(service, "_owned_task_or_raise", lambda *a, **kw: owned(*a, **kw))
+    async def validate(key, models, *, active_model=None):
+        # 校验永远对父 Key（目录归属），且只带目标本身，不带快照成员。
+        assert key == 1
+        assert models == ["model-x"]
+        return models, active_model
 
-    with pytest.raises(ValueError, match="model_not_available_for_key"):
-        await service.switch_task_model("user", str(TASK_ID), "model-not-in-set")
-    assert task.models_snapshot == ["model-a"]
+    async def update_whitelist(key_id, whitelist):
+        whitelist_updates.append((key_id, list(whitelist)))
+        return True
+
+    import db as db_module
+
+    monkeypatch.setattr(service, "_owned_task_or_raise", lambda *a, **kw: owned(*a, **kw))
+    monkeypatch.setattr(task_service_module, "_validate_models_for_key", validate)
+    monkeypatch.setattr(
+        db_module.PostgresClient, "update_task_key_model_whitelist",
+        classmethod(lambda cls, key_id, whitelist: update_whitelist(key_id, whitelist)),
+    )
+    refreshed = {"count": 0}
+
+    async def refresh():
+        refreshed["count"] += 1
+
+    monkeypatch.setattr(TaskService, "_refresh_api_key_snapshot", staticmethod(refresh))
+
+    result = await service.switch_task_model("user", str(TASK_ID), "model-x")
+
+    assert result["model_id"] == "model-x"
+    assert result["models"] == ["model-x", "model-a"]
+    assert task.models_snapshot == ["model-x", "model-a"]
+    assert whitelist_updates == [(7, ["model-x", "model-a"])]
+    assert refreshed["count"] == 1
 
 
 @pytest.mark.asyncio
@@ -317,26 +347,30 @@ async def test_switch_task_model_rejects_key_filtered_target(monkeypatch):
         return task
 
     async def validate(key, models, *, active_model=None):
-        # model-b 被过滤掉，resolved 回退 model-a——服务层必须拦截这个回退。
-        legal = [m for m in models if m != "model-b"]
-        return legal, legal[0]
+        # 新约定只传目标本身。model-b 被过滤掉时 _validate_models_for_key 会回退
+        # resolved 到剩余合法模型——服务层必须拦截这个回退，而不是静默切过去。
+        assert models == ["model-b"]
+        return ["model-a"], "model-a"
 
     monkeypatch.setattr(service, "_owned_task_or_raise", lambda *a, **kw: owned(*a, **kw))
     monkeypatch.setattr(task_service_module, "_validate_models_for_key", validate)
 
     with pytest.raises(ValueError, match="model_not_available_for_key"):
         await service.switch_task_model("user", str(TASK_ID), "model-b")
+    # 被拒的切换不得动快照。
+    assert task.models_snapshot == ["model-a", "model-b"]
 
 
 @pytest.mark.asyncio
 async def test_switch_task_model_first_selection_on_empty_snapshot(monkeypatch):
-    """快照为空（不限制）：首次切换建立集合并收窄子 Key 白名单。"""
+    """快照为空（不限制）：首次切换建立集合并同步子 Key 白名单；连续切换
+    只换头部，历史成员保留——列表（Key 目录）永不塌缩成最后一次的选择。"""
     service = TaskService()
     whitelist_updates: list[tuple[int, list[str]]] = []
     task = SimpleNamespace(
         id=TASK_ID,
         api_key_id=7,
-        parent_api_key_id=None,
+        parent_api_key_id=1,
         models_snapshot=None,
         save=lambda **_kw: _async_return(None),
     )
@@ -345,6 +379,9 @@ async def test_switch_task_model_first_selection_on_empty_snapshot(monkeypatch):
         return task
 
     async def validate(key, models, *, active_model=None):
+        # 校验永远对父 Key（目录归属），且只带目标本身。
+        assert key == 1
+        assert models == [active_model]
         return models, active_model
 
     async def update_whitelist(key_id, whitelist):
@@ -372,6 +409,21 @@ async def test_switch_task_model_first_selection_on_empty_snapshot(monkeypatch):
     assert task.models_snapshot == ["model-x"]
     assert whitelist_updates == [(7, ["model-x"])]
     assert refreshed["count"] == 1
+
+    # 连续切换：新目标进头部，旧成员保序跟在后面，白名单同步为整个快照。
+    result = await service.switch_task_model("user", str(TASK_ID), "model-y")
+    assert result["model_id"] == "model-y"
+    assert result["models"] == ["model-y", "model-x"]
+
+    result = await service.switch_task_model("user", str(TASK_ID), "model-x")
+    assert result["model_id"] == "model-x"
+    assert task.models_snapshot == ["model-x", "model-y"]
+    assert whitelist_updates == [
+        (7, ["model-x"]),
+        (7, ["model-y", "model-x"]),
+        (7, ["model-x", "model-y"]),
+    ]
+    assert refreshed["count"] == 3
 
 
 @pytest.mark.asyncio

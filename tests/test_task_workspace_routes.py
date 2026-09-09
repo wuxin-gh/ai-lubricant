@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from monkeycode_compat import routes_task_workspace as workspace
+from user_platform import routes_task_workspace as workspace
 
 
 USER = SimpleNamespace(id="00000000-0000-0000-0000-000000000001", role="user")

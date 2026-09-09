@@ -16,12 +16,12 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from agent.config import AgentConfig
-from agent.context_manager import rebuild_history_messages, attach_tool_result
+from agent.context_manager import rebuild_history_messages, attach_tool_result, _collect_attachment_media
 from agent.memory import MemorySystem
 from agent.tools import ToolContext, ToolRegistry
 from agent import conversation_store, scene_context
 # 审批超时中止本轮的信号异常（仅 stdlib 依赖，模块级导入无循环风险）。
-from monkeycode_compat.node_client.approvals import ApprovalDenied, ApprovalTimeout
+from user_platform.node_client.approvals import ApprovalDenied, ApprovalTimeout
 
 if TYPE_CHECKING:
     from agent.agent_main import GenericAgent
@@ -101,103 +101,24 @@ def _attachment_target(root: str, conv_id: str, filename: str) -> tuple[str, Pat
     return relative, target
 
 
-# ── Agent → 用户 文件/图片展示（outbound，区别于上面的用户上传 inbound）──────
-# Agent 通过 ask_user(attachments) 把工作区文件 / 公网 URL / base64 二进制交给
-# 用户展示；二进制经 attachment_store 落成 attachment。这里把工具/问题事件里的
-# 附件形状结果抽成消息 media part 并认领归属——形状驱动，不认工具名。
-
-async def _media_part_from_result(
-    data: Any, sink: list[dict[str, Any]], caller: str | None, conv_id: str,
-) -> None:
-    """一个「附件形状」的结果 dict → media part + 认领归属。
-
-    形状驱动，不认工具名：任何工具的返回只要带 ``kind=url|attachment``，就抽成
-    media part。这样 show_file / ask_user / 未来任何产出媒体的工具共用一套逻辑，
-    不必每加一个工具就在这里加一个 if 分支。
-
-    - ``url``：公网 URL，直接透传成 media part（带 url，无 attachment_id）。
-    - ``attachment``：经 attachment_store 登记的，带 attachment_id；同时把未认领
-      的附件认领给当前会话用户（caller），context_ref=conv_id。仅 owner=NULL 时
-      认领，防越权抢占。
-
-    media part 统一 ``type:"attachment"``，客户端按 mime_type 决定内联图片
-    还是下载卡。
-    """
-    if not isinstance(data, dict):
-        return
-    kind = data.get("kind")
-    mime = str(data.get("mime_type") or "")
-    if kind == "url":
-        url = data.get("url")
-        if not url:
-            return
-        part = {
-            "type": "attachment",
-            "url": url,
-            "name": data.get("name"),
-            "mime_type": mime,
-        }
-    elif kind == "attachment":
-        attachment_id = data.get("id") or data.get("attachment_id")
-        if attachment_id is None:
-            return
-        part = {
-            "type": "attachment",
-            "attachment_id": attachment_id,
-            "name": data.get("name"),
-            "mime_type": mime,
-            "size": data.get("size"),
-            "status": data.get("status"),
-            "expires_at": data.get("expires_at"),
-        }
-        if caller:
-            try:
-                import attachment_store
-                await attachment_store.claim_for_owner(int(attachment_id), caller, context_ref=conv_id)
-            except Exception:  # noqa: BLE001 — 认领失败不阻断对话
-                logger.warning(
-                    "[attachment] claim failed id={} caller={}", attachment_id, caller, exc_info=True,
-                )
-    else:
-        return
-    # 去重：同一 attachment_id / url 只保留一张卡（流里重连回放可能重复到达）。
-    key = part.get("attachment_id") or part.get("url")
-    if not any((p.get("attachment_id") or p.get("url")) == key for p in sink):
-        sink.append(part)
-
-
-async def _collect_attachment_media(
-    event: dict, sink: list[dict[str, Any]], caller: str | None, conv_id: str,
-) -> None:
-    """工具结果事件 → media part(s)。
-
-    两种载荷形状都收，与工具名无关：
-
-    - 结果自身就是附件（``kind=url|attachment``）—— 旧 show_file 的形状。
-    - 结果带 ``media`` 列表（每项一个附件形状）—— ask_user 的形状。
-    """
-    data = event.get("data")
-    if not isinstance(data, dict):
-        return
-    await _media_part_from_result(data, sink, caller, conv_id)
-    media = data.get("media")
-    if isinstance(media, list):
-        for item in media:
-            await _media_part_from_result(item, sink, caller, conv_id)
+# ── Agent → 用户 文件/图片展示（outbound media）──────────────────────────
+# _media_part_from_result / _collect_attachment_media 已移到 agent.context_manager，
+# 与定时任务路径（agent/scheduler.py 的 on_event）共用，避免两边各抄一份漂移。
+# 这里直接 import 使用，不再重复定义。
 
 
 # ── 调用者鉴权 ────────────────────────────────────────────────────────
 # 一套 /agent/* 接口同时服务两类调用者：
-#   - C 端用户（monkeycode session cookie）：get_agent_caller 返回其 user_id(str)，
+#   - C 端用户（user_platform session cookie）：get_agent_caller 返回其 user_id(str)，
 #     数据按 user_id 隔离（只看/管自己的 + 平台公共 Agent）。
 #   - 管理员（/admin/login 换取的 Bearer token）：返回 None，不过滤，保持旧行为。
 # 两者都拿不到 → 401。
 
 async def _resolve_user_from_session() -> str | None:
-    """从 monkeycode C 端 session cookie 解析当前用户 id；无则 None。"""
+    """从 user_platform C 端 session cookie 解析当前用户 id；无则 None。"""
     try:
         from admin import _current_user_cookie
-        from monkeycode_compat.session import session_store, USER_SESSION_COOKIE
+        from user_platform.session import session_store, USER_SESSION_COOKIE
         cookie = _current_user_cookie.get(None)
         if not cookie:
             return None
@@ -239,7 +160,7 @@ async def _resolve_agent_owner(caller: str | None) -> str:
     """
     if caller is not None:
         return caller
-    from monkeycode_compat.deps import _ensure_emergency_admin
+    from user_platform.deps import _ensure_emergency_admin
     admin = await _ensure_emergency_admin()
     return str(admin.id)
 
@@ -247,7 +168,7 @@ async def _resolve_agent_owner(caller: str | None) -> str:
 async def _resolve_team_id_safe(user_id: str) -> str | None:
     """解析用户所属 team；失败返回 None（不阻断建 agent）。"""
     try:
-        from monkeycode_compat.deps import resolve_team_id
+        from user_platform.deps import resolve_team_id
         return await resolve_team_id(user_id)
     except Exception:
         return None
@@ -621,7 +542,7 @@ async def reconcile_agent_mcp_principals() -> dict[str, int]:
         if current is not None and current != new_id:
             rebound += 1
             # 旧 principal 仅当无任何 agent 引用、且没有外部接入授权时才删——
-            # 避免误删用户正在用的 external 身份（有 mcp_service_users 授权说明在用）。
+            # 避免误删用户正在用的 external 身份（有 mcp_grants 授权说明在用）。
             async with PostgresClient.pool.acquire() as conn:
                 in_use = await conn.fetchval(
                     "SELECT 1 FROM agents WHERE mcp_user_id=$1 AND id<>$2 LIMIT 1",
@@ -1032,7 +953,7 @@ async def delete_agent(agent_id: int, caller: str | None = Depends(get_agent_cal
     if result.endswith("0"):
         raise HTTPException(404, f"Agent {agent_id} not found")
     try:
-        from monkeycode_compat.models_skill import AgentSopBinding
+        from user_platform.models_skill import AgentSopBinding
 
         await AgentSopBinding.filter(agent_id=agent_id).delete()
     except Exception as exc:  # noqa: BLE001 - main Agent deletion remains authoritative
@@ -1282,7 +1203,7 @@ async def _provision_marketplace_mcp(agent_id: int, caller: str | None) -> None:
     """Grant the reserved marketplace MCP only from the admin conversation flow."""
     if caller is not None:
         # C-side admin sessions resolve to a user id; verify the actual role.
-        from monkeycode_compat.models import User
+        from user_platform.models import User
 
         user = await User.get_or_none(id=caller)
         if user is None or user.role != "admin" or user.is_deleted or user.is_blocked:
@@ -1741,7 +1662,7 @@ async def _stream_conversation_turn(
             node_id = ((conv.get("chat_settings") or {}).get("node_id") or "").strip()
             node_shell_batch = None
             if node_id:
-                from monkeycode_compat.node_client.tools import register_node_shell_exec
+                from user_platform.node_client.tools import register_node_shell_exec
 
                 # 终端绑定：命令注入浏览器当前连着的那个 PTY，工作目录用页面正在看的
                 # 目录（模型不自己选 cwd）。没有 terminal_id 时工具直接报错，不退回
@@ -1753,7 +1674,7 @@ async def _stream_conversation_turn(
                 # allow-list and keep the normal one-time confirmation flow.
                 auto_allow_keys: set[str] | None = None
                 try:
-                    from monkeycode_compat.shell_approval_service import list_node_auto_allow_keys
+                    from user_platform.shell_approval_service import list_node_auto_allow_keys
 
                     auto_allow_keys = await list_node_auto_allow_keys(node_id, shell_flavor)
                 except Exception:  # noqa: BLE001 — policy must never break sending
@@ -2176,7 +2097,7 @@ async def _caller_authorized_for_node(caller: str | None, node_id: str) -> bool:
     if caller is None:
         return True  # 管理员
     try:
-        from monkeycode_compat.nodes_service import nodes_service
+        from user_platform.nodes_service import nodes_service
         binding = await nodes_service.user_can_use_node(str(caller), node_id)
         return binding is not None
     except Exception:  # noqa: BLE001 — 授权失败按拒绝处理
@@ -2186,8 +2107,8 @@ async def _caller_authorized_for_node(caller: str | None, node_id: str) -> bool:
 async def _node_shell_flavor(node_id: str) -> str:
     """Derive the terminal shell from trusted node telemetry, failing closed."""
     try:
-        from monkeycode_compat.node_client.client import get_local_node_client
-        from monkeycode_compat.shell_approval_service import infer_node_shell_flavor
+        from user_platform.node_client.client import get_local_node_client
+        from user_platform.shell_approval_service import infer_node_shell_flavor
 
         rows = await get_local_node_client().list_nodes()
         node = next((row for row in rows if row.get("node_id") == node_id), None)
@@ -2203,7 +2124,7 @@ async def _node_available_for_host_exec(node_id: str) -> bool:
     capability is ``terminal`` (interactive shell), not ``host_exec``.
     """
     try:
-        from monkeycode_compat.node_client.client import get_local_node_client
+        from user_platform.node_client.client import get_local_node_client
 
         rows = await get_local_node_client().list_nodes()
         node = next((row for row in rows if row.get("node_id") == node_id), None)
@@ -2227,7 +2148,7 @@ async def resolve_approval(
     caller: str | None = Depends(get_agent_caller),
 ) -> dict:
     _require_ch()
-    from monkeycode_compat.node_client.approvals import approval_registry
+    from user_platform.node_client.approvals import approval_registry
 
     conv = await conversation_store.get_conversation_owned(caller, conv_id)
     if not conv:
@@ -2274,7 +2195,7 @@ async def list_approvals(
 ) -> dict:
     """Pending confirmations for a conversation (reconnect recovery)."""
     _require_ch()
-    from monkeycode_compat.node_client.approvals import approval_registry
+    from user_platform.node_client.approvals import approval_registry
 
     conv = await conversation_store.get_conversation_owned(caller, conv_id)
     if not conv:
@@ -2484,7 +2405,7 @@ async def _resolve_group_system_key(api_key_id: int, caller: str) -> dict | None
     import/查询失败都吞成 None，不影响自有 key 的既有路径。
     """
     try:
-        from monkeycode_compat.routes import resolve_system_api_key_for_user
+        from user_platform.routes import resolve_system_api_key_for_user
     except Exception:
         return None
     try:
@@ -2695,7 +2616,7 @@ async def list_available_mcp(caller: str | None = Depends(get_agent_caller)) -> 
     upstream_items: list[dict] = []
 
     # 注：mcp_service_users 表的 user_id 引用 mcp_users.id（INTEGER），与 C 端 session 的
-    # monkeycode user_id（UUID）不是同一个用户模型。此处 admin 段不做按用户授权过滤，
+    # user_platform user_id（UUID）不是同一个用户模型。此处 admin 段不做按用户授权过滤，
     # 返回所有 user_id IS NULL 且 enabled 的管理端服务；per-user 授权在此处无意义。
     for svc in all_services:
         name = str(svc.get("name") or "")
@@ -3053,6 +2974,38 @@ async def approve_scheduled_task_script(job_id: int, caller: str | None = Depend
     if not ok:
         raise HTTPException(status_code=400, detail="not a script task or no script to approve")
     return {"approved": True, "id": job_id}
+
+
+@router.get("/scheduled-tasks/{job_id}/runs")
+async def list_scheduled_task_runs(
+    job_id: int,
+    limit: int = Query(50, ge=1, le=100),
+    cursor: int | None = None,
+    caller: str | None = Depends(get_agent_caller),
+) -> list[dict]:
+    """某定时任务的执行记录列表（run_at 倒序）。详情走单条 runs/{run_id}。"""
+    scheduler = _get_scheduler()
+    if caller is not None and not await scheduler.job_owned_by(job_id, caller):
+        raise HTTPException(status_code=404, detail="scheduled task not found")
+    return await scheduler.list_runs(job_id, limit=limit, cursor=cursor)
+
+
+@router.get("/scheduled-tasks/{job_id}/runs/{run_id}")
+async def get_scheduled_task_run(
+    job_id: int, run_id: int, caller: str | None = Depends(get_agent_caller),
+) -> dict:
+    """单条执行记录全字段（含 stdout/stderr/conversation_id）。
+
+    prompt/heal 执行的 Agent 对话不在此返回：前端拿 conversation_id 走既有
+    /conversations/{conv_id} 系列端点渲染（归属 = 任务 owner 建会话时已写入）。
+    """
+    scheduler = _get_scheduler()
+    if caller is not None and not await scheduler.job_owned_by(job_id, caller):
+        raise HTTPException(status_code=404, detail="scheduled task not found")
+    run = await scheduler.get_run(run_id)
+    if not run or int(run.get("job_id") or 0) != int(job_id):
+        raise HTTPException(status_code=404, detail="run not found")
+    return run
 
 
 # ---------------------------------------------------------------------------

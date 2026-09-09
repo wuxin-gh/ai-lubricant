@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from monkeycode_compat.task_service import RUNTIME_STAGE_READY, _task_runtime_stage
+from user_platform.task_service import RUNTIME_STAGE_READY, _task_runtime_stage
 
 
 class _FakeTask:

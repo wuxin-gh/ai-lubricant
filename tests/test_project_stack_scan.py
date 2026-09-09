@@ -18,9 +18,9 @@ _proj = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _proj not in sys.path:
     sys.path.insert(0, _proj)
 
-from monkeycode_compat import git_clients
-from monkeycode_compat.models_project import Project
-from monkeycode_compat.project_service import project_service
+from user_platform import git_clients
+from user_platform.models_project import Project
+from user_platform.project_service import project_service
 
 
 @pytest_asyncio.fixture
@@ -30,9 +30,9 @@ async def tortoise_db():
     await Tortoise.init(
         db_url="sqlite://:memory:",
         modules={
-            "monkeycode_compat": [
-                "monkeycode_compat.models_git",
-                "monkeycode_compat.models_project",
+            "user_platform": [
+                "user_platform.models_git",
+                "user_platform.models_project",
             ]
         },
     )
@@ -45,7 +45,7 @@ async def tortoise_db():
 
 @pytest.fixture(autouse=True)
 def neutralize_prefetch(monkeypatch):
-    from monkeycode_compat import git_service
+    from user_platform import git_service
 
     monkeypatch.setattr(
         git_service.git_service, "_prefetch_repositories", lambda *_a, **_k: None
@@ -53,7 +53,7 @@ def neutralize_prefetch(monkeypatch):
 
 
 async def _make_identity(user_id, platform="github", token="ghp_tok", **kw):
-    from monkeycode_compat.models_git import GitIdentity
+    from user_platform.models_git import GitIdentity
 
     return await GitIdentity.create(
         id=uuid.uuid4(),
@@ -224,7 +224,7 @@ async def test_project_dict_carries_stack(tortoise_db, monkeypatch):
     await project_service.scan_stack_profile(str(project.id))
 
     # enrich 需要 User/Task 等未注册模型，与本测试目的（_project_dict 带 stack）无关。
-    from monkeycode_compat import project_service as ps_mod
+    from user_platform import project_service as ps_mod
 
     async def passthrough(rows):
         return rows
@@ -406,7 +406,7 @@ async def test_scan_submodules_cap_and_nested_hint(tortoise_db, monkeypatch):
     monkeypatch.setattr(git_clients, "fetch_tree", fetch_tree)
     monkeypatch.setattr(git_clients, "fetch_blob", _fake_blobs_by_repo(blobs))
 
-    from monkeycode_compat import project_service as ps
+    from user_platform import project_service as ps
 
     assert ps._SCAN_MAX_SUBMODULES == 10
     profile = await project_service.scan_stack_profile(str(project.id))
@@ -421,8 +421,8 @@ async def test_scan_submodules_cap_and_nested_hint(tortoise_db, monkeypatch):
 def _make_test_client(monkeypatch):
     from fastapi import FastAPI
 
-    import monkeycode_compat.routes_project as routes_project
-    from monkeycode_compat.deps import get_current_user
+    import user_platform.routes_project as routes_project
+    from user_platform.deps import get_current_user
 
     class _User:
         id = uuid.uuid4()

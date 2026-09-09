@@ -1,6 +1,6 @@
 """Parity guard: gateway and node_server delivery-status transition tables must match.
 
-``monkeycode_compat/message_status_machine.py`` is the authoritative table; the
+``user_platform/message_status_machine.py`` is the authoritative table; the
 gateway imports it directly. ``node_server/task_message_status.py`` keeps a
 physical copy because node_server is a self-contained package that does not
 import gateway code (see ``node_server/shared_store.py``). That separation
@@ -20,7 +20,7 @@ _proj = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _proj not in sys.path:
     sys.path.insert(0, _proj)
 
-from monkeycode_compat.message_status_machine import (  # noqa: E402
+from user_platform.message_status_machine import (  # noqa: E402
     MESSAGE_STATUS_TRANSITIONS as GATEWAY_TRANSITIONS,
 )
 from node_server.task_message_status import _TRANSITIONS as NODE_TRANSITIONS  # noqa: E402

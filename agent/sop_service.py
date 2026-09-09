@@ -25,7 +25,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from monkeycode_compat.models_skill import AgentSop, AgentSopBinding
+from user_platform.models_skill import AgentSop, AgentSopBinding
 
 _SOP_SOURCE_ROOT = Path(os.getenv("GENERIC_AGENT_SOP_SOURCE_ROOT", "data/agent-sops")).resolve()
 _BUILTIN_ROOT = Path(__file__).resolve().parent / "sop"

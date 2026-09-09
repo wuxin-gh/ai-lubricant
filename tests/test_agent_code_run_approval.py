@@ -6,7 +6,7 @@ import pytest
 from agent.code_run_approval import CodeRunApprovalBatch
 from agent.config import AgentConfig
 from agent.tools import ToolContext, ToolRegistry
-from monkeycode_compat.node_client.approvals import ApprovalDenied, ApprovalTimeout, approval_registry
+from user_platform.node_client.approvals import ApprovalDenied, ApprovalTimeout, approval_registry
 
 
 def _registry(tmp_path) -> ToolRegistry:

@@ -9,7 +9,7 @@ import copy
 import datetime as dt
 from typing import Any
 
-from monkeycode_compat.marketplace.validator import validate_manifest
+from user_platform.marketplace.validator import validate_manifest
 
 # 完整渠道模板可覆盖的、与账号无关的基础配置字段。不要在这里增加 accounts、
 # header_template 或任何凭据字段；市场 validator 也会在上游再次拒绝它们。

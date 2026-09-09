@@ -43,6 +43,7 @@ class DeviceContext:
 
     __slots__ = (
         "device_id",
+        "resource_id",
         "session_id",
         "capabilities",
         "device_info",
@@ -65,8 +66,11 @@ class DeviceContext:
         token_hash: str,
         send: Callable[[dict], Awaitable[None]],
         close: Callable[[int, str], Awaitable[None]],
+        resource_id: int | None = None,
     ) -> None:
         self.device_id = device_id
+        # 对应 builtin_tool_resources.id：断连/device_status 事件要把运行态落库时用它定位行。
+        self.resource_id = resource_id
         self.session_id = session_id
         self.capabilities = list(capabilities or [])
         self.device_info = device_info or {}

@@ -107,4 +107,4 @@
 | `index_name` | marketplace | 索引文件名 `index.json` |
 | `repo_url` / `github_branch` / `modules` / `index_name` | marketplace.consumer | 消费侧只读公开 raw，留空回退 `[marketplace]` |
 
-> marketplace 的环境变量名由兼容层（monkeycode_compat）解析，优先级同铁律；生产管理需 token，消费侧无需。
+> marketplace 的环境变量名由兼容层（user_platform）解析，优先级同铁律；生产管理需 token，消费侧无需。

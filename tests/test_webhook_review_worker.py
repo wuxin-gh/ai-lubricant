@@ -6,21 +6,21 @@ import pytest
 import pytest_asyncio
 from tortoise import Tortoise
 
-from monkeycode_compat.models_project import Project
-from monkeycode_compat.models_webhook import ProjectWebhook
-from monkeycode_compat.models_webhook_event import ProjectWebhookEvent
-from monkeycode_compat import webhook_review_worker as worker_module
+from user_platform.models_project import Project
+from user_platform.models_webhook import ProjectWebhook
+from user_platform.models_webhook_event import ProjectWebhookEvent
+from user_platform import webhook_review_worker as worker_module
 
 
 @pytest_asyncio.fixture
 async def db():
     await Tortoise.init(
         db_url="sqlite://:memory:",
-        modules={"monkeycode_compat": [
-            "monkeycode_compat.models_project",
-            "monkeycode_compat.models_webhook",
-            "monkeycode_compat.models_webhook_event",
-            "monkeycode_compat.models_review",
+        modules={"user_platform": [
+            "user_platform.models_project",
+            "user_platform.models_webhook",
+            "user_platform.models_webhook_event",
+            "user_platform.models_review",
         ]},
     )
     await Tortoise.generate_schemas()
@@ -155,11 +155,11 @@ async def test_claude_delegate_passes_review_capabilities(db, monkeypatch):
         return None
 
     monkeypatch.setattr(worker_module, "_review_mcp_entry", fake_mcp)
-    from monkeycode_compat.review_node_service import review_node_service
+    from user_platform.review_node_service import review_node_service
     monkeypatch.setattr(review_node_service, "acquire_review_slot", fake_acquire)
     monkeypatch.setattr(review_node_service, "check_node_for_review", fake_check)
     monkeypatch.setattr(review_node_service, "bind_lease_task", fake_bind)
-    from monkeycode_compat.git_service import git_service
+    from user_platform.git_service import git_service
     monkeypatch.setattr(git_service, "load_identity_for_read", fake_identity)
     monkeypatch.setattr(worker_module.task_service, "create_task", fake_create)
     task_id = await worker_module.execute_claude_delegate(event, hook)
@@ -215,13 +215,13 @@ async def test_auto_mode_passes_all_execution_nodes(db, monkeypatch):
         return {"id": str(uuid.uuid4()), "status": "processing"}
 
     monkeypatch.setattr(worker_module, "_review_mcp_entry", lambda _e: _none())
-    from monkeycode_compat import nodes_service
+    from user_platform import nodes_service
     monkeypatch.setattr(nodes_service.nodes_service, "list_my_nodes", fake_list_my_nodes)
-    from monkeycode_compat.review_node_service import review_node_service
+    from user_platform.review_node_service import review_node_service
     monkeypatch.setattr(review_node_service, "acquire_review_slot", fake_acquire)
     monkeypatch.setattr(review_node_service, "check_node_for_review", fake_check)
     monkeypatch.setattr(review_node_service, "bind_lease_task", fake_bind)
-    from monkeycode_compat.git_service import git_service
+    from user_platform.git_service import git_service
     monkeypatch.setattr(git_service, "load_identity_for_read", fake_identity)
     monkeypatch.setattr(worker_module.task_service, "create_task", fake_create)
     await worker_module.execute_claude_delegate(event, hook)
@@ -299,7 +299,7 @@ async def test_legacy_adapter_drains_legacy_row(db, monkeypatch):
     from db import PostgresClient
     monkeypatch.setattr(PostgresClient, "list_project_editors_for_user", fake_list_editors)
     monkeypatch.setattr(worker_module, "_review_mcp_entry", lambda _e: _none())
-    from monkeycode_compat import nodes_service
+    from user_platform import nodes_service
 
     async def fake_list_my_nodes(_user_id):
         return {"nodes": [
@@ -310,11 +310,11 @@ async def test_legacy_adapter_drains_legacy_row(db, monkeypatch):
         ]}
 
     monkeypatch.setattr(nodes_service.nodes_service, "list_my_nodes", fake_list_my_nodes)
-    from monkeycode_compat.review_node_service import review_node_service
+    from user_platform.review_node_service import review_node_service
     monkeypatch.setattr(review_node_service, "acquire_review_slot", fake_acquire)
     monkeypatch.setattr(review_node_service, "check_node_for_review", fake_check)
     monkeypatch.setattr(review_node_service, "bind_lease_task", fake_bind)
-    from monkeycode_compat.git_service import git_service
+    from user_platform.git_service import git_service
     monkeypatch.setattr(git_service, "load_identity_for_read", fake_identity)
     monkeypatch.setattr(worker_module.task_service, "create_task", fake_create)
     await worker_module.execute_claude_delegate(event, hook)
@@ -364,7 +364,7 @@ async def test_legacy_adapter_merges_same_provider_only(db, monkeypatch):
     from db import PostgresClient
     monkeypatch.setattr(PostgresClient, "list_project_editors_for_user", fake_list_editors)
     monkeypatch.setattr(worker_module, "_review_mcp_entry", lambda _e: _none())
-    from monkeycode_compat import nodes_service
+    from user_platform import nodes_service
 
     async def fake_list_my_nodes(_user_id):
         return {"nodes": [
@@ -375,11 +375,11 @@ async def test_legacy_adapter_merges_same_provider_only(db, monkeypatch):
         ]}
 
     monkeypatch.setattr(nodes_service.nodes_service, "list_my_nodes", fake_list_my_nodes)
-    from monkeycode_compat.review_node_service import review_node_service
+    from user_platform.review_node_service import review_node_service
     monkeypatch.setattr(review_node_service, "acquire_review_slot", fake_acquire)
     monkeypatch.setattr(review_node_service, "check_node_for_review", fake_check)
     monkeypatch.setattr(review_node_service, "bind_lease_task", fake_bind)
-    from monkeycode_compat.git_service import git_service
+    from user_platform.git_service import git_service
     monkeypatch.setattr(git_service, "load_identity_for_read", fake_identity)
     monkeypatch.setattr(worker_module.task_service, "create_task", fake_create)
     await worker_module.execute_claude_delegate(event, hook)
@@ -416,11 +416,11 @@ async def test_review_passes_model_limits_as_usage_limit(db, monkeypatch):
         return None
 
     monkeypatch.setattr(worker_module, "_review_mcp_entry", lambda _e: _none())
-    from monkeycode_compat.review_node_service import review_node_service
+    from user_platform.review_node_service import review_node_service
     monkeypatch.setattr(review_node_service, "acquire_review_slot", fake_acquire)
     monkeypatch.setattr(review_node_service, "check_node_for_review", fake_check)
     monkeypatch.setattr(review_node_service, "bind_lease_task", fake_bind)
-    from monkeycode_compat.git_service import git_service
+    from user_platform.git_service import git_service
     monkeypatch.setattr(git_service, "load_identity_for_read", fake_identity)
     monkeypatch.setattr(worker_module.task_service, "create_task", fake_create)
     await worker_module.execute_claude_delegate(event, hook)

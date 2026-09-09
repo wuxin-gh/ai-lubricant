@@ -34,19 +34,26 @@ cryptography~=46.0.5
 asyncpg~=0.30.0
 apscheduler>=3.10.0,<4
 
+# Apple ID 免费签名引擎（移植自 iPASide，MIT）。Anisette 跑 Apple 自家便携库
+# 做设备 provisioning（机器级缓存稳定身份）；srp 实现 Apple 修改版 SRP-6a 登录；
+# certifi 在 tls.py 里和钉死的 Apple GSA CA 合成信任 bundle。缺失时路由 503
+# 降级（不影响 asc/p12 既有路径），故为「Optional」性质但写入主依赖保部署就位。
+Anisette>=1.2.4
+srp>=1.0.22
+certifi>=2024.1.1
+
 # Built-in cdp-bridge browser connector (vendored in mcp_builtin/cdp_bridge)
 simple-websocket-server>=0.4.4
 bottle>=0.13.4
 beautifulsoup4>=4.14.3
 
-# Optional MonkeyCode compatibility layer (Tortoise ORM + ClickHouse payload).
+# Optional upstream compatibility layer (Tortoise ORM + ClickHouse payload).
 # Imported lazily and disabled by feature flags; absence does not affect the
-# main service when MONKEYCODE_COMPAT_ENABLED is unset.
 tortoise-orm[asyncpg]==1.1.7
 clickhouse-connect>=0.8
 # C-side user auth password hashing. Uses the bcrypt library directly (not
 # passlib, which is incompatible with bcrypt 5.x). Byte-compatible with the
-# MonkeyCode Go bcrypt hashes ($2a$/$2b$).
+# upstream Go bcrypt hashes ($2a$/$2b$).
 bcrypt>=4.0
 # Team OIDC login verifies ID Tokens against the issuer's JWKS.
 PyJWT[crypto]>=2.8

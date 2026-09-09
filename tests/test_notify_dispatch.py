@@ -28,8 +28,8 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from monkeycode_compat import notify_dispatch
-from monkeycode_compat.notify_dispatch import build_request, dispatch_event, render_text
+from user_platform import notify_dispatch
+from user_platform.notify_dispatch import build_request, dispatch_event, render_text
 
 
 # ── request shape / signing ───────────────────────────────────────────────────

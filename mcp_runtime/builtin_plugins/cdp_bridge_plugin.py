@@ -100,30 +100,43 @@ def _driver_config(resources: dict | None, auth_enabled: bool, allowed_tokens) -
     return {"clients": clients}
 
 
-async def _principal_cdp_client_id(token: str) -> str | None:
-    """把 token 解析到其 principal 绑定的 CDP 客户端 id（读 principal 的 cdp_client_id param）。
+async def _principal_cdp_client_ids(token: str) -> list[str] | None:
+    """把 token 解析到其 principal 绑定的 CDP 客户端 id 集（读 principal 的
+    cdp_client_id grants，多行=多实例）。
 
-    principal kind 直取；identity kind（agent）经 agent_id → principal 再取。
-    没绑 cdp_client_id param 返回 None（交给后续外部 token 路径）。
+    principal kind 直取；identity kind（agent/task）经 mcp_plugin_store.
+    resolve_identity_to_principal 反查（公共实现，替掉本插件原先只认 agent 的
+    手写版）。没绑任何 cdp_client_id grant 返回 None（交给后续外部 token /
+    owner 全量路径）。
     """
-    import builtin_tool_store
     import mcp_plugin_store
 
-    resolved = await builtin_tool_store.resolve_token(token)
-    if not resolved:
-        return None
-    principal_id: int | None = None
-    if resolved.get("kind") == "principal":
-        principal_id = int((resolved.get("target") or {}).get("id"))
-    elif resolved.get("kind") == "identity":
-        meta = resolved.get("token") or {}
-        target_id = meta.get("target_id")
-        if meta.get("target_type") == "agent" and target_id and str(target_id).isdigit():
-            principal_id = await mcp_plugin_store.get_agent_mcp_principal_id(int(target_id))
+    principal_id = await mcp_plugin_store.resolve_identity_to_principal(token)
     if principal_id is None:
         return None
-    value = await mcp_plugin_store.get_principal_param(principal_id, "cdp_client_id")
-    return str(value) if value is not None else None
+    values = await mcp_plugin_store.get_principal_grant_values(principal_id, "cdp_client_id")
+    return values or None
+
+
+async def _principal_cdp_client_id(token: str) -> str | None:
+    """单值兼容读法：取首个绑定的 CDP 客户端 id（多绑定场景下由调用方显式选）。"""
+    values = await _principal_cdp_client_ids(token)
+    return values[0] if values else None
+
+
+async def _owner_cdp_client_ids(token: str) -> list[str] | None:
+    """未绑实例时的默认全量回退：token 身份对应的 owner 名下全部 enabled 的
+    cdp_client 资源行 id。解析不出身份/owner（external 平台 principal 等）返回
+    None——那条路没有「默认全量」可言，交由外部 token 路径兜底。"""
+    import builtin_tool_store
+
+    owner = await builtin_tool_store.resolve_token_owner_user_id(token)
+    if not owner:
+        return None
+    resources = await builtin_tool_store.list_resources(
+        resource_type="cdp_client", owner_user_id=owner, enabled=True,
+    )
+    return [str(r["id"]) for r in resources if r.get("id") is not None] or None
 
 
 async def _resolve_cdp_client_id(token: str, driver, requested_client_id: Any = None) -> str:
@@ -133,7 +146,9 @@ async def _resolve_cdp_client_id(token: str, driver, requested_client_id: Any = 
     - CDP 客户端连接 token：DB 只存 token_hash，driver.authenticate_client(明文)
       现场 hash 查表得到 client_id（与扩展 WS 握手同一路径）。
     - 外部 MCP 访问 token（builtin_tool_tokens 行，hash 不在 driver 索引里）：
-      principal 带 cdp_client_id param 就直接用它；否则经
+      principal 绑了 cdp_client_id grant（多值集合）就按 requested 在集合内选取
+      （未指定取首个）；**没绑 = 默认全量**——owner 名下全部 enabled 客户端都可用，
+      requested 指了就必须存在于 owner 资源里。仍拿不到时经
       builtin_tool_store.resolve_external_cdp_client 复核 external+cdp+已启用客户端。
 
     两条都拿不到就报错，区分「外部 token 未绑客户端」与「连接 token 无效」。
@@ -144,13 +159,23 @@ async def _resolve_cdp_client_id(token: str, driver, requested_client_id: Any = 
         return str(client_id)
     # 不是 CDP 连接 token：尝试当外部 MCP 访问 token 解析其绑定的客户端。
     try:
-        bound = await _principal_cdp_client_id(token)
+        bound = await _principal_cdp_client_ids(token)
+        requested = str(requested_client_id or "").strip()
         if bound is not None:
-            # principal 直接绑了 cdp_client_id param，用它定位资源。
-            requested = str(requested_client_id or "").strip()
-            if requested and requested != bound:
-                raise ValueError(f"CDP client {requested} is not authorized for this MCP principal")
-            return bound
+            # principal 绑了实例集合：requested 必须命中集合（未指定取首个）。
+            if requested:
+                if requested not in bound:
+                    raise ValueError(f"CDP client {requested} is not authorized for this MCP principal")
+                return requested
+            return bound[0]
+        # 未绑实例 → 默认全量：owner 名下全部 enabled 客户端。
+        all_ids = await _owner_cdp_client_ids(token)
+        if all_ids:
+            if requested:
+                if requested not in all_ids:
+                    raise ValueError(f"CDP client {requested} is not owned by this principal's owner")
+                return requested
+            return all_ids[0]
         client_id = await builtin_tool_store.resolve_external_cdp_client(token)
     except ValueError:
         raise

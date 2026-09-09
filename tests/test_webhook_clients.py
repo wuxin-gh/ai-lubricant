@@ -10,7 +10,7 @@ import uuid
 
 import pytest
 
-from monkeycode_compat import git_clients
+from user_platform import git_clients
 
 
 def _opts(token="ghp_SEKRET", base_url="", **kw):

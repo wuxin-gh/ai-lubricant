@@ -9,9 +9,9 @@
 """
 from __future__ import annotations
 
-import monkeycode_compat.marketplace.leaderboard_sync as sync
-import monkeycode_compat.marketplace.leaderboard_launch_agent as launch_agent
-from monkeycode_compat.marketplace.source_config import _normalize
+import user_platform.marketplace.leaderboard_sync as sync
+import user_platform.marketplace.leaderboard_launch_agent as launch_agent
+from user_platform.marketplace.source_config import _normalize
 
 
 # ── 配置：默认关闭 ────────────────────────────────────────────────────────────
@@ -401,6 +401,67 @@ def test_publish_missing_item_reported_not_raised():
     assert result["failed"][0]["id"] == 42
 
 
+# ── 删除：连带清掉孤儿推送 job ─────────────────────────────────────────────────
+
+
+class _DeleteConn:
+    """delete_items 桩：记下事务内执行的两条 DELETE（job 清理 + 行删除），fetch 回行 id。"""
+
+    def __init__(self):
+        self.executed: list[tuple] = []
+
+    async def execute(self, sql, *args):
+        self.executed.append((sql, args))
+        return "DELETE 0"
+
+    async def fetch(self, sql, *args):
+        self.executed.append((sql, args))
+        # 行 DELETE 的参数是 bigint[]，回这些 id 模拟「都删成功了」。
+        ids = args[0] if args and isinstance(args[0], list) else []
+        return [{"id": i} for i in ids]
+
+    class _Tx:
+        async def __aenter__(self):
+            return None
+
+        async def __aexit__(self, *exc):
+            return False
+
+    def transaction(self):
+        return self._Tx()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+def test_delete_items_clears_pending_push_jobs():
+    """删除条目要连带清掉 pending/pushing 的榜单推送 job：行都没了，留着 job
+    只会让 worker 对「条目不存在」空转重试、刷满失败列表。"""
+    import asyncio
+    import marketplace_leaderboard_store as store
+    from db import PostgresClient
+
+    conn = _DeleteConn()
+    original = PostgresClient.pool
+    PostgresClient.pool = _FakePool(conn)
+    try:
+        removed = asyncio.run(store.delete_items([1, 2]))
+    finally:
+        PostgresClient.pool = original
+    assert sorted(removed) == [1, 2]
+    job_deletes = [(sql, args) for sql, args in conn.executed if "marketplace_publish_jobs" in sql]
+    assert len(job_deletes) == 1, "应清一次孤儿 job"
+    sql, args = job_deletes[0]
+    assert "module='leaderboard'" in sql
+    assert "'pending'" in sql and "'pushing'" in sql
+    assert sorted(args[0]) == ["1", "2"]  # 文本 ids（job 表 item_id 是 text）
+    row_deletes = [sql for sql, _ in conn.executed if "marketplace_leaderboard_items" in sql and "DELETE" in sql]
+    assert len(row_deletes) == 1
+
+
 # ── 归类校验 ──────────────────────────────────────────────────────────────────
 
 
@@ -649,11 +710,100 @@ def test_update_curation_rejects_bad_sort_order():
             raise AssertionError(f"非法排序 {bad!r} 应被拒绝")
 
 
+# ── 编辑不含发布：status 一律忽略，发布走推送队列 ─────────────────────────────
+
+
+def test_update_curation_ignores_status():
+    """编辑保存绝不发布：patch 里的 status 不进 UPDATE 列，published_at 不动。
+
+    「先编辑后推送」的核心口径——发布是显式推送动作（enqueue_publish_jobs →
+    publisher worker 门禁 → 翻状态），编辑链路静默吞掉 status 且不报错（旧客户端
+    误传也只是保存）。"""
+    conn = _curation({"description": "只改描述", "status": "published"})
+    assert "description = $" in conn.sql
+    assert "status = $" not in conn.sql
+    assert "published_at" not in conn.sql
+
+
+class _PushConn:
+    """enqueue_publish_jobs 桩：fetchrow 回行状态，execute 记录 _enqueue 的 INSERT。"""
+
+    def __init__(self, rows: dict[int, str]):
+        self.rows = rows  # id -> status
+        self.executed: list[tuple] = []
+
+    async def fetchrow(self, sql, *args):
+        status = self.rows.get(args[0])
+        return None if status is None else {"id": args[0], "status": status}
+
+    async def execute(self, sql, *args):
+        self.executed.append((sql, args))
+        return "INSERT 0 1"
+
+    class _Tx:
+        async def __aenter__(self):
+            return None
+
+        async def __aexit__(self, *exc):
+            return False
+
+    def transaction(self):
+        return self._Tx()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+def _enqueue_publish(rows: dict[int, str], ids: list[int]):
+    import asyncio
+    import marketplace_leaderboard_store as store
+    from db import PostgresClient
+
+    conn = _PushConn(rows)
+    original = PostgresClient.pool
+    PostgresClient.pool = _FakePool(conn)
+    try:
+        return asyncio.run(store.enqueue_publish_jobs(ids, operator="tester")), conn
+    finally:
+        PostgresClient.pool = original
+
+
+def test_enqueue_publish_jobs_skips_published_and_missing():
+    """已发布（幂等）与不存在的条目不入队归 skipped，只有草稿入队。"""
+    (enqueued, skipped), conn = _enqueue_publish({1: "draft", 2: "published"}, [1, 2, 3])
+    assert enqueued == [1]
+    assert sorted(skipped) == [2, 3]
+    inserts = [(sql, args) for sql, args in conn.executed if "marketplace_publish_jobs" in sql]
+    assert len(inserts) == 1
+    # 复用市场发布 outbox：module='leaderboard'、action='publish'、payload 带发布人。
+    assert "leaderboard" in inserts[0][0] or "leaderboard" in inserts[0][1]
+
+
+def test_enqueue_publish_jobs_no_pool_yields_all_skipped():
+    import asyncio
+    import marketplace_leaderboard_store as store
+    from db import PostgresClient
+
+    original = PostgresClient.pool
+    PostgresClient.pool = None
+    try:
+        enqueued, skipped = asyncio.run(store.enqueue_publish_jobs([7, 8]))
+    finally:
+        PostgresClient.pool = original
+    assert enqueued == []
+    assert sorted(skipped) == [7, 8]
+
+
 def test_upsert_conflict_updates_only_external_data_projection():
     """同步已存在条目只刷新 external_data 与其列表投影缓存，不碰资源字段。
 
     ON CONFLICT 中不能出现 name/description/categories/tags/target_modules/install_spec 等
-    资源字段赋值；新条目 INSERT 则必须含完整资源字段。
+    资源字段赋值；新条目 INSERT 则必须含完整资源字段。external_data 采用 probe 保留规则：
+    带新 probe 用新值，不带（探针复用/预算跳过/限流恢复路径）则把行里旧 probe 移植进
+    新 external_data。
     """
     import asyncio
     import marketplace_leaderboard_store as store
@@ -687,13 +837,61 @@ def test_upsert_conflict_updates_only_external_data_projection():
     sql = captured["sql"]
     assert "name, display_name, publisher, version, categories, tags" in sql
     conflict = sql.split("ON CONFLICT", 1)[1]
-    assert "external_data = EXCLUDED.external_data" in conflict
+    # probe 保留规则：带 probe 键用新值；没有则移植行里旧 probe（不存在时不动）。
+    assert "EXCLUDED.external_data ? 'probe'" in conflict
+    assert "jsonb_set(EXCLUDED.external_data, '{probe}'" in conflict
+    assert "marketplace_leaderboard_items.external_data->'probe'" in conflict
     assert "name = EXCLUDED.name" not in conflict
     assert "description = EXCLUDED.description" not in conflict
     assert "categories = EXCLUDED.categories" not in conflict
     assert "tags = EXCLUDED.tags" not in conflict
     assert "target_modules =" not in conflict
     assert "install_spec =" not in conflict
+
+
+def test_load_probe_reuse_hints_returns_lean_projection():
+    """复用快照只查轻量投影（probe 健康位/fetched_at/上游 updated_at/stack），不带 probe 本体。"""
+    import asyncio
+    import marketplace_leaderboard_store as store
+    from db import PostgresClient
+
+    captured = {}
+
+    class _Conn:
+        async def fetch(self, sql, *args):
+            captured["sql"] = sql
+            return [
+                # asyncpg 回 JSONB 为 str；外部行没探过时 probe_* 为 None。
+                {"source": "agent-leaderboard", "board": "skills", "repo_full_name": "a/b",
+                 "probe_error": None, "probe_fetched_at": None,
+                 "upstream_updated_at": "2026-01-01T00:00:00+00:00",
+                 "stack": '{"languages": {"Python": 10}}', "stack_tags": '["python"]'},
+                {"source": "agent-leaderboard", "board": "skills", "repo_full_name": "c/d",
+                 "probe_error": "", "probe_fetched_at": "2026-09-07T00:00:00+00:00",
+                 "upstream_updated_at": None, "stack": None, "stack_tags": None},
+            ]
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    original = PostgresClient.pool
+    PostgresClient.pool = _FakePool(_Conn())
+    try:
+        hints = asyncio.run(store.load_probe_reuse_hints())
+    finally:
+        PostgresClient.pool = original
+    # 只查投影，不搬 probe 本体（可能数百 KB/条）。
+    assert "external_data->'probe'->>'error'" in captured["sql"]
+    assert "->'probe'->>'fetched_at'" in captured["sql"]
+    assert "->'probe' AS" not in captured["sql"]
+    assert hints[("agent-leaderboard", "skills", "a/b")]["stack"] == {"languages": {"Python": 10}}
+    assert hints[("agent-leaderboard", "skills", "a/b")]["stack_tags"] == ["python"]
+    # JSONB str 已解好；None 探针行照常返回（调用方视作不可复用）。
+    assert hints[("agent-leaderboard", "skills", "c/d")]["fetched_at"] == "2026-09-07T00:00:00+00:00"
+    assert hints[("agent-leaderboard", "skills", "c/d")]["stack"] == {}
 
 
 def test_list_orders_by_sort_order_before_stars():

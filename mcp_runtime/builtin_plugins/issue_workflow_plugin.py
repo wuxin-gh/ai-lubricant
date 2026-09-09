@@ -12,9 +12,9 @@ from typing import Any
 
 import builtin_tool_store
 from mcp_runtime.plugin_loader import PluginContext, PluginRegistrar, current_request_token
-from monkeycode_compat.models_project import ProjectIssue, ProjectIssueComment
-from monkeycode_compat.models_task import ProjectTask, Task
-from monkeycode_compat.project_service import (
+from user_platform.models_project import ProjectIssue, ProjectIssueComment
+from user_platform.models_task import ProjectTask, Task
+from user_platform.project_service import (
     IssueTransitionError,
     _issue_dict,
     _normalize_pending_items,
