@@ -545,13 +545,16 @@ async def set_group_grants(
             if {r["id"] for r in rows} != set(wanted):
                 raise ValueError("reference_not_in_team")
             if resource_type:
-                allowed_types = {"skill", "skills"} if resource_type == "skill" else {resource_type}
+                # skill 通道混排：单 skill + 存量 skills 集合 + plugin 容器（带
+                # entries 的插件按子技能展开进技能维度）。plugin 单独传时只认
+                # plugin（容器与纯 zip 插件同一池行）。
+                allowed_types = {"skill", "skills", "plugin"} if resource_type == "skill" else {resource_type}
                 if any(r["resource_type"] not in allowed_types for r in rows):
                     raise ValueError("reference_type_mismatch")
         async with conn.transaction():
             if resource_type:
-                # skill 主类型连带 skills 集合（同属技能维度，一并替换避免残留）。
-                type_scope = ["skill", "skills"] if resource_type == "skill" else [resource_type]
+                # skill 主类型连带 skills 集合与 plugin 容器（同属技能维度，一并替换避免残留）。
+                type_scope = ["skill", "skills", "plugin"] if resource_type == "skill" else [resource_type]
                 await conn.execute(
                     """DELETE FROM resource_grants g
                         WHERE g.team_id=$1 AND g.group_id=$2
@@ -679,13 +682,15 @@ async def resolve_specs(
 ) -> list[dict]:
     """把引用列表解析成节点 wire spec（新表版，旧 resolve_reference_specs 的承接）。
 
-    绑定形态：``{reference_id}``（可带 ``entries`` 按子技能过滤，见集合语义）。
+    绑定形态：``{reference_id}``（可带 ``entries`` 按子技能过滤，见容器语义）。
     每个 wire spec 形状与旧 resolve 对齐（skill → {name,source,url,path,ref}；
     plugin → {name,url,version}；mcp → 由 params + resource_data 产 spec），
     节点侧零改动。
 
-    集合（resource_type=skills）按 ``association``/``resource_data.entries`` 展开：
-    绑定带 ``entries`` → 只展开勾中的子技能；不带 → 全量。子技能名
+    plugin 是容器类型：``resource_data.entries`` 在场 → 按 ``association``/
+    entries 展开成 N 个子技能 skill spec（绑定带 ``entries`` → 只展开勾中的
+    子技能；不带 → 全量），装配跟着编辑器走（技能目录 git clone）；无 entries
+    → 整包 zip。存量 ``skills`` 集合行走同一容器分支（读侧兼容）。子技能名
     ``owner/repo/entry_name``，与任务期 activeSkills 勾选标识一致。
     """
     by_id = {str(r["id"]): r for r in references}
@@ -701,8 +706,9 @@ async def resolve_specs(
         name = reference.get("display_name") or resource.get("display_name") or resource.get("name") or ""
         params = reference.get("params") or {}
 
-        if rtype == "skills":
-            out.extend(_expand_skills_collection(resource, reference, binding, name))
+        if rtype in ("plugin", "skills") and isinstance(data.get("entries"), list) and data["entries"]:
+            # 插件容器（含存量 skills 集合行）：entries 展开 → N 个子技能 spec。
+            out.extend(_expand_plugin_container(resource, reference, binding, name))
         elif rtype == "skill":
             out.append({
                 "name": name,
@@ -722,8 +728,8 @@ async def resolve_specs(
     return out
 
 
-def _expand_skills_collection(resource: dict, reference: dict, binding: dict, name: str) -> list[dict]:
-    """集合 → N 个子技能 spec；绑定 entries 过滤，缺省全量。子技能名 owner/repo/name。
+def _expand_plugin_container(resource: dict, reference: dict, binding: dict, name: str) -> list[dict]:
+    """插件容器 → N 个子技能 spec；绑定 entries 过滤，缺省全量。子技能名 owner/repo/name。
 
     ref 优先取引用钉死的版本（``reference.version`` = pin 的 commit sha），否则回落
     资源本体的分支——与单技能 spec 的钉死口径一致。
@@ -775,9 +781,9 @@ def _mcp_spec_from_params(data: dict, params: dict, name: str) -> dict:
             "transport": "stdio",
             "command": str(data.get("command") or ""),
             "args": [str(a) for a in (data.get("args") or []) if str(a).strip()],
-            "env": _mcp_env_dict(params.get("env"), data.get("env")),
+            "env": _mcp_env_specs(params.get("env"), data.get("env")),
             "url": "",
-            "headers": {},
+            "headers": [],
         }
     headers = _mcp_headers(params)
     return {
@@ -786,18 +792,22 @@ def _mcp_spec_from_params(data: dict, params: dict, name: str) -> dict:
         "transport": str(params.get("transport") or data.get("transport") or "sse"),
         "command": "",
         "args": [],
-        "env": {},
+        "env": [],
         "url": str(params.get("url") or data.get("url") or ""),
         "headers": headers,
     }
 
 
-def _mcp_env_dict(params_env: Any, data_env: Any) -> dict:
-    """params.env（优先）与 data.env 合并成 ``{name: value}`` 字典。
+def _mcp_env_specs(params_env: Any, data_env: Any) -> list[dict]:
+    """params.env（优先）与 data.env 合并成 proto wire 形态 ``[{name, value}]``。
 
     - dict → 字符串化键值；
     - list → probe 的变量名列表，展开成 ``{name: ""}``（值由 params 提供，本层兜底空）。
     params.env 覆盖 data.env 同名键（团队私有值优先于池行占位）。
+
+    ``MCPServerSpec.env`` 是 ``repeated EnvVarSpec``——必须是 ``[{name, value}]``
+    列表，历史 ``{name: value}`` 字典形态会被控制面 JSON 解析直接拒绝
+    （"repeated field env must be in a list"），派发整体失败。
     """
     base: dict[str, str] = {}
     if isinstance(data_env, dict):
@@ -811,14 +821,26 @@ def _mcp_env_dict(params_env: Any, data_env: Any) -> dict:
         for e in params_env:
             if str(e).strip():
                 base[str(e).strip()] = ""
-    return base
+    return [
+        {"name": name, "value": value}
+        for name, value in base.items()
+        if name.strip()
+    ]
 
 
-def _mcp_headers(params: dict) -> dict:
-    """params.headers + params.token → 节点头。token 组装成 ``Authorization: Bearer``
-    （与旧 mcp_services 一致），已有 Authorization 不覆盖。"""
+def _mcp_headers(params: dict) -> list[dict]:
+    """params.headers + params.token → 节点头（``[{name, value}]`` 列表形态）。
+
+    token 组装成 ``Authorization: Bearer``（与旧 mcp_services 一致），已有
+    Authorization 不覆盖。``MCPServerSpec.headers`` 同为 ``repeated EnvVarSpec``，
+    字典形态会被控制面解析拒绝，必须输出列表。
+    """
     headers = {str(k): str(v) for k, v in (params.get("headers") or {}).items()}
     token = str(params.get("token") or "").strip()
     if token and "Authorization" not in headers and "authorization" not in headers:
         headers["Authorization"] = f"Bearer {token}"
-    return headers
+    return [
+        {"name": name, "value": value}
+        for name, value in headers.items()
+        if name.strip()
+    ]

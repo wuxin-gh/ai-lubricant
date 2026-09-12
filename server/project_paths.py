@@ -63,7 +63,16 @@ def docs_dir() -> Path:
 
 
 def deleted_backups_dir() -> Path:
-    """删除渠道/账号前的快照备份目录 ``deleted_backups/``。"""
+    """删除渠道/账号前的快照备份目录 ``deleted_backups/``。
+
+    默认仓库根下；releases+current 布局下经 ``DELETED_BACKUPS_DIR`` 指到跨版本
+    共享目录（shared/deleted_backups），备份不随旧 release 被 GC 清掉。
+    """
+    import os
+
+    override = os.environ.get("DELETED_BACKUPS_DIR")
+    if override:
+        return Path(override).resolve()
     return REPO_ROOT / "deleted_backups"
 
 

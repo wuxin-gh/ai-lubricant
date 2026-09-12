@@ -15,7 +15,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from server.db import PostgresClient
+from db import PostgresClient
 
 # mobileprovision 是一个 CMS/PKCS#7 签名的 plist：plist XML 原文嵌在二进制里，
 # 正则截出来用 plistlib（标准库）解析即可，无需新增依赖。

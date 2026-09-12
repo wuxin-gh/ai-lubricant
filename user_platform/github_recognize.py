@@ -139,10 +139,11 @@ async def recognize_repo(repo_input: str, *, ref: str = "", force_type: str = ""
 
     Output: ``{repo_full_name, ref, head_sha, type, install_spec, launch_spec,
     skill_entries, repo_meta, summary, error}``. ``type`` 是**单选主类型**
-    （skills|plugin|skill|mcp|prompt，优先级 skills>plugin>skill>mcp>prompt）；
-    ``force_type`` 非空时按用户所选类型重派生（重新识别）：类型证据不足时明确
-    报错而非静默降级。``skill_entries`` 是 skill 列表——type=skill 恰 1 项、
-    type=skills N 项（集合整包安装，任务期再按子技能勾选）。
+    （plugin|skill|mcp|prompt，优先级 plugin>skill>mcp>prompt——插件是容器：
+    marketplace.json 在场或 ≥2 个技能条目都算插件）；``force_type`` 非空时按用户
+    所选类型重派生（重新识别）：类型证据不足时明确报错而非静默降级。legacy
+    ``skills``（技能集）自动归一成 plugin 容器。``skill_entries`` 是 skill 列表——
+    type=skill 恰 1 项、type=plugin 可 N 项（容器整包安装，任务期再按子技能勾选）。
     ``error`` is ``""`` on success. Pure preview — nothing is persisted.
     """
     full_name, parsed_ref, _path = parse_github_input(repo_input)
@@ -168,13 +169,19 @@ async def recognize_repo(repo_input: str, *, ref: str = "", force_type: str = ""
     primary_type = auto_type
     type_error = ""
     force_type = (force_type or "").strip()
+    # legacy 'skills'（技能集）→ plugin 容器：识别端点把 skills 视作多技能插件。
+    # force_type 归一后，type 判定与 manifest 派生只有 plugin 一种容器口径。
+    if force_type == "skills":
+        force_type = "plugin"
     if force_type:
-        if force_type not in ("skills", "plugin", "skill", "mcp", "prompt"):
+        distinct_paths = {str(e.get("path") or "") for e in skill_entries}
+        if force_type not in ("plugin", "skill", "mcp", "prompt"):
             type_error = f"未知类型 {force_type}"
-        elif force_type == "skills" and len({str(e.get("path") or "") for e in skill_entries}) < 2:
-            type_error = "该仓库未识别到 ≥2 个技能条目，无法按「技能集」处理"
-        elif force_type == "plugin" and not install_spec.get("plugin"):
-            type_error = "该仓库未识别到 .claude-plugin/marketplace.json，无法按「插件」处理"
+        elif force_type == "plugin" and not (
+            install_spec.get("plugin") or len(distinct_paths) >= 2
+        ):
+            # 插件=容器：marketplace.json 在场 或 ≥2 个不同父目录的技能条目。
+            type_error = "该仓库未识别到 .claude-plugin/marketplace.json，且技能条目不足 2 个，无法按「插件」处理"
         elif force_type == "skill" and not skill_entries:
             type_error = "该仓库未识别到 SKILL.md / AGENTS.md / .cursor 规则"
         elif force_type == "mcp" and not (specs.get("launch_spec") or {}).get("kind"):
@@ -269,6 +276,71 @@ def build_skill_manifest(
     }
 
 
+def build_plugin_container_manifest(
+    full_name: str,
+    ref: str,
+    entries: list[dict],
+    *,
+    plugin_spec: dict | None = None,
+    version: str = "",
+    name: str = "",
+    display_name: str = "",
+    description: str = "",
+    pin_commit: str = "",
+) -> dict:
+    """插件容器（原 skills 技能集）manifest：plugin 引用带 entries 全量清单。
+
+    技能集本质是多技能的插件包，类型归入 plugin（容器）。manifest 同时带两种
+    安装坐标：``resource``（github_clone，技能勾选按 entries 逐子技能展开）+
+    ``download_url``（归档 zip，插件勾选整包安装）——装配跟着编辑器走，两条通道
+    都可用，由 resource_data 实际内容决定。``market_id`` 用仓库级（无子路径）。
+    ``pin_commit`` 非空（head_sha）时 ``resource.ref`` 钉到该 commit。
+    """
+    plugin_spec = plugin_spec or {}
+    clone_url = f"https://github.com/{full_name}.git"
+    download_url = str(plugin_spec.get("download_url") or "")
+    if not download_url:
+        download_url = f"https://github.com/{full_name}/archive/refs/heads/{ref}.zip"
+    name = (name or full_name).strip()
+    use_ref = (pin_commit or ref).strip()
+    clean_entries = []
+    for entry in entries or []:
+        clean = {
+            "name": str(entry.get("name") or "").strip(),
+            "path": str(entry.get("path") or "").strip().strip("/"),
+            "entry": str(entry.get("entry") or "SKILL.md"),
+        }
+        # 子技能描述（SKILL.md frontmatter description）：探针已抓到，但这里必须
+        # 显式带进来——否则容器展开的子技能卡片只能显示 path，读不出该技能
+        # 到底是干什么的。
+        sub_desc = str(entry.get("description") or "").strip()
+        if sub_desc:
+            clean["description"] = sub_desc
+        if entry.get("editors"):
+            clean["editors"] = [str(e) for e in entry["editors"]]
+        if clean["name"] and clean["path"] not in ("", None):
+            clean_entries.append(clean)
+    return {
+        "id": _market_id(full_name, ""),
+        "name": name,
+        "display_name": (display_name or name).strip(),
+        "description": description,
+        "type": "plugin",
+        "version": version or use_ref,
+        "install_method": "github_clone",
+        "source": "github",
+        "source_url": clone_url,
+        "download_url": download_url,
+        "entries": clean_entries,
+        "resource": {
+            "source": "github",
+            "url": clone_url,
+            "path": "",
+            "ref": use_ref,
+        },
+    }
+
+
 def build_skills_collection_manifest(
     full_name: str,
     ref: str,
@@ -280,47 +352,16 @@ def build_skills_collection_manifest(
     description: str = "",
     pin_commit: str = "",
 ) -> dict:
-    """技能集合（type=skills）manifest：一条 skill 引用带 entries 全量清单。
+    """Legacy alias of :func:`build_plugin_container_manifest`（skills→plugin 容器）。
 
-    集合与单技能引用同池（resource_type="skill"），靠 manifest 区分：集合
-    ``resource.path=""``、带 ``entries``（skill 列表）；单技能 ``resource.path``
-    指向唯一条目、无 entries。``market_id`` 用仓库级（无子路径），与单技能的
-    ``github:owner/repo:子路径`` 互不冲突。resolve_reference_specs 见 entries
-    即按条目展开（第一期全量，第二期按任务勾选过滤）。``pin_commit`` 非空
-    （head_sha）时 ``resource.ref`` 钉到该 commit。
+    技能集已归入 plugin 容器类型；保留旧名只是给既有调用方/测试零改动过渡。
+    产出的 manifest ``type`` 是 ``plugin``（不再是 ``skills``）。
     """
-    clone_url = f"https://github.com/{full_name}.git"
-    name = (name or full_name).strip()
-    use_ref = (pin_commit or ref).strip()
-    clean_entries = []
-    for entry in entries or []:
-        clean = {
-            "name": str(entry.get("name") or "").strip(),
-            "path": str(entry.get("path") or "").strip().strip("/"),
-            "entry": str(entry.get("entry") or "SKILL.md"),
-        }
-        if entry.get("editors"):
-            clean["editors"] = [str(e) for e in entry["editors"]]
-        if clean["name"] and clean["path"] not in ("", None):
-            clean_entries.append(clean)
-    return {
-        "id": _market_id(full_name, ""),
-        "name": name,
-        "display_name": (display_name or name).strip(),
-        "description": description,
-        "type": "skills",
-        "version": version or use_ref,
-        "install_method": "github_clone",
-        "source": "github",
-        "source_url": clone_url,
-        "resource": {
-            "source": "github",
-            "url": clone_url,
-            "path": "",
-            "ref": use_ref,
-        },
-        "entries": clean_entries,
-    }
+    return build_plugin_container_manifest(
+        full_name, ref, entries,
+        version=version, name=name, display_name=display_name,
+        description=description, pin_commit=pin_commit,
+    )
 
 
 def build_plugin_manifest(

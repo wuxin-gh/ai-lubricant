@@ -248,6 +248,25 @@ def _accepts_extra_arg(fn, base_count: int) -> bool:
     return slots > base_count
 
 
+async def _auth_state_raced_to_terminal(state: str) -> str | None:
+    """扫描器 poll 期间 loopback 回调可能已把 state 推进终态——回写前重读兜底。
+
+    扫描器拿的是 poll 开始前的 snapshot（_list_pending_device_code_tasks 读出的
+    pending 行）；直接 ``_set_account_auth_state`` 写回会把终态闷棍回 pending，
+    前端 ``/auth/status`` 永远 pending、表单不回填——loopback 完成型设备码渠道
+    （codearts/joycode）的回调与扫描器 tick 抢跑时必中此竞态。
+
+    返回终态名（authorized/completed/error/expired/deleted）或 None（仍 pending）。
+    """
+    fresh = await _get_account_auth_state(state)
+    if not fresh:
+        return "deleted"
+    status = fresh.get("status")
+    if status in ("authorized", "completed", "error", "expired"):
+        return status
+    return None
+
+
 async def _poll_one_auth_task(state: str, record: dict):
     """对单个 device_code 任务执行一次轮询，结果写回 state_data。"""
     provider_name = record.get("provider", "")
@@ -273,17 +292,31 @@ async def _poll_one_auth_task(state: str, record: dict):
         result = await asyncio.wait_for(coro, timeout=30)
     except asyncio.TimeoutError:
         logger.warning(f"[auth-scanner] poll timeout provider={provider_name} state={state}")
+        if await _auth_state_raced_to_terminal(state):
+            _auth_scanner_instances.pop(f"{provider_name}:{state}", None)
+            return
         record["next_poll_at"] = now + max(int(record.get("interval") or 5), 1)
         await _set_account_auth_state(state, record)
         return
     except Exception as e:
         logger.error(f"[auth-scanner] poll error provider={provider_name} state={state}: {e}")
+        if await _auth_state_raced_to_terminal(state):
+            _auth_scanner_instances.pop(f"{provider_name}:{state}", None)
+            return
         record["next_poll_at"] = now + max(int(record.get("interval") or 5), 1)
         await _set_account_auth_state(state, record)
         return
 
     status = (result or {}).get("status", "pending")
     if status == "pending":
+        raced = await _auth_state_raced_to_terminal(state)
+        if raced:
+            logger.info(
+                f"[auth-scanner] skip pending write-back (state raced to {raced}) "
+                f"provider={provider_name} state={state}"
+            )
+            _auth_scanner_instances.pop(f"{provider_name}:{state}", None)
+            return
         record["next_poll_at"] = now + max(int(record.get("interval") or 5), 1)
         await _set_account_auth_state(state, record)
         return
@@ -3928,6 +3961,9 @@ def _provider_summary_response(name: str, cfg: dict, models: list[str] | None = 
         "disabled_account_count": len(accounts_cfg) - len(enabled_accounts),
         "retry_count": cfg.get("retry_count"),
         "extra_retry_status_codes": _coerce_extra_retry_status_codes(cfg.get("extra_retry_status_codes")),
+        # 定时更新模型开关：列表筛选（渠道页「自动更新」筛选项）要读它。缺省视为开，
+        # 与运行时口径一致——refresh_models / Channel 对未配置的渠道默认自动更新。
+        "auto_update_models": cfg.get("auto_update_models", True),
         "updated_at_ts": _provider_updated_at_ts(cfg),
         "models": models if models is not None else _provider_models(name),
     }
@@ -5716,7 +5752,7 @@ async def list_provider_models_endpoint(
 async def replace_provider_models_endpoint(name: str, data: dict, authorization: Optional[str] = Header(None)):
     """事务整覆盖该渠道的模型行。
 
-    body: {"models": [{"upstream_model_id": str, "model_id": str}, ...]}
+    body: {"models": [{"upstream_model_id": str, "model_id": str, "enabled": bool?}, ...]}
     覆盖后立即触发 refresh_models() 重建内存表（不打上游）。
 
     models 字段缺失时跳过模型表更新（前端模型列表未加载完成时用此语义，
@@ -5739,10 +5775,13 @@ async def replace_provider_models_endpoint(name: str, data: dict, authorization:
             continue
         seen.add(upstream_id)
         model_id = (item.get("model_id") or "").strip() or upstream_id
+        # 行级启用开关：缺省视为启用（旧客户端不带该字段），显式 false 才停用。
+        enabled = item.get("enabled")
         rows.append({
             "upstream_model_id": upstream_id,
             "model_id": model_id,
             "extra_config": item.get("extra_config") if isinstance(item.get("extra_config"), dict) else {},
+            "enabled": True if enabled is None else bool(enabled),
         })
     await PostgresClient.bulk_replace_provider_models(name, rows)
     await _reload_provider_models_local(name)
@@ -5753,17 +5792,22 @@ async def replace_provider_models_endpoint(name: str, data: dict, authorization:
 
 @router.post("/providers/{name}/models")
 async def upsert_provider_model_endpoint(name: str, data: dict, authorization: Optional[str] = Header(None)):
-    """新增或重命名单行。body: {upstream_model_id, model_id?}"""
+    """新增或重命名单行。body: {upstream_model_id, model_id?, enabled?}
+
+    enabled 不传时沿用库内现状（新行默认启用）——定时同步/改名路径不该重置开关。
+    """
     await _require_admin(authorization)
     upstream_id = (data.get("upstream_model_id") or "").strip()
     if not upstream_id:
         raise HTTPException(status_code=400, detail="upstream_model_id 必填")
     model_id = (data.get("model_id") or "").strip() or upstream_id
+    enabled = data.get("enabled")
     await PostgresClient.upsert_provider_model(
         name,
         upstream_id,
         model_id,
         extra_config=data.get("extra_config") if isinstance(data.get("extra_config"), dict) else {},
+        enabled=None if enabled is None else bool(enabled),
     )
     await _reload_provider_models_local(name)
     await _log_operation(authorization, "upsert_provider_model", "provider", name, None, {"upstream_model_id": upstream_id, "model_id": model_id})

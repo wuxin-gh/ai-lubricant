@@ -961,7 +961,9 @@ class CustomProvider(BaseProvider):
         # base.py 缓冲切块解析，非流式聚合这条路必须同口径地从 full_content 里把围栏解析
         # 成 tool_calls，否则围栏原样漏进 content、客户端拿不到 tool_calls。仅在请求带 tools
         # 时启用（意图驱动解析只认 ```tool_function 围栏，无围栏时短路原样返回）。
-        if kwargs.get("tools") and full_content:
+        # 渠道声明 TOOL_PARSE_IN_CHANNEL 时解析（含工具名校验）已在渠道内做完——渠道判
+        # 「方法不存在」原样透传的围栏文本绝不能在这里被二次解析成 tool_calls。
+        if kwargs.get("tools") and full_content and not self.TOOL_PARSE_IN_CHANNEL:
             cleaned, parsed = parse_tool_calls_from_content(full_content)
             if parsed:
                 full_content = cleaned

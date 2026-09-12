@@ -13,6 +13,8 @@
    渠道允许多个同名 model_id，deepseek-v4-flash-free 改名成 deepseek-v4-flash
    和原版撞名是正常的。只有渠道配了生效规则时才重算已跟踪行，否则保留库里的
    手工改名。
+7. 只搜索规则（search_only=True）：纯过滤条件，按**全量名**（含 owner/ 前缀，
+   未切）匹配，命中即保留该模型，不参与改名。
 """
 import pytest
 
@@ -21,6 +23,7 @@ from channel import (
     apply_model_id_rewrite_rules,
     compile_model_id_rewrite_rules,
     expand_model_id_rewrite_rules,
+    model_id_matches_search_rules,
     normalize_model_id_rewrite_rules,
     set_model_rule_template_cache,
     strip_model_owner_prefix,
@@ -174,9 +177,14 @@ def test_channel_ignores_malformed_rules_config():
 
 # ── 全局模版引用 ───────────────────────────────────────────────────────────
 def test_legacy_rules_without_kind_unchanged():
-    """存量数据（无 kind）行为不变：归一结果不带 kind 键，这是零迁移的底线。"""
+    """存量数据（无 kind）行为不变：归一结果不带 kind 键，这是零迁移的底线。
+
+    search_only 是后加的字段，归一时一律补齐成布尔（存量行补 False），语义不变。
+    """
     entries = normalize_model_id_rewrite_rules([_rule(r"-latest$", name="去后缀")])
-    assert entries == [{"name": "去后缀", "enabled": True, "pattern": r"-latest$", "replacement": ""}]
+    assert entries == [
+        {"name": "去后缀", "enabled": True, "pattern": r"-latest$", "replacement": "", "search_only": False},
+    ]
 
 
 def test_template_expands_in_place():
@@ -353,3 +361,71 @@ def test_idempotent_when_target_equals_own_current(monkeypatch):
         monkeypatch,
     )
     assert target == "glm"
+
+
+# ── 只搜索规则：按全量名匹配的纯过滤条件 ───────────────────────────────────
+# 普通规则跑在切完 "owner/" 前缀的结果上，pattern 带前缀（如
+# deepseek-ai/deepseek-v4）永远搜不到。只搜索规则拿全量名匹配：命中即保留
+# 该模型，不参与改名——名字沿用默认形态（切前缀 + 其它改写规则）。
+def test_search_only_rule_matches_full_name_with_owner_prefix():
+    rules = [_rule(r"^deepseek-ai/deepseek-v4$", "", search_only=True)]
+    assert model_id_matches_search_rules("deepseek-ai/deepseek-v4", rules) is True
+    assert model_id_matches_search_rules("openai/gpt-4o", rules) is False
+
+
+def test_search_only_rule_uses_re_search_semantics():
+    """命中口径与 re.sub 一致：pattern 在名字里出现即命中，不要求锚定。"""
+    rules = [_rule(r"deepseek-v4", "", search_only=True)]
+    assert model_id_matches_search_rules("deepseek-ai/deepseek-v4-chat", rules) is True
+
+
+def test_search_only_rule_never_rewrites():
+    """只搜索规则不参与改名：改写链整条跳过，结果仍是切完前缀的默认名。"""
+    rules = [_rule(r"deepseek", "renamed", search_only=True)]
+    assert apply_model_id_rewrite_rules("deepseek-ai/deepseek-v4", rules) == "deepseek-v4"
+
+
+def test_search_rule_runs_alongside_rewrite_rules():
+    """搜索规则过滤、改写规则改名，各管各的：命中搜索保留，名字由改写规则定。"""
+    rules = [
+        _rule(r"^deepseek-ai/", "", search_only=True),
+        _rule(r"^deepseek-", "ds-"),
+    ]
+    assert model_id_matches_search_rules("deepseek-ai/deepseek-v4", rules) is True
+    assert apply_model_id_rewrite_rules("deepseek-ai/deepseek-v4", rules) == "ds-v4"
+
+
+def test_disabled_search_rule_ignored():
+    rules = [_rule(r"x", "", search_only=True, enabled=False)]
+    assert model_id_matches_search_rules("x-model", rules) is False
+
+
+def test_bad_search_regex_skipped_not_raised():
+    """坏正则跳过该条不炸，后面的规则照常生效——口径与改写侧一致。"""
+    rules = [_rule(r"[", "", search_only=True), _rule(r"ok", "", search_only=True)]
+    assert model_id_matches_search_rules("an-ok-model", rules) is True
+
+
+def test_search_only_counts_as_having_rules():
+    """只配搜索规则也算「配了规则」——自动更新要按它过滤，不能视同没配置。"""
+    ch = Channel("demo", {"model_id_rewrite_rules": [_rule(r"^glm", "", search_only=True)]})
+    assert ch.has_model_id_rewrite_rules() is True
+
+
+def test_channel_matches_search_rules_helper():
+    ch = Channel("demo", {"model_id_rewrite_rules": [_rule(r"^1111/", "", search_only=True)]})
+    assert ch.matches_search_rules("1111/glm-5.2") is True
+    assert ch.matches_search_rules("2222/glm-5.2") is False
+
+
+def test_normalize_carries_search_only():
+    entries = normalize_model_id_rewrite_rules([_rule(r"x", search_only=True), _rule(r"y")])
+    assert entries[0]["search_only"] is True
+    assert entries[1]["search_only"] is False
+
+
+def test_search_rule_inside_template_expands():
+    """模版里的只搜索规则照样就地展开生效（活引用）。"""
+    set_model_rule_template_cache([{"id": "tpl", "name": "t", "rules": [_rule(r"^acme/", "", search_only=True)]}])
+    assert model_id_matches_search_rules("acme/glm", [_ref("tpl")]) is True
+    assert model_id_matches_search_rules("other/glm", [_ref("tpl")]) is False

@@ -29,6 +29,7 @@ from .resource_reference_service import (
     resolve_reference_specs,
 )
 from .task_service import task_service
+from .task_service import _CLAUDE_RESERVED_MODEL_HINT
 
 router = APIRouter(prefix="/api/v1/users/tasks", tags=["user-platform-tasks"])
 
@@ -645,6 +646,13 @@ async def send_task_message(
         )
     except ValueError as exc:
         reason = str(exc)
+        # claude_reserved_model_alias:<name> — split out the model name for the hint.
+        if reason.startswith("claude_reserved_model_alias:"):
+            name = reason.split(":", 1)[1]
+            raise HTTPException(
+                status_code=400,
+                detail=_CLAUDE_RESERVED_MODEL_HINT.format(name=name),
+            ) from exc
         status = (
             404 if reason == "task_not_found"
             else 403 if reason == "node_forbidden"
@@ -722,6 +730,12 @@ async def switch_task_model(
         )
     except ValueError as exc:
         reason = str(exc)
+        if reason.startswith("claude_reserved_model_alias:"):
+            name = reason.split(":", 1)[1]
+            raise HTTPException(
+                status_code=400,
+                detail=_CLAUDE_RESERVED_MODEL_HINT.format(name=name),
+            ) from exc
         status = 404 if reason == "task_not_found" else 400
         detail = {
             "task_not_found": "任务不存在",
@@ -754,6 +768,12 @@ async def add_task_models(
         )
     except ValueError as exc:
         reason = str(exc)
+        if reason.startswith("claude_reserved_model_alias:"):
+            name = reason.split(":", 1)[1]
+            raise HTTPException(
+                status_code=400,
+                detail=_CLAUDE_RESERVED_MODEL_HINT.format(name=name),
+            ) from exc
         status = 404 if reason == "task_not_found" else 400
         detail = {
             "task_not_found": "任务不存在",

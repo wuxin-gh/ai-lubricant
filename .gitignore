@@ -31,6 +31,10 @@ logs/
 _real_shot.png
 # 本地 Node.js 版本索引缓存（host-tool 安装器用，可重建，不入库）
 .tmp-*.json
+# 本地临时实验目录（.tmp-*/ 下的逆向/签名/探针工作区）：可重建、不入库不上传。
+# 尤其 .tmp-apple-e2e/ 含 Apple 签名凭据（.p12 / .mobileprovision）与构建二进制。
+# 注意：git add -A 会忽略已跟踪文件的 ignore 规则，故这些文件先经 git rm --cached 移出跟踪。
+.tmp-*/
 
 # PyInstaller desktop build output (desktop/build.ps1)
 /build/
@@ -38,6 +42,8 @@ _real_shot.png
 
 # 代码渠道 spec 源料：粘贴进管理端「源码」Tab 的 CLI 逆向渠道实现。
 # 刻意不进 git、不进镜像——产品只发框架能力，spec 由使用者自行持有与分发。
+# specs/fixtures/eaichat/ 是渠道回归测试的实抓帧夹具（tests/test_eaichat_fence_json_aware.py
+# 逐条重放），与 spec 同生命周期：同目录、同不入 git。
 specs/
 .claude/
 node_modules/
@@ -53,9 +59,11 @@ dist/
 .codegraph/
 .opencode/
 
-# 本地脚本工具（个人临时脚本，不入库）；publish_github.sh 是标准发布工具，例外入库
+# 本地脚本工具（个人临时脚本，不入库）；publish_github.sh 是标准发布工具，例外入库；
+# probe_apple_gsa.sh 是 Apple ID 登录出口的诊断脚本（多机部署用），例外入库
 script/*
 !script/publish_github.sh
+!script/probe_apple_gsa.sh
 scripts/
 # data/ 全部为本地使用的数据（运行时记忆/技能归档/内置 SOP/市场转换缓存），不入库不上传
 data/

@@ -98,30 +98,39 @@ async def start_project_build(
 ) -> dict:
     """发起一次项目构建。产物不入库，构建成功后在构建 tab 下载 ipa 手动发布市场。"""
     await _project_or_404(project_id, user)
-    from .nodes_service import user_can_use_node
+    from .nodes_service import nodes_service
 
     node_id = (body.node_id or "").strip()
     if not node_id:
         raise HTTPException(status_code=400, detail="node_id 必填")
-    if not await user_can_use_node(user.id, node_id):
+    if not await nodes_service.user_can_use_node(user.id, node_id):
         raise HTTPException(status_code=403, detail="您无权使用此节点")
 
     recipe = _RECIPES.get((body.recipe_kind or "").strip())
     if recipe is None:
         raise HTTPException(status_code=400, detail=f"未知 recipe: {body.recipe_kind}")
 
-    # 校验节点具备 xcodebuild 能力（按 capability 标签，非 macOS 自然缺席）
-    from .nodes_service import list_my_nodes
-
-    my_nodes = (await list_my_nodes(user.id)).get("nodes") or []
+    # 校验节点具备 iOS 构建环境（按 capability 标签，非 macOS 自然缺席）：
+    # Xcode 本体（xcodebuild_version）+ iOS 平台组件（xcode_ios_sdk）。两者是
+    # 独立组件——Xcode 15+ 装好后 iOS 平台可缺失（构建 destination 解析直接
+    # 失败，修复命令 xcodebuild -downloadPlatform iOS），所以分开报缺哪个。
+    my_nodes = (await nodes_service.list_my_nodes(user.id)).get("nodes") or []
     node = next((n for n in my_nodes if n.get("node_id") == node_id), None)
     if node is None:
         raise HTTPException(status_code=404, detail="节点不存在或无权使用")
     caps = node.get("capabilities") or {}
+    missing: list[str] = []
     if not caps.get("xcodebuild_version"):
+        missing.append("Xcode（macOS 安装 Xcode 后重新注册节点）")
+    if not caps.get("xcode_ios_sdk"):
+        missing.append(
+            "iOS 平台组件（在该 Mac 节点执行 xcodebuild -downloadPlatform iOS 安装，"
+            "完成后在节点详情「刷新标签」）"
+        )
+    if missing:
         raise HTTPException(
             status_code=412,
-            detail="该节点不具备 Xcode 构建能力（需 macOS + Xcode）",
+            detail="该节点缺少 iOS 构建环境：" + "；".join(missing),
         )
 
     # 一次性上传 token：绑 build_id / module=wda_build / TTL 10min
@@ -140,7 +149,7 @@ async def start_project_build(
         "storage_path": None,
     }
 
-    from .node_client import get_node_client
+    from .node_client import get_node_client, NodeServerUnavailable, RPCError
 
     client = get_node_client()
     try:
@@ -158,9 +167,9 @@ async def start_project_build(
             artifact_name=recipe["artifact_name"],
             artifact_version=recipe["artifact_version"],
         )
-    except client.NodeServerUnavailable as exc:
+    except NodeServerUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except client.RPCError as exc:
+    except RPCError as exc:
         if exc.code == "failed_precondition":
             raise HTTPException(status_code=412, detail=exc.message) from exc
         if exc.code == "deadline_exceeded":
@@ -182,15 +191,15 @@ async def get_project_build(build_id: str, user: User = Depends(get_current_user
     if cfg is None or cfg.get("owner_user_id") != str(user.id):
         raise HTTPException(status_code=404, detail="构建不存在或无权访问")
 
-    from .node_client import get_node_client
+    from .node_client import get_node_client, NodeServerUnavailable, RPCError
 
     client = get_node_client()
     node_id = cfg["node_id"]
     try:
         snapshot = await client.get_node_build_status(node_id, build_id)
-    except client.NodeServerUnavailable as exc:
+    except NodeServerUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except client.RPCError as exc:
+    except RPCError as exc:
         if exc.code == "not_found":
             raise HTTPException(status_code=404, detail=exc.message) from exc
         if exc.code == "failed_precondition":
@@ -207,14 +216,14 @@ async def cancel_project_build(build_id: str, user: User = Depends(get_current_u
     if cfg is None or cfg.get("owner_user_id") != str(user.id):
         raise HTTPException(status_code=404, detail="构建不存在或无权访问")
 
-    from .node_client import get_node_client
+    from .node_client import get_node_client, NodeServerUnavailable, RPCError
 
     client = get_node_client()
     try:
         result = await client.cancel_node_build(cfg["node_id"], build_id)
-    except client.NodeServerUnavailable as exc:
+    except NodeServerUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except client.RPCError as exc:
+    except RPCError as exc:
         if exc.code == "failed_precondition":
             raise HTTPException(status_code=412, detail=exc.message) from exc
         raise HTTPException(status_code=500, detail=exc.message) from exc

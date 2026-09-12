@@ -269,23 +269,34 @@ async def resolve_reference_specs(
             old_bindings.append(binding)
 
     resolved: list[dict] = []
+    v2_visible: list[dict] | None = None
+
+    async def _load_v2_visible() -> list[dict]:
+        """新表（统一资源池）可见引用；skill 收 skill+skills+plugin 容器并集。懒加载一次。"""
+        nonlocal v2_visible
+        if v2_visible is None:
+            import resource_store
+
+            is_admin = await _team_is_admin(user_id, team_id)
+            rows: list[dict] = []
+            # skill 通道混排：单 skill + 存量 skills 集合 + plugin 容器（带 entries）。
+            types = ("skill", "skills", "plugin") if resource_type == "skill" else (resource_type,)
+            for t in types:
+                rows.extend(await resource_store.visible_references(
+                    user_id, team_id, resource_type=t, is_admin=is_admin,
+                ))
+            v2_visible = rows
+        return v2_visible
+
     if new_bindings:
         import resource_store
 
-        is_admin = await _team_is_admin(user_id, team_id)
-        visible: list[dict] = []
-        if resource_type == "skill":
-            # 新表里 skill（单）与 skills（集合）都算技能，两类型并集可见。
-            for t in ("skill", "skills"):
-                visible.extend(await resource_store.visible_references(
-                    user_id, team_id, resource_type=t, is_admin=is_admin,
-                ))
-        else:
-            visible.extend(await resource_store.visible_references(
-                user_id, team_id, resource_type=resource_type, is_admin=is_admin,
-            ))
-        resolved.extend(await resource_store.resolve_specs(visible, new_bindings))
+        resolved.extend(await resource_store.resolve_specs(await _load_v2_visible(), new_bindings))
 
+    # 旧表未命中 resource_id 时的双轨兜底：装进 shared 环境/节点本机的 v2 引用
+    # 存的是裸 UUID（TaskEnvironmentResource.resource_id），调用方无法区分新旧
+    # 表——这里按可见性翻译回 {reference_id} 走新链路解析，仍不可见才报未授权。
+    late_new_bindings: list[dict] = []
     allowed = {row["id"]: row for row in await visible_references(user_id, team_id, resource_type)}
     for binding in old_bindings:
         # Direct mcp_services binding (builtin / admin / personal).
@@ -313,6 +324,20 @@ async def resolve_reference_specs(
         resource_id = str(binding.get("resource_id") or binding.get("id") or "")
         reference = allowed.get(resource_id)
         if reference is None:
+            # 双轨兜底：旧表未见 → 试新表（统一资源池引用）。命中则按
+            # {reference_id}（可带 entries 子集）走新链路解析；未命中才拒绝。
+            if resource_id and _uuid(resource_id) is not None:
+                v2_hit = next(
+                    (row for row in await _load_v2_visible() if str(row["id"]) == resource_id),
+                    None,
+                )
+                if v2_hit is not None:
+                    late = {"reference_id": resource_id}
+                    entries = [str(e).strip() for e in (binding.get("entries") or []) if str(e).strip()]
+                    if entries:
+                        late["entries"] = entries
+                    late_new_bindings.append(late)
+                    continue
             # Existing full wire specs have no local reference id and remain
             # readable during migration.  A reference-looking UUID is rejected.
             if binding.get("resource_id"):
@@ -323,10 +348,10 @@ async def resolve_reference_specs(
         resource = manifest.get("resource") if isinstance(manifest.get("resource"), dict) else {}
         name = str(manifest.get("name") or reference.get("name") or reference["market_id"])
         if resource_type == "skill":
-            # 技能集合（type=skills / manifest.entries 在场）：一条引用展开成 N 个子
-            # 技能 spec。子技能名 ``repo_full_name/entry_name`` 跨仓库不冲突，也是
-            # 任务期 activeSkills 勾选的稳定标识。绑定可带 ``entries``（第二期的任务
-            # 勾选）按名过滤；环境同步/编辑器等不带 → 全量（= 引用整个集合）。
+            # 插件容器（manifest.entries 在场，含存量 skills 集合引用）：一条引用
+            # 展开成 N 个子技能 spec。子技能名 ``repo_full_name/entry_name`` 跨仓库
+            # 不冲突，也是任务期 activeSkills 勾选的稳定标识。绑定可带 ``entries``
+            # （任务期勾选）按名过滤；环境同步/编辑器等不带 → 全量。
             collection_entries = manifest.get("entries")
             if isinstance(collection_entries, list) and collection_entries:
                 wanted = {str(e) for e in binding.get("entries") or [] if str(e).strip()}
@@ -374,6 +399,30 @@ async def resolve_reference_specs(
                     pass
             resolved.append(spec)
         elif resource_type == "plugin":
+            # 容器插件（manifest.entries 在场）：与技能集合同一展开逻辑——技能勾选
+            # 按子技能 git clone；无 entries 的纯 zip 插件走 download_url 整包。
+            collection_entries = manifest.get("entries")
+            if isinstance(collection_entries, list) and collection_entries:
+                wanted = {str(e) for e in binding.get("entries") or [] if str(e).strip()}
+                base_url = manifest.get("source_url") or resource.get("url") or ""
+                base_ref = resource.get("ref") or ""
+                repo_url = str(base_url).split(".git", 1)[0].rstrip("/")
+                repo_short = repo_url.rsplit("/", 2)[-2:]
+                repo_label = "/".join(repo_short) if len(repo_short) == 2 else str(reference.get("name") or "")
+                for entry in collection_entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    entry_name = str(entry.get("name") or "")
+                    if wanted and entry_name not in wanted:
+                        continue
+                    resolved.append({
+                        "name": f"{repo_label}/{entry_name}" if repo_label else entry_name,
+                        "source": resource.get("source") or "github",
+                        "url": base_url,
+                        "path": str(entry.get("path") or ""),
+                        "ref": base_ref,
+                    })
+                continue
             resolved.append({
                 "name": name,
                 "url": manifest.get("download_url") or resource.get("url") or manifest.get("source_url") or "",
@@ -393,6 +442,10 @@ async def resolve_reference_specs(
                 identity_token=identity_token,
                 gateway_base_url=gateway_base_url,
             ))
+    if late_new_bindings:
+        import resource_store
+
+        resolved.extend(await resource_store.resolve_specs(await _load_v2_visible(), late_new_bindings))
     return resolved
 
 
@@ -407,6 +460,28 @@ def mcp_service_is_stdio(service: dict) -> bool:
     kind = str(service.get("kind") or "").strip().lower()
     transport = str(service.get("transport") or "").strip().lower()
     return kind == "stdio" or transport == "stdio"
+
+
+def _env_map_to_list(mapping: dict | None) -> list[dict]:
+    """Coerce an env/headers map into the proto wire shape ``[{name, value}]``.
+
+    ``MCPServerSpec.env`` / ``.headers`` are ``repeated EnvVarSpec`` (a JSON
+    list of ``{name, value}`` objects), but the historic row shape stored
+    env/headers as a plain ``{KEY: value}`` map. A dict value reaches the
+    control-plane JSON parser and is rejected ("repeated field env must be in
+    a list which is {}"), so every wire spec must emit a list. The list form
+    also matches what the node's ``runtimeEnvMap`` consumes
+    (see nodes/execution/editorconfig.go).
+    """
+    if not isinstance(mapping, dict) or not mapping:
+        return []
+    out: list[dict] = []
+    for key, value in mapping.items():
+        name = str(key).strip()
+        if not name:
+            continue
+        out.append({"name": name, "value": "" if value is None else str(value)})
+    return out
 
 
 def _mcp_service_wire_spec(
@@ -444,9 +519,9 @@ def _mcp_service_wire_spec(
             "transport": str(service.get("transport") or "stdio"),
             "command": service.get("command") or "",
             "args": list(service.get("args") or []),
-            "env": dict(service.get("env_template") or {}),
+            "env": _env_map_to_list(service.get("env_template")),
             "url": service.get("url") or "",
-            "headers": {},
+            "headers": [],
         }
     if identity_token:
         base = str(gateway_base_url or "").strip().rstrip("/")
@@ -461,9 +536,9 @@ def _mcp_service_wire_spec(
             "transport": "sse",
             "command": "",
             "args": [],
-            "env": {},
+            "env": [],
             "url": url,
-            "headers": {},
+            "headers": [],
         }
     # 迁移期兼容：未迁移的调用方（编辑器会话线）拿到的仍是旧全量 spec。
     return _legacy_full_wire_spec(service, name=name)
@@ -570,9 +645,9 @@ def _legacy_full_wire_spec(service: dict, *, name: str = "") -> dict:
         "transport": service.get("transport") or "stdio",
         "command": service.get("command") or "",
         "args": list(service.get("args") or []),
-        "env": dict(service.get("env_template") or {}),
+        "env": _env_map_to_list(service.get("env_template")),
         "url": service.get("url") or "",
-        "headers": dict(service.get("headers") or {}),
+        "headers": _env_map_to_list(service.get("headers")),
     }
 
 

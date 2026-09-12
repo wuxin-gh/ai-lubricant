@@ -1055,9 +1055,34 @@ class ToolRegistry:
         if self._mcp_runtime is None:
             return {"status": "error", "msg": "MCP runtime 未挂载"}
         await self._maybe_seed_mcp_sop(service, entry)
+        # 按方法 schema 先做 required 缺参校验：直接放行会换来一句 Python 的
+        # ``fn() missing 1 required positional argument: 'script'``——参数名在消息
+        # 末尾，模型（尤其中文提示词下）常把它当上游异常重发同样的空 args 死循环
+        # （CDP 网页对话曾连发 5 次 {"args":{},"name":"cdp-bridge.browser_execute_js"}）。
+        # 校验消息直接给出「缺哪些参数 + 该方法的完整参数清单」，一轮即可纠正。
+        missing = self._missing_required_params(entry, method, call_args)
+        if missing:
+            params_hint = self._format_mcp_params(self._method_schema(entry, method)) or "    - (无参数)"
+            return {
+                "status": "error",
+                "code": "missing_required_params",
+                "msg": (
+                    f"{service}.{method} 缺少必填参数: {', '.join(missing)}。"
+                    "这不是上游故障，不要原样重试；把缺的参数补进 args 后再调用。"
+                    f"该方法全部参数：\n{params_hint}"
+                ),
+            }
         namespaced = f"{service}__{method}"
         try:
             result = await self._mcp_runtime.call_tool(namespaced, call_args)
+        except TypeError as exc:
+            # 防御性兜底：schema 没声明 required 但目标函数签名必填（或模型传了
+            # 不存在的形参）。TypeError 原文是 Python 视角，翻成模型可行动的口径。
+            return {
+                "status": "error",
+                "code": "bad_arguments",
+                "msg": f"{service}.{method} 参数不符: {exc}。请对照方法参数清单修正 args，不要原样重试。",
+            }
         except Exception as exc:
             return {"status": "error", "msg": f"{type(exc).__name__}: {exc}"}
         # Any MCP method may hand back inline binary (CDP screenshots do). Spill it
@@ -1147,6 +1172,29 @@ class ToolRegistry:
         return {"status": "error", "msg": f"未知的 scheduler 动作: {action}"}
 
     @staticmethod
+    def _method_schema(entry: dict, method: str) -> Any:
+        """Return the input_schema advertised for one method, or None."""
+        for m in entry.get("methods") or []:
+            if isinstance(m, dict) and str(m.get("name") or "") == method:
+                return m.get("input_schema")
+        return None
+
+    @classmethod
+    def _missing_required_params(cls, entry: dict, method: str, call_args: dict) -> list[str]:
+        """List required-but-absent params per the method's advertised schema.
+
+        空值（``""``/``None``）不算缺：有些方法允许显式传空串。schema 缺失或没有
+        required 时返回空列表——校验是尽力而为，不替代真正的 schema 验证。
+        """
+        schema = cls._method_schema(entry, method)
+        if not isinstance(schema, dict):
+            return []
+        required = schema.get("required")
+        if not isinstance(required, list):
+            return []
+        return [str(r) for r in required if str(r) not in call_args]
+
+    @staticmethod
     def _format_mcp_params(schema: Any) -> str:
         """Render an MCP inputSchema as compact per-parameter lines.
 
@@ -1192,6 +1240,12 @@ class ToolRegistry:
         Seeded before the first call (from ``set_mcp_runtime``) rather than after it,
         so the L1 pointer the model routes on leads to something executable. The
         Experience section stays empty until a verified run distils into it.
+
+        已存在但缺参数块（早期版本只写方法名+描述，没写 ``_format_mcp_params`` 的
+        行）时**补写**：场景段把本文件整体内联进系统提示，没有参数清单的 SOP 会
+        让模型只能拿方法名猜 args——CDP 网页对话曾因此连发 5 次空
+        ``args={"script":...}`` 缺参调用。补写只动 methods 区，Experience 区
+        （人工/AI 沉淀的经验）原样保留。
         """
         if self.agent_id is None:
             return
@@ -1200,22 +1254,11 @@ class ToolRegistry:
             ref = f"mcp/{service}_sop.md"
             sop_root = fm.agent_sop_root(self.agent_id)
             target = sop_root / "mcp" / f"{service}_sop.md"
+            method_lines = self._render_sop_methods(service, entry)
             if target.exists():
+                self._backfill_sop_params(target, method_lines)
                 return
             target.parent.mkdir(parents=True, exist_ok=True)
-            methods = entry.get("methods") or []
-            blocks: list[str] = []
-            for m in methods:
-                name = m.get("name")
-                raw_desc = (m.get("description") or "").strip().splitlines()
-                summary = raw_desc[0] if raw_desc else ""
-                blocks.append(
-                    f"- `capability_call(name=\"{service}.{name}\", args={{...}})`"
-                    + (f": {summary}" if summary else "")
-                    + "\n"
-                    + self._format_mcp_params(m.get("input_schema"))
-                )
-            method_lines = "\n".join(blocks) or "- (no methods discovered)"
             body = (
                 f"# {service} MCP SOP\n\n"
                 f"## Service\n\n{service}\n\n"
@@ -1232,6 +1275,51 @@ class ToolRegistry:
             fm.upsert_l1_pointer(self.agent_id, f"mcp.{service}", f"memory/sop/{ref}")
         except Exception as exc:  # noqa: BLE001 — SOP seeding must never block the call
             logger.debug("[sop] seed mcp sop failed service=%s: %s", service, exc)
+
+    def _render_sop_methods(self, service: str, entry: dict) -> str:
+        """Render the SOP's method list block: one bullet per method + params."""
+        methods = entry.get("methods") or []
+        blocks: list[str] = []
+        for m in methods:
+            name = m.get("name")
+            raw_desc = (m.get("description") or "").strip().splitlines()
+            summary = raw_desc[0] if raw_desc else ""
+            blocks.append(
+                f"- `capability_call(name=\"{service}.{name}\", args={{...}})`"
+                + (f": {summary}" if summary else "")
+                + "\n"
+                + self._format_mcp_params(m.get("input_schema"))
+            )
+        return "\n".join(blocks) or "- (no methods discovered)"
+
+    def _backfill_sop_params(self, target, method_lines: str) -> None:
+        """Patch a stale seeded SOP that predates parameter blocks.
+
+        早期 seed 版本只写方法名+描述。文件已存在时 ``_maybe_seed_mcp_sop``
+        直接 return，于是老 Agent 的 SOP 永远没有参数清单，而场景段把它整体
+        内联进系统提示——模型只能拿方法名猜 args。这里检测「methods 区缺少
+        参数行」并原位补齐；Experience 区不动。
+        """
+        try:
+            text = target.read_text(encoding="utf-8")
+        except OSError:
+            return
+        # 新版 seed 的 methods 区每个方法下面有 "    - `param`" 参数行；老版没有。
+        if re.search(r"^- `capability_call\(name=.*\n    - `", text, flags=re.MULTILINE | re.DOTALL):
+            return
+        # 只重写 methods 区：## Available methods 到下一个 ## 之间。
+        patched = re.sub(
+            r"(## Available methods\n\n)([\s\S]*?)(\n\n## )",
+            lambda m: m.group(1) + method_lines + m.group(3),
+            text,
+            count=1,
+        )
+        if patched == text:
+            return
+        try:
+            target.write_text(patched, encoding="utf-8")
+        except OSError:
+            return
 
     async def _ask_user(self, args: dict) -> "StepOutcome":
         """Interrupt execution to ask the user a question, optionally with

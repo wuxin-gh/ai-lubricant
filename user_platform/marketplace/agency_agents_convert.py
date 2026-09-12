@@ -459,6 +459,9 @@ def _manifest_to_leaderboard_item(manifest: dict, source_name: str) -> dict:
     repo_full_name = rel.replace(".", "/") or item_id
     resource = manifest.get("resource") or {}
     return {
+        # 本源 install_spec（prompt 正文 + providers）从当轮 tarball 确定性派生，
+        # 恒为新鲜值（覆盖模式据此一并重写正文；见 store.upsert_item）。
+        "install_spec_fresh": True,
         "source": source_name,
         "board": "prompts",
         "repo_full_name": repo_full_name,
@@ -500,6 +503,7 @@ def _manifest_to_leaderboard_item(manifest: dict, source_name: str) -> dict:
 async def sync_agency_agents(
     *, ref: str = "", flush: bool = False, dry_run: bool = False,
     repo: str = SOURCE_REPO,
+    overwrite_draft: bool = False, overwrite_published: bool = False,
 ) -> dict[str, Any]:
     """服务端同步：拉源 → 转换 → merge 进市场 prompts 模块。返回 report。
 
@@ -508,6 +512,10 @@ async def sync_agency_agents(
     （DEFAULT_ZH_REF——fork 与英文源历史分叉，英文 sha 在 fork 里不存在）。dry_run=True
     只转换+校验不落库。结果存模块级 ``_last_result`` 供回显；异常向上抛（路由层转
     502），但失败也记进 _last_result 与 sync_runs。
+
+    覆盖模式（手动「立即同步」弹框勾选；定时循环不传恒为不覆盖）：overwrite_draft
+    / overwrite_published 按行状态命中才重写资源字段（含 prompt 正文——本源
+    install_spec 从当轮 tarball 派生恒新鲜），详见 ``leaderboard_resource_store.upsert_item``。
     """
     global _last_result, _last_result_zh, _progress
     started = datetime.now(timezone.utc).isoformat()
@@ -556,14 +564,24 @@ async def sync_agency_agents(
         for idx, (item_id, manifest) in enumerate(manifest_by_id.items(), start=1):
             _progress.update({"current": idx, "current_item": item_id})
             try:
-                await lb_store.upsert_item(_manifest_to_leaderboard_item(manifest, source_name))
+                await lb_store.upsert_item(
+                    _manifest_to_leaderboard_item(manifest, source_name),
+                    overwrite_published=overwrite_published, overwrite_draft=overwrite_draft,
+                )
                 written += 1
             except Exception as exc:  # noqa: BLE001 — 单条失败不影响其余
                 import_failed.append({"id": item_id, "errors": [str(exc)[:200]]})
                 _log("upsert_fail", f"{item_id}: {str(exc)[:150]}")
+        overwrite_note = (
+            "；覆盖：" + "、".join(filter(None, [
+                "已发布" if overwrite_published else "",
+                "草稿" if overwrite_draft else "",
+            ])) if (overwrite_published or overwrite_draft) else ""
+        )
         detail = (
             f"同步 {report['converted']} 条，入库 {written} 条"
             + (f"；{len(import_failed)} 条失败" if import_failed else "")
+            + overwrite_note
         )
         _log("done", detail)
         ok = not report["failed"]

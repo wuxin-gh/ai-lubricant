@@ -19,6 +19,7 @@
 
 - `cap-llm-server.html`：免费模型监控、模型列表自动更新、渠道标签、多协议链路、多种冻结、六种选路、8 种速率限制、自定义测试与上游拒绝；含 Cloudflare Workers URL 代理说明
 - `cap-code-channel.html`：自定义代码渠道的场景索引、钩子速查、类级开关、统一帧、样例与常见错误
+- `code-channel-ai.md`：给 AI 的自包含需求说明——把它的地址连同脚本/仓库地址发给任意 AI 助手即可生成 spec 类（cap-code-channel.html「让 AI 帮你生成」入口的落地文件）
 - `cap-agent.html`：主/子 Agent、定时任务、终端 Agent、浏览器与网页内 Agent、邮箱 Agent、记忆增强
 - `cap-editor.html`：Claude Code/Codex/OpenCode/Cursor/Gemini 接入、三种执行环境（隔离/共用/系统）、代码 Review、会话隔离
 - `cap-node.html`：一键连接 Agent、三角色、无需 SSH、Agent 安全控制、PTY/host exec/文件/代理出口

@@ -211,11 +211,27 @@ def _iso(value) -> str | None:
 
 
 def _resource_data_for_item(resource_type: str, install_spec: dict, launch_spec: dict) -> dict:
-    """旧榜单 install_spec（按模块包裹）→ 新 resources.resource_data（按类型直接存）。"""
+    """旧榜单 install_spec（按模块包裹）→ 新 resources.resource_data（按类型直接存）。
+
+    plugin 是容器：榜单派生时 ``install_spec.plugin``（marketplace.json 仓库）与
+    ``install_spec.skill.entries``（多技能仓库，原 skills 集合）都归 plugin——
+    entries 在场即容器形态（resource_data 同时带 clone 坐标与 download_url）。
+    """
     if resource_type in ("skill", "skills"):
         value = install_spec.get("skill") if isinstance(install_spec.get("skill"), dict) else install_spec
         return dict(value or {})
     if resource_type == "plugin":
+        if isinstance(install_spec.get("skill"), dict) and isinstance(
+            (install_spec["skill"] or {}).get("entries"), list
+        ) and install_spec["skill"]["entries"]:
+            # 多技能插件容器（原 skills 集合）：entries + clone 坐标 + zip 地址。
+            skill = install_spec["skill"]
+            plugin = install_spec.get("plugin") if isinstance(install_spec.get("plugin"), dict) else {}
+            data = dict(skill)
+            data["download_url"] = str(
+                plugin.get("download_url") or ""
+            ) or data.get("download_url") or ""
+            return data
         value = install_spec.get("plugin") if isinstance(install_spec.get("plugin"), dict) else install_spec
         return dict(value or {})
     if resource_type == "prompt":
@@ -256,18 +272,22 @@ def _install_spec_for_item(resource_type: str, resource_data: dict) -> dict:
 
 
 def _association_for(resource_type: str, resource_data: dict) -> list[str]:
-    """从集合 resource_data.entries 得搜索用的关联子项。"""
-    if resource_type != "skills" or not isinstance(resource_data, dict):
+    """从容器 resource_data.entries 得搜索用的关联子项（plugin 容器与存量 skills）。"""
+    if resource_type not in ("plugin", "skills") or not isinstance(resource_data, dict):
         return []
-    return [str(e.get("name") or "") for e in (resource_data.get("entries") or [])
+    entries = resource_data.get("entries")
+    if not isinstance(entries, list):
+        return []
+    return [str(e.get("name") or "") for e in entries
             if isinstance(e, dict) and str(e.get("name") or "").strip()]
 
 
 def _editors_for(resource_type: str, resource_data: dict) -> list[str]:
     """从 entries/provider 推导 resources.editors，并集。
 
-    plugin：适用客户端多选落 ``resource_data.editors``（数组）；旧单值形态回落
-    ``provider`` 包成数组——读写两侧都兼容。
+    plugin：适用客户端多选落 ``resource_data.editors``（数组）；容器插件
+    （entries 在场）按子技能 editors 并集；旧单值形态回落 ``provider`` 包成
+    数组——读写两侧都兼容。
     """
     if resource_type in ("skill", "skills"):
         entries = resource_data.get("entries") if resource_type == "skills" else [resource_data]
@@ -277,6 +297,16 @@ def _editors_for(resource_type: str, resource_data: dict) -> list[str]:
                 if str(editor) not in out:
                     out.append(str(editor))
         return out
+    if resource_type == "plugin" and isinstance(resource_data.get("entries"), list):
+        out: list[str] = []
+        for entry in resource_data["entries"]:
+            if not isinstance(entry, dict):
+                continue
+            for editor in (entry.get("editors") or []):
+                if str(editor) not in out:
+                    out.append(str(editor))
+        if out:
+            return out
     editors = resource_data.get("editors")
     if isinstance(editors, list) and editors:
         out = [str(e) for e in editors if str(e).strip()]
@@ -354,19 +384,39 @@ def _load_rows(rows) -> list[dict]:
 # ── 对外 API（与旧 store 同名同签名）──────────────────────────────────────
 
 
-async def upsert_item(item: dict) -> dict | None:
+async def upsert_item(
+    item: dict,
+    *,
+    overwrite_published: bool = False,
+    overwrite_draft: bool = False,
+) -> dict | None:
     """同步/手动添加一条候选（resources upsert，按 (source_type, repo) 去重）。
 
     与旧表 upsert 同语义：新条目 INSERT 完整草稿；已存在只刷新 source_data（上游
     真相 + 投影），资源字段（name/display/分类/install_spec）不动——管理员改过的
     不被同步冲掉。probe 保留规则同旧：传入 external_data 带 probe 键 → 新值；不带
     → 保留行里旧 probe（不丢探针证据）。
+
+    覆盖模式（手动「立即同步」弹框勾选；定时同步不传恒为不覆盖）：
+    - ``overwrite_draft`` / ``overwrite_published``：按行当前状态命中才覆盖，
+      hidden 行不覆盖（管理员显式藏的）。覆盖 = 资源字段跟上游最新走
+      （name/display/description/version 直接写列）；resource_type/resource_data
+      **仅在本轮带新鲜识别**时才覆盖——榜单源看 external_data.probe（探针复用/
+      预算跳过的行 incoming install_spec 是关键词分类的默认形态（无 entries），
+      直接写列会把行里探针派生的安装配置降级成空壳）；无探针源（agentscope /
+      skillhub / agency-agents，install_spec 每轮从上游确定性派生）由调用方在
+      item 顶层带 ``install_spec_fresh=True`` 标记。状态（draft/published）
+      永远不翻——覆盖是刷新数据，不是隐式发布/撤回。
     """
     full_name = str(item.get("repo_full_name") or "").strip()
     if not full_name or "/" not in full_name:
         return None
     values = _item_to_resource_values(item)
     external = values["source_data"]["external_data"]
+    # 无探针源的安装配置每轮都是上游权威值（skillhub/agentscope 从当轮 zip 的
+    # SKILL.md 派生、agency-agents 从当轮 tarball 派生），不存在榜单源「探针复用
+    # →默认空壳 spec」的降级问题——install_spec_fresh=True 的行覆盖时一并重写。
+    spec_fresh = "probe" in (external or {}) or item.get("install_spec_fresh") is True
     source_data = values["source_data"]
     pool = _pool()
     async with pool.acquire() as conn:
@@ -405,7 +455,7 @@ async def upsert_item(item: dict) -> dict | None:
             )
             return _resource_to_item(_decode_row(row)) if row else None
 
-        # 已存在：只刷新 source_data；probe 不带键则保留旧值；资源字段不动。
+        # 已存在：默认只刷新 source_data；probe 不带键则保留旧值；资源字段不动。
         old_sd = existing["source_data"]
         if isinstance(old_sd, str):
             try:
@@ -421,21 +471,58 @@ async def upsert_item(item: dict) -> dict | None:
         carry_probe = "probe" not in (external or {})
         merged_sd = {**source_data, "external_data": external or {}}
         new_probe = old_probe if carry_probe else values["probe_data"]
-        row = await conn.fetchrow(
-            """
-            UPDATE resources
-               SET source_data = $2::jsonb,
-                   probe_data = $3::jsonb,
-                   sort_order = COALESCE($4, sort_order),
-                   updated_at = now()
-             WHERE id = $1
-            RETURNING *
-            """,
-            existing["id"],
-            json.dumps(merged_sd, ensure_ascii=False),
-            json.dumps(new_probe or {}, ensure_ascii=False),
-            values["sort_order"],
+        # 覆盖模式命中判定：行状态 × 调用方勾选（hidden 不覆盖）。
+        row_status = str(existing["status"] or "")
+        apply_overwrite = (
+            (overwrite_draft and row_status == "draft")
+            or (overwrite_published and row_status == "published")
         )
+        if apply_overwrite:
+            sets = ["source_data = $2::jsonb", "probe_data = $3::jsonb",
+                    "sort_order = COALESCE($4, sort_order)"]
+            args = [existing["id"],
+                    json.dumps(merged_sd, ensure_ascii=False),
+                    json.dumps(new_probe or {}, ensure_ascii=False),
+                    values["sort_order"]]
+            # 文本资源字段：上游描述/版本直接覆盖（管理员手改的描述按覆盖语义让位）。
+            for col in ("name", "display_name", "description", "version"):
+                args.append(values[col])
+                sets.append(f"{col} = ${len(args)}")
+            # 分类 + 安装配置：仅本轮带新鲜识别才覆盖（榜单源=探针在场；无探针源=
+            # install_spec_fresh 标记——见 docstring）。派生列 association/editors
+            # 随 resource_data 一并刷新，否则列表/搜索仍显示旧集合。
+            if spec_fresh:
+                res_type = values["resource_type"] or "unknown"
+                res_data = values["resource_data"] or {}
+                args.append(res_type)
+                sets.append(f"resource_type = ${len(args)}")
+                args.append(json.dumps(res_data, ensure_ascii=False))
+                sets.append(f"resource_data = ${len(args)}::jsonb")
+                args.append(json.dumps(_association_for(res_type, res_data), ensure_ascii=False))
+                sets.append(f"association = ${len(args)}::jsonb")
+                args.append(json.dumps(_editors_for(res_type, res_data), ensure_ascii=False))
+                sets.append(f"editors = ${len(args)}::jsonb")
+            sets.append("updated_at = now()")
+            row = await conn.fetchrow(
+                f"UPDATE resources SET {', '.join(sets)} WHERE id = $1 RETURNING *",
+                *args,
+            )
+        else:
+            row = await conn.fetchrow(
+                """
+                UPDATE resources
+                   SET source_data = $2::jsonb,
+                       probe_data = $3::jsonb,
+                       sort_order = COALESCE($4, sort_order),
+                       updated_at = now()
+                 WHERE id = $1
+                RETURNING *
+                """,
+                existing["id"],
+                json.dumps(merged_sd, ensure_ascii=False),
+                json.dumps(new_probe or {}, ensure_ascii=False),
+                values["sort_order"],
+            )
         return _resource_to_item(_decode_row(row)) if row else None
 
 
@@ -566,11 +653,15 @@ async def list_published_for_consumer(
     where = ["status = 'published'", "source_type IN ('leaderboard_sync', 'manual')"]
     args: list[Any] = []
     if target_module:
-        # 消费侧 Skill tab 混排单 skill 与 skills 集合（集合=一行卡片，子技能在
-        # association 里搜/勾）——前端只发 skill，这里扩成两值。admin 侧分类筛选
-        # 走 list_items 的精确匹配（有独立的 skills 选项），不受影响。
+        # 消费侧 Skill tab 混排：单 skill + 存量 skills 集合 + plugin 容器（带
+        # entries 的插件，子技能在 association 里搜/勾）——前端只发 skill，这里
+        # 扩成三值。纯 zip 插件（无 entries）不混进——那是插件 tab 的整包。
+        # admin 侧分类筛选走 list_items 的精确匹配，不受影响。
         if target_module == "skill":
-            where.append("resource_type IN ('skill', 'skills')")
+            where.append(
+                "(resource_type IN ('skill', 'skills')"
+                " OR (resource_type = 'plugin' AND resource_data ? 'entries'))"
+            )
         else:
             args.append(target_module)
             where.append(f"resource_type = ${len(args)}")

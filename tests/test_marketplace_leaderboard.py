@@ -1042,43 +1042,52 @@ def test_consumer_query_always_filters_published():
 
 
 def test_consumer_projection_returns_resource_fields():
-    """消费侧行直接是资源字段（name/categories/tags 等新列），不含内部结构
-    （admin_overrides/labels 不在投影里）。"""
+    """消费侧行直接是资源字段（统一资源池 resources 行投影）：名称/分类/标签等
+    从 source_data 投影，内部结构（admin_overrides/labels 不在投影里）。
+    分类 target_module(s) 必须透传——前端市场卡片按它渲染徽章与安装分支。"""
     import asyncio
+    import json
+
     import marketplace_leaderboard_store as store
     from db import PostgresClient
 
-    # asyncpg 回 JSONB 是 str——用 str 模拟才真实（row_to_dict 负责解析）。
+    # asyncpg 回 JSONB 是 str——用 str 模拟才真实（_decode_row 负责解析）。
     class _Row(dict):
         pass
 
+    source_data = {
+        "source": "agent-leaderboard",
+        "board": "mcp",
+        "repo_full_name": "owner/repo",
+        "repo_url": "https://github.com/owner/repo",
+        "description": "上游描述",
+        "stars": 10,
+        "forks": 1,
+        "language": "Go",
+        "topics": ["x"],
+        "upstream_category": "official",
+        "use_cases": [],
+        "upstream_rank": 3,
+        "installable": True,
+        "categories": ["开发"],
+        "tags": ["mcp"],
+        "publisher": "owner",
+    }
     row = _Row(
         id=1,
-        source="agent-leaderboard",
-        board="mcp",
-        repo_full_name="owner/repo",
-        repo_url="https://github.com/owner/repo",
-        description="改过的描述",
-        stars=10,
-        forks=1,
-        language="Go",
+        source_type="leaderboard_sync",
+        resource_type="mcp",
+        resource_data="{}",
+        source_data=json.dumps(source_data),
+        association="[]",
+        editors="[]",
+        probe_data="{}",
         name="repo",
         display_name="改过的名字",
-        publisher="owner",
+        description="改过的描述",
         version="2026.09.01",
-        categories='["开发"]',
-        tags='["mcp"]',
-        topics='["x"]',
-        use_cases="[]",
-        upstream_category="official",
-        target_module="mcp",
-        target_modules='["mcp"]',
-        installable=True,
-        launch_spec="{}",
-        install_spec="{}",
+        status="published",
         sort_order=1,
-        upstream_updated_at=None,
-        published_at=None,
     )
 
     class _Conn:
@@ -1109,7 +1118,88 @@ def test_consumer_projection_returns_resource_fields():
     assert item["tags"] == ["mcp"]
     assert item["version"] == "2026.09.01"
     assert item["sort_order"] == 1
-    # 内部结构不进用户侧响应。
+    assert item["repo_full_name"] == "owner/repo"
+    assert item["stars"] == 10
+    # 分类透传（消费查询已把 skill 扩成 skill+skills，前端按 target_modules 渲染徽章）。
+    assert item["target_module"] == "mcp"
+    assert item["target_modules"] == ["mcp"]
+    # mcp 的安装形态走 launch_spec，install_spec 恒空。
+    assert item["install_spec"] == {}
+    # 内部结构不进用户侧响应：admin_overrides 随旧表删除不再投影；
+    # labels 现从 source_data 透传（未设置时为空数组）。
     assert "admin_overrides" not in item
-    assert "labels" not in item
+    assert item["labels"] == []
+
+
+def test_consumer_projection_skills_collection_entries():
+    """技能集（resource_type=skills）：install_spec.skill.entries 全量透传——
+    市场卡片展开子技能列表、按子技能名搜索都依赖这个契约。"""
+    import asyncio
+    import json
+
+    import marketplace_leaderboard_store as store
+    from db import PostgresClient
+
+    class _Row(dict):
+        pass
+
+    resource_data = {
+        "install_method": "github_clone",
+        "ref": "main",
+        "entries": [
+            {"name": "docx", "path": "skills/docx", "entry": "SKILL.md", "editors": ["claude"]},
+            {"name": "pdf", "path": "skills/pdf", "entry": "SKILL.md", "editors": ["claude"]},
+        ],
+    }
+    row = _Row(
+        id=2,
+        source_type="leaderboard_sync",
+        resource_type="skills",
+        resource_data=json.dumps(resource_data),
+        source_data=json.dumps({
+            "source": "agent-leaderboard",
+            "board": "skills",
+            "repo_full_name": "anthropics/skills",
+            "repo_url": "https://github.com/anthropics/skills",
+            "installable": True,
+        }),
+        association="[]",
+        editors="[]",
+        probe_data="{}",
+        name="anthropics/skills",
+        display_name="anthropics/skills",
+        description="官方技能集合",
+        status="published",
+        sort_order=2,
+    )
+
+    class _Conn:
+        async def fetch(self, sql, *args):
+            return [row]
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _Pool:
+        def acquire(self):
+            return _Conn()
+
+    original = PostgresClient.pool
+    PostgresClient.pool = _Pool()
+    try:
+        items = asyncio.run(store.list_published_for_consumer(target_module="skill"))
+    finally:
+        PostgresClient.pool = original
+    assert len(items) == 1
+    item = items[0]
+    assert item["repo_full_name"] == "anthropics/skills"
+    # 技能集是复数 "skills"——前端安装/徽章分支据此区分集合与单技能。
+    assert item["target_module"] == "skills"
+    assert item["target_modules"] == ["skills"]
+    spec = item["install_spec"]
+    assert spec["skill"]["ref"] == "main"
+    assert [e["name"] for e in spec["skill"]["entries"]] == ["docx", "pdf"]
 

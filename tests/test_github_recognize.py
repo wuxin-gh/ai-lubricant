@@ -117,19 +117,20 @@ def test_pick_skill_entry_empty_or_bad_index_returns_none_or_first():
     assert pick_skill_entry([{"name": "a"}], 99)["name"] == "a"
 
 
-# ── derive_primary_type：单选主类型（skills > plugin > skill > mcp > prompt）──
+# ── derive_primary_type：单选主类型（plugin > skill > mcp > prompt）──
 
 def _probe(tree_paths, files=None, launch=None):
     return {"tree_paths": tree_paths, "files": files or {}, "launch_spec": launch or {}}
 
 
 def test_primary_type_multi_dir_skills_beats_plugin():
-    """anthropics/skills 形态：多个子目录 SKILL.md + 插件清单 → skills（优先级）。"""
+    """anthropics/skills 形态：多个子目录 SKILL.md + 插件清单 → plugin 容器（原 skills
+    集合已归入 plugin：技能集本质是多技能的插件包）。"""
     probe = _probe(
         ["skills/pdf/SKILL.md", "skills/slides/SKILL.md", ".claude-plugin/marketplace.json"],
         files={".claude-plugin/marketplace.json": {"plugins": []}},
     )
-    assert derive_primary_type(probe, "anthropics/skills") == "skills"
+    assert derive_primary_type(probe, "anthropics/skills") == "plugin"
 
 
 def test_primary_type_single_dir_multi_editor_is_skill_not_skills():
@@ -183,7 +184,102 @@ def test_primary_type_empty_when_nothing_recognized():
     assert derive_primary_type(_probe(["README.md"]), "o/r") == ""
 
 
-# ── 集合 manifest ────────────────────────────────────────────────────────────
+def test_primary_type_plugin_for_multi_skill_repo_without_manifest():
+    """无 marketplace.json 的多技能仓库（≥2 个不同父目录）也归 plugin 容器。"""
+    probe = _probe(["skills/pdf/SKILL.md", "skills/slides/SKILL.md"])
+    assert derive_primary_type(probe, "o/r") == "plugin"
+
+
+def test_primary_type_skill_when_single_entry_without_manifest():
+    """单技能仓库（无 marketplace.json）仍识别为 skill，不是容器。"""
+    probe = _probe(["skills/pdf/SKILL.md"])
+    assert derive_primary_type(probe, "o/r") == "skill"
+
+
+# ── 插件容器 resolve（resource_store.resolve_specs 的 entries 展开）──────────
+# resolve_specs 是 async——统一 asyncio.run 跑。
+
+def _resolve(rows, bindings):
+    import asyncio
+
+    from server.resource_store import resolve_specs
+
+    return asyncio.run(resolve_specs(rows, bindings))
+
+
+def _ref_row(rtype: str, data: dict) -> dict:
+    return {
+        "id": "ref-1",
+        "display_name": "容器",
+        "version": "",
+        "params": {},
+        "resource": {
+            "resource_type": rtype,
+            "resource_data": data,
+            "display_name": "容器",
+            "name": "o/r",
+            "source_data": {"repo_full_name": "o/r"},
+            "version": "",
+        },
+    }
+
+
+def test_resolve_specs_expands_plugin_container_entries():
+    """plugin 容器（带 entries）在 skill 通道按子技能展开（装配跟着编辑器走）。"""
+    rows = [_ref_row("plugin", {
+        "clone_url": "https://github.com/o/r.git",
+        "ref": "main",
+        "download_url": "https://github.com/o/r/archive/refs/heads/main.zip",
+        "entries": [
+            {"name": "pdf", "path": "skills/pdf"},
+            {"name": "slides", "path": "skills/slides"},
+        ],
+    })]
+    specs = _resolve(rows, [{"reference_id": "ref-1"}])
+    assert [s["name"] for s in specs] == ["o/r/pdf", "o/r/slides"]
+    assert specs[0]["url"] == "https://github.com/o/r.git"
+    assert specs[0]["path"] == "skills/pdf"
+
+
+def test_resolve_specs_plugin_container_filters_by_binding_entries():
+    """绑定带 entries → 只展开勾中的子技能（任务期勾选语义不变）。"""
+    rows = [_ref_row("plugin", {
+        "clone_url": "https://github.com/o/r.git",
+        "ref": "main",
+        "entries": [
+            {"name": "pdf", "path": "skills/pdf"},
+            {"name": "slides", "path": "skills/slides"},
+        ],
+    })]
+    specs = _resolve(rows, [{"reference_id": "ref-1", "entries": ["slides"]}])
+    assert [s["name"] for s in specs] == ["o/r/slides"]
+
+
+def test_resolve_specs_plain_plugin_stays_zip_spec():
+    """纯 zip 插件（无 entries）不展开，走 download_url 整包。"""
+    rows = [_ref_row("plugin", {
+        "download_url": "https://github.com/o/r/archive/refs/heads/main.zip",
+    })]
+    specs = _resolve(rows, [{"reference_id": "ref-1"}])
+    assert specs == [{
+        "name": "容器",
+        "url": "https://github.com/o/r/archive/refs/heads/main.zip",
+        "version": "",
+    }]
+
+
+def test_resolve_specs_legacy_skills_row_expands_like_container():
+    """存量 skills 集合行读侧兼容：与 plugin 容器同一展开口径。"""
+    rows = [_ref_row("skills", {
+        "clone_url": "https://github.com/o/r.git",
+        "ref": "main",
+        "entries": [{"name": "pdf", "path": "skills/pdf"}],
+    })]
+    specs = _resolve(rows, [{"reference_id": "ref-1"}])
+    assert [s["name"] for s in specs] == ["o/r/pdf"]
+
+
+# ── 插件容器 manifest（原 skills 集合，已归入 plugin 容器）──────────────────────
 
 def test_build_skills_collection_manifest_full_entries_and_default_name():
     entries = [
@@ -191,12 +287,15 @@ def test_build_skills_collection_manifest_full_entries_and_default_name():
         {"name": "slides", "path": "skills/slides", "entry": "SKILL.md", "editors": ["claude"]},
     ]
     m = build_skills_collection_manifest("anthropics/skills", "main", entries)
-    assert m["type"] == "skills"
-    assert m["name"] == "anthropics/skills"  # 集合名默认用仓库全名
+    # skills 集合现归 plugin 容器：type=plugin，同时带 entries（技能展开）与 download_url
+    # （zip 整包）。
+    assert m["type"] == "plugin"
+    assert m["name"] == "anthropics/skills"  # 容器名默认用仓库全名
     assert m["resource"] == {"source": "github", "url": "https://github.com/anthropics/skills.git", "path": "", "ref": "main"}
     assert m["entries"][0]["name"] == "pdf"
     assert len(m["entries"]) == 2
     assert m["install_method"] == "github_clone"
+    assert m["download_url"]  # 容器同时带 zip 整包地址
     assert m["id"] == "github:anthropics/skills"  # 仓库级 market_id，与单技能 github:o/r:子路径 互不冲突
 
 

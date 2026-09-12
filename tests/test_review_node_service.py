@@ -87,8 +87,9 @@ async def test_unsupported_editor_for_framework_is_rejected(db, monkeypatch):
 
     monkeypatch.setattr(module.nodes_service, "list_my_nodes", list_nodes)
     with pytest.raises(ValueError, match="unsupported_review_editor"):
-        # gemini is not in this framework's supported_editors.
-        await ReviewNodeService().list_review_nodes("user", _FRAMEWORK, "gemini")
+        # codex requires bootstrap identity and is not in this framework's
+        # supported_editors (claude/opencode/gemini/cursor — see 14f81070).
+        await ReviewNodeService().list_review_nodes("user", _FRAMEWORK, "codex")
 
 
 @pytest.mark.asyncio

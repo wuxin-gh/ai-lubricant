@@ -79,6 +79,32 @@ _WINDOWS_LOCALE_TO_APPLE: dict[str, str] = {
 # 下载/重复 provision 触发 Apple 反滥用。
 _provider_lock = threading.Lock()
 
+# 远程 anisette 服务器 URL（可选）。设了就用远程真实设备指纹，替代本地
+# 虚拟 provisioning——后者生成的 anisette 头被 Apple 判为「假设备」直接 503。
+# 远程服务器（如 ani.sidestore.io）用真实 provisioning 数据生成头，且 GET 即
+# 返回完整 anisette 头集合，无需本地装 anisette 库。None = 走本地库。
+_remote_server: str | None = None
+
+
+def set_remote_server(url: str | None) -> None:
+    """设置/清除远程 anisette 服务器。空 = 回退本地 anisette 库。"""
+    global _remote_server
+    _remote_server = (url or "").strip() or None
+
+
+def _fetch_remote_headers(url: str) -> dict[str, Any]:
+    """GET 远程 anisette 服务器，返回完整 anisette 头字典。"""
+    import requests
+    import certifi
+    target = url if url.startswith("http") else "https://" + url
+    # 根路径 GET 返回完整 anisette 头（v2 协议）；ani.sidestore.io 实测 200 + 全字段。
+    r = requests.get(target.rstrip("/") + "/", timeout=15, verify=certifi.where())
+    r.raise_for_status()
+    data = r.json()
+    if not isinstance(data, dict) or "X-Apple-I-MD" not in data:
+        raise AnisetteError("远程 anisette 服务器返回无效（缺 X-Apple-I-MD）")
+    return {k: str(v) for k, v in data.items()}
+
 
 def _download_libs() -> io.BytesIO:
     """拉取 Apple provisioning 库：每个源最多 3 次重试。
@@ -239,7 +265,14 @@ def _wire_safe_headers(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def get_headers() -> dict[str, Any]:
-    """返回一套新鲜 anisette 头（GSA 请求用）。"""
+    """返回一套新鲜 anisette 头（GSA 请求用）。
+
+    优先用远程 anisette v3（专属 provisioning，Apple 认；v2 共享头会被 503 拒）；
+    未设远程服务器时回退本地 anisette 库（需本机装 anisette 包 + Apple 库）。
+    """
+    if _remote_server:
+        from . import remote_anisette
+        return remote_anisette.get_headers(_remote_server)
     with _provider_lock:
         provider = _load_provider()
         return _wire_safe_headers(dict(provider.get_data()))

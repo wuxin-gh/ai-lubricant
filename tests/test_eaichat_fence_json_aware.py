@@ -37,8 +37,10 @@ _REAL_DELTAS = [
 ]
 
 
-def _replay(deltas, enabled=True):
+def _replay(deltas, enabled=True, names=None):
     state = {"enabled": enabled, "buf": ""}
+    if names is not None:
+        state["names"] = frozenset(names)
     text_parts, calls = [], []
     for d in deltas:
         for chunk in CH._tool_stream_feed(state, d):
@@ -121,6 +123,325 @@ def test_two_fences_in_one_stream():
     text, calls = _replay([a, "中间说明。", b])
     assert [c["function"]["name"] for c in calls] == ["Read", "Read"]
     assert text == "中间说明。"
+
+
+# ==================== 方法是否存在校验（以入参 tools 为准）====================
+# 渠道返回里工具调用是正文围栏文本，name 写什么全由模型决定。客户端只会执行自己
+# 声明过的工具，收到不存在的工具名直接报错。所以下发前对照本次请求的 tools 过滤：
+# 方法存在 -> 按方法返回 tool_calls；方法不存在（上游注入了它自己的工具 / 模型幻觉
+# 出别家工具名）-> 整块原封不动当正文透传，不吞、不伪造调用。
+
+
+def test_known_method_emits_tool_calls():
+    """方法在入参 tools 里 -> 按方法返回。"""
+    block = '```tool_function\n{"name": "Read", "arguments": {"file_path": "a.py"}}\n```'
+    text, calls = _replay([block], names=["Read", "Bash"])
+    assert len(calls) == 1
+    assert calls[0]["function"]["name"] == "Read"
+    assert text == ""
+
+
+def test_unknown_method_returned_verbatim():
+    """方法不在入参 tools 里 -> 整块原封不动当正文返回，一个字符都不改。"""
+    block = '```tool_function\n{"name": "draw_picture", "arguments": {"prompt": "猫"}}\n```'
+    text, calls = _replay([block], names=["Read", "Bash"])
+    assert calls == []
+    assert text == block, "未知方法的围栏必须原样透传"
+
+
+def test_unknown_method_rescued_at_flush_returned_verbatim():
+    """流末救回的残留调用同样要过校验：方法不存在 -> 原样补发正文，不发 tool_calls。"""
+    text, calls = _replay(
+        ['```tool_function\n{"name": "upstream_search", "arguments": {"q": "x"}}'],
+        names=["Read"],
+    )
+    assert calls == []
+    assert "upstream_search" in text
+    assert text.startswith("```tool_function")
+
+
+def test_mixed_known_and_unknown_blocks():
+    """同一轮里已知方法照发调用，未知方法透传正文，互不影响。"""
+    known = '```tool_function\n{"name": "Bash", "arguments": {"command": "ls"}}\n```'
+    unknown = '```tool_function\n{"name": "upstream_search", "arguments": {"q": "x"}}\n```'
+    text, calls = _replay([unknown, "中间说明。", known], names=["Bash"])
+    assert [c["function"]["name"] for c in calls] == ["Bash"]
+    assert unknown in text
+    assert "中间说明。" in text
+
+
+def test_no_names_means_no_filtering():
+    """入参 tools 拿不到名字清单（names 缺省/为空）时不过滤，维持既有行为。"""
+    block = '```tool_function\n{"name": "Read", "arguments": {"file_path": "a"}}\n```'
+    text, calls = _replay([block])
+    assert len(calls) == 1
+    assert text == ""
+
+
+def test_stream_chat_declares_validation_and_names_source():
+    """stream_chat 的 tool_state 必须带入参 tools 的名字清单；渠道声明 TOOL_PARSE_IN_CHANNEL。"""
+    import inspect
+
+    src = inspect.getsource(CH.EaiChatChannel.stream_chat)
+    assert '_known_tool_names(kwargs.get("tools"))' in src
+    assert getattr(CH.EaiChatChannel, "TOOL_PARSE_IN_CHANNEL", False) is True
+
+
+# ==================== Anthropic Messages SSE 兼容（opus 系模型）====================
+# 上游 opus 系模型走 event: message_start / content_block_delta 形态：thinking 块与
+# text 块分开，围栏调用在 text 块里按 text_delta 逐字下发（开标记会被切成 ` / ``tool /
+# _function 三段）。翻译层必须与 OpenAI 分支同口径：thinking→thinking、text→围栏
+# 缓冲（方法校验）、usage 攒到 message_delta 一次性下发。
+
+
+def _anthropic_stream_events(known=True):
+    """与现网抓包同构的 Anthropic 事件序列：thinking 块 + text 块内嵌围栏调用。"""
+    call = {"name": "Bash" if known else "draw_picture", "arguments": {
+        "command": "cd /d/code/ai-lubricant/user-frontend && npx vite build 2>&1 | tail -5",
+        "description": "Build frontend to verify changes", "timeout": 600000}}
+    fence_body = json.dumps(call, ensure_ascii=False)
+    text_deltas = [
+        "组件已完整。现在补上缺失的 imports，然后跑构建验证：\n",
+        "`", "``tool", "_function", "\n",  # 开标记被切成三段（现网真实分片）
+        fence_body[:15], fence_body[15:],
+        "\n```",
+    ]
+    events = [
+        ("message_start", {"type": "message_start", "message": {
+            "id": "chatcmpl-eea0e92a", "type": "message", "role": "assistant",
+            "model": "opus", "usage": {"input_tokens": 156263, "output_tokens": 0}}}),
+        ("ping", {"type": "ping"}),
+        ("content_block_start", {"type": "content_block_start", "index": 0,
+                                 "content_block": {"type": "thinking", "thinking": "",
+                                                   "signature": "cHJveHktc3ludGhldGlj"}}),
+        ("content_block_delta", {"type": "content_block_delta", "index": 0,
+                                 "delta": {"type": "thinking_delta",
+                                           "thinking": "The file content looks good — "}}),
+        ("content_block_delta", {"type": "content_block_delta", "index": 0,
+                                 "delta": {"type": "thinking_delta",
+                                           "thinking": "but I need to update the imports."}}),
+        ("content_block_delta", {"type": "content_block_delta", "index": 0,
+                                 "delta": {"type": "signature_delta", "signature": "cHJveHkt"}}),
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        ("content_block_start", {"type": "content_block_start", "index": 1,
+                                 "content_block": {"type": "text", "text": ""}}),
+    ]
+    events += [("content_block_delta", {"type": "content_block_delta", "index": 1,
+                                        "delta": {"type": "text_delta", "text": t}})
+               for t in text_deltas]
+    events += [
+        ("content_block_stop", {"type": "content_block_stop", "index": 1}),
+        ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"},
+                           "usage": {"input_tokens": 169561, "output_tokens": 283}}),
+        ("message_stop", {"type": "message_stop"}),
+    ]
+    return events
+
+
+def _replay_anthropic(events, names=("Bash",)):
+    tool_state = {"enabled": True, "buf": "", "names": frozenset(names)}
+    anth_state = {}
+    thinking, text_parts, calls, usages = [], [], [], []
+    for etype, data in events:
+        for chunk in CH._anthropic_event_chunks(etype, data, tool_state, anth_state):
+            if chunk.get("thinking"):
+                thinking.append(chunk["thinking"])
+            if chunk.get("content"):
+                text_parts.append(chunk["content"])
+            calls.extend(chunk.get("tool_calls") or [])
+            if chunk.get("usage"):
+                usages.append(chunk["usage"])
+    for chunk in CH._tool_stream_flush(tool_state):
+        if chunk.get("content"):
+            text_parts.append(chunk["content"])
+        calls.extend(chunk.get("tool_calls") or [])
+    return ("".join(thinking), "".join(text_parts), calls, usages, anth_state)
+
+
+def test_anthropic_stream_thinking_fence_and_usage():
+    """thinking 聚合、围栏调用切出、usage 只在 message_delta 发一次。"""
+    thinking, text, calls, usages, anth = _replay_anthropic(_anthropic_stream_events())
+    assert thinking == "The file content looks good — but I need to update the imports."
+    assert len(calls) == 1
+    assert calls[0]["function"]["name"] == "Bash"
+    args = json.loads(calls[0]["function"]["arguments"])
+    assert args["command"].startswith("cd /d/code/ai-lubricant/user-frontend")
+    assert args["timeout"] == 600000
+    # 正文只剩围栏前的自然语言，无 JSON 碎片、无围栏残骸
+    assert text == "组件已完整。现在补上缺失的 imports，然后跑构建验证：\n"
+    assert "```" not in text and '"name"' not in text
+    # usage：message_start 的 output_tokens=0 不发，message_delta 发一次全量
+    assert usages == [{"input_tokens": 169561, "output_tokens": 283}]
+    assert anth["usage_sent"] is True
+
+
+def test_anthropic_stream_unknown_method_passthrough():
+    """Anthropic 路径同样执行「方法是否存在」校验：未知方法整块原样透传。"""
+    thinking, text, calls, usages, _ = _replay_anthropic(
+        _anthropic_stream_events(known=False), names=("Bash",))
+    assert calls == []
+    assert usages == [{"input_tokens": 169561, "output_tokens": 283}]
+    assert "```tool_function" in text and '"draw_picture"' in text
+    assert text.count("```tool_function") == 1
+
+
+def test_anthropic_stream_silent_events_produce_nothing():
+    """ping / content_block_start|stop / message_stop / signature_delta 不产生可见输出。"""
+    thinking, text, calls, usages, anth = _replay_anthropic(
+        [("ping", {"type": "ping"}),
+         ("content_block_start", {"type": "content_block_start", "index": 0,
+                                  "content_block": {"type": "text", "text": ""}}),
+         ("content_block_delta", {"type": "content_block_delta", "index": 0,
+                                  "delta": {"type": "signature_delta", "signature": "x"}}),
+         ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+         ("message_stop", {"type": "message_stop"})])
+    assert thinking == "" and text == "" and calls == [] and usages == []
+
+
+def test_anthropic_usage_accumulates_and_not_sent_without_output_tokens():
+    """message_start 只攒 input（output=0 不发）；截断流没等到 message_delta 时不误发。"""
+    tool_state = {"enabled": True, "buf": "", "names": frozenset({"Bash"})}
+    anth = {}
+    for etype, data in [
+        ("message_start", {"type": "message_start", "message": {
+            "usage": {"input_tokens": 156263, "output_tokens": 0}}}),
+    ]:
+        assert CH._anthropic_event_chunks(etype, data, tool_state, anth) == []
+    assert anth["usage"] == {"input_tokens": 156263, "output_tokens": 0}
+    assert anth.get("usage_sent") is None, "output_tokens=0 时绝不能提前发 usage"
+
+
+def test_anthropic_type_recognized_without_event_line():
+    """上游不发 event: 行、只有 data.type 时同样识别（parse_sse_event 的兜底口径）。"""
+    # parse_sse_event 对裸 data: 行回落 data.type —— 这里直接验证事件类型集合覆盖
+    assert "content_block_delta" in CH._ANTHROPIC_EVENT_TYPES
+    assert "message_stop" in CH._ANTHROPIC_EVENT_TYPES
+    assert "chat.completion.chunk" not in CH._ANTHROPIC_EVENT_TYPES
+
+
+# ==================== OpenAI 终止帧 / 审计帧（deepseek-v4-pro 实抓形态）====================
+# 收尾两帧是新形态：audit_result 标记帧（顶层带 audit_result、choices 是空 delta）与
+# finish_reason 终止帧（reason 挂在 choice 上、不在 delta 里）。finish_reason 必须
+# 暂存到流末围栏 flush 之后下发——围栏未闭合时 tool_calls 靠 flush 救回，提前发
+# finish 会出现「finish 之后又来 tool_calls」的乱序。
+
+
+def _replay_openai(events, names=("Bash",)):
+    """按 stream_chat 的 OpenAI 分支同序回放：帧翻译 -> 流末 flush -> finish_reason。"""
+    tool_state = {"enabled": True, "buf": "", "names": frozenset(names)}
+    state: dict = {}
+    thinking, text_parts, calls = [], [], []
+    for data in events:
+        for chunk in CH._openai_event_chunks(data, tool_state, state):
+            if chunk.get("thinking"):
+                thinking.append(chunk["thinking"])
+            if chunk.get("content"):
+                text_parts.append(chunk["content"])
+            calls.extend(chunk.get("tool_calls") or [])
+    for chunk in CH._tool_stream_flush(tool_state):
+        if chunk.get("content"):
+            text_parts.append(chunk["content"])
+        calls.extend(chunk.get("tool_calls") or [])
+    return "".join(thinking), "".join(text_parts), calls, state.get("finish_reason", "")
+
+
+def test_openai_stream_fence_audit_finish_end_to_end():
+    """实抓流全链路：空首帧 -> reasoning -> 围栏（content 逐帧拼）-> audit 帧 -> 终止帧。"""
+    events = [
+        # 首帧：content 为空串
+        {"choices": [{"delta": {"role": "assistant", "type": "text", "content": ""}, "index": 0}]},
+        # reasoning 增量
+        {"choices": [{"delta": {"role": "assistant", "type": "text",
+                                "reasoning_content": "Let me check the current status."},
+                      "index": 0}]},
+        # 围栏调用逐帧拼（content 流；JSON 花括号必须配平，闭标才认得出来）
+        {"choices": [{"delta": {"role": "assistant", "type": "text",
+                                "content": "```tool_function\n{\""}, "index": 0}]},
+        {"choices": [{"delta": {"role": "assistant", "type": "text",
+                                "content": "name\": \"Bash\", \"arguments\": "
+                                           "{\"command\": \"git status\"}}\n```"},
+                      "index": 0}]},
+        # 审计帧：audit_result="pass"，choices 是空 delta
+        {"audit_result": "pass",
+         "choices": [{"delta": {"role": "assistant", "type": "text"}, "index": 0}]},
+        # 终止帧：finish_reason 挂在 choice 上
+        {"choices": [{"delta": {"role": "assistant", "type": "text"},
+                      "finish_reason": "stop", "index": 0}]},
+    ]
+    thinking, text, calls, finish = _replay_openai(events)
+    assert thinking == "Let me check the current status."
+    assert [c["function"]["name"] for c in calls] == ["Bash"]
+    assert text == ""  # 围栏整体被消费成 tool_calls，正文无 JSON 碎片
+    assert finish == "stop"
+    # audit 帧（pass）与空 delta 帧不产生任何输出——text/thinking 已隐含验证
+
+
+def test_openai_finish_reason_length_preserved():
+    """真实终止原因（length）必须保留，不能被兜底成 stop。"""
+    events = [
+        {"choices": [{"delta": {"type": "text", "content": "半截正文"}, "index": 0}]},
+        {"choices": [{"delta": {"type": "text"}, "finish_reason": "length", "index": 0}]},
+    ]
+    thinking, text, calls, finish = _replay_openai(events)
+    assert text == "半截正文"
+    assert finish == "length"
+
+
+def test_openai_unclosed_fence_finish_after_rescued_call():
+    """围栏未闭合 + 终止帧：调用靠流末救回；finish_reason 暂存设计保证它排在调用之后。"""
+    events = [
+        {"choices": [{"delta": {"type": "text", "content":
+                                "```tool_function\n{\"name\": \"Bash\", "
+                                "\"arguments\": {\"command\": \"ls\"}}"}, "index": 0}]},
+        {"choices": [{"delta": {"type": "text"}, "finish_reason": "stop", "index": 0}]},
+    ]
+    thinking, text, calls, finish = _replay_openai(events)
+    assert [c["function"]["name"] for c in calls] == ["Bash"]  # flush 救回，不随缓冲丢
+    assert finish == "stop"  # 终止帧先到也不丢
+
+
+def test_openai_audit_non_pass_is_observational_only():
+    """audit 非 pass：不产生输出、不抛错（上游审计拒绝另有 error 帧或断流，这里只观测）。"""
+    events = [
+        {"audit_result": "reject",
+         "choices": [{"delta": {"role": "assistant", "type": "text"}, "index": 0}]},
+    ]
+    assert _replay_openai(events) == ("", "", [], "")
+
+
+def test_openai_real_capture_unbalanced_json_rescued_at_flush():
+    """实抓回归（deepseek-v4-pro）：外层 JSON 少一个 }（只闭了 arguments），闭标在
+    depth=1 处不被认，整块滞留到流末；flush 用 allow_unclosed=1 补一个 } 救回调用，
+    正文零残留。"""
+    events = [
+        {"choices": [{"delta": {"type": "text", "content": "```tool_function\n{\""}, "index": 0}]},
+        {"choices": [{"delta": {"type": "text", "content": "name\": \"Bash\", \"arguments\": "
+                                                           "{\"command\": \"git status\"}"}, "index": 0}]},
+        {"choices": [{"delta": {"type": "text", "content": "\n```"}, "index": 0}]},
+        {"choices": [{"delta": {"type": "text"}, "finish_reason": "stop", "index": 0}]},
+    ]
+    thinking, text, calls, finish = _replay_openai(events)
+    assert [c["function"]["name"] for c in calls] == ["Bash"]
+    args = json.loads(calls[0]["function"]["arguments"])
+    assert args == {"command": "git status"}
+    assert text == "", "半截 JSON 块不能漏成正文"
+    assert finish == "stop"
+
+
+def test_balanced_json_object_strict_vs_rescue():
+    """feed 路径（allow_unclosed=0）严格配平；救援（1）只放行外层缺 1 个 } 的形态，
+    缺 2 个（字符串态还开着 / 深度太深）不救——那种半截救回来也是垃圾调用。"""
+    strict = '{"name": "Bash", "arguments": {"command": "ls"}'
+    assert CH._balanced_json_object(strict) == ""
+    assert CH._balanced_json_object(strict, allow_unclosed=1).endswith("}}")
+    # 缺 2 个不救
+    assert CH._balanced_json_object('{"name": "Bash", "arguments": {"a": 1', allow_unclosed=1) == ""
+    # 字符串没闭合不救（补 } 也非法 JSON）
+    assert CH._balanced_json_object('{"name": "Ba', allow_unclosed=1) == ""
+    # 正常配平不受影响
+    ok = '{"name": "Bash", "arguments": {"command": "ls"}}'
+    assert CH._balanced_json_object(ok) == ok
+    assert CH._balanced_json_object(ok, allow_unclosed=1) == ok
 
 
 # ==================== 请求装配：覆盖段必须真的进 messages ====================

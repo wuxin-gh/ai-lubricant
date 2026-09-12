@@ -151,6 +151,25 @@ async def _require_execution_node(node_id: str) -> dict:
     return row
 
 
+async def _require_user_node(user: User, node_id: str, *, execution_only: bool = False) -> dict:
+    """用户侧节点守卫：``user_can_use_node`` 派生管理权（直接绑定或经所属已绑定
+    管理节点派生），可选再卡执行节点角色。
+
+    管理节点在用户侧恒只读（治理动作归管理端），删除/升级/装编辑器等运行时
+    管理动作仅对执行节点开放——``execution_only`` 是那批路由的硬闸。
+    """
+    if await nodes_service.user_can_use_node(str(user.id), node_id) is None:
+        raise HTTPException(status_code=403, detail="无权管理该节点")
+    row = await _guard(nodes_service.get_node_if_exists(node_id))
+    if row is None:
+        raise HTTPException(status_code=404, detail="节点不存在")
+    if execution_only:
+        role = str(row.get("role") or "").strip()
+        if role != "execution" or bool(row.get("is_passive")):
+            raise HTTPException(status_code=422, detail="仅执行节点支持该操作")
+    return row
+
+
 async def _audit_node_shell_approval(
     request: Request,
     user: User,
@@ -505,6 +524,62 @@ async def admin_install_node_host_tool(
     )
 
 
+@admin_router.post("/nodes/{node_id}/refresh-labels")
+async def admin_refresh_node_labels(
+    node_id: str, _: User = Depends(_require_admin)
+) -> dict:
+    """让在线节点重新探测全部能力标签并即时更新（无需重启节点进程）。
+
+    节点回传与注册时同构的能力快照（编辑器/host tool 版本、机器信息、
+    运维者 --labels）；服务端合并进存量 capabilities。节点离线或为旧版
+    （不认识 refresh_labels 帧）时分别报 503/超时。
+    """
+    return await _guard(nodes_service.refresh_node_labels(node_id))
+
+
+# ── 异步 Xcode 安装任务（host-tools/xcode/jobs 三件套；与 sync install 并存） ──
+
+@admin_router.post("/nodes/{node_id}/host-tools/xcode/jobs")
+async def admin_start_node_xcode_install(
+    node_id: str, request: Request, _: User = Depends(_require_admin)
+) -> dict:
+    """启动一次 Xcode 自动安装任务，立即返回 job_id（节点后台执行）。
+
+    body 可选 target_version（"latest" 或显式版本号）与 proxy_config_id；
+    缺省取配置默认。进度用 GET .../jobs/{job_id} 轮询，取消用 POST cancel。
+    """
+    body: dict = {}
+    try:
+        parsed = await request.json()
+        if isinstance(parsed, dict):
+            body = parsed
+    except Exception:
+        body = {}
+    return await _guard(
+        nodes_service.start_xcode_install_job(
+            node_id,
+            target_version=str(body.get("target_version") or ""),
+            proxy_config_id=str(body.get("proxy_config_id") or ""),
+        )
+    )
+
+
+@admin_router.get("/nodes/{node_id}/host-tools/xcode/jobs/{job_id}")
+async def admin_get_node_xcode_install(
+    node_id: str, job_id: str, _: User = Depends(_require_admin)
+) -> dict:
+    """轮询 Xcode 安装任务快照（stage/percent/字节/日志尾/终态）。"""
+    return await _guard(nodes_service.get_xcode_install_job(node_id, job_id))
+
+
+@admin_router.post("/nodes/{node_id}/host-tools/xcode/jobs/{job_id}/cancel")
+async def admin_cancel_node_xcode_install(
+    node_id: str, job_id: str, _: User = Depends(_require_admin)
+) -> dict:
+    """请求取消运行中的 Xcode 安装任务（节点在阶段边界协作取消）。"""
+    return await _guard(nodes_service.cancel_xcode_install_job(node_id, job_id))
+
+
 @admin_router.post("/nodes/{node_id}/editors/{editor}/upgrade")
 async def admin_upgrade_node_editor(
     node_id: str, editor: str, _: User = Depends(_require_admin)
@@ -705,6 +780,35 @@ async def team_list_my_nodes(user: User = Depends(get_current_user)) -> dict:
     return await _guard(nodes_service.list_my_nodes(str(user.id)))
 
 
+@team_router.get("/proxies")
+async def team_list_proxies(user: User = Depends(get_current_user)) -> list[dict]:
+    """用户侧代理池精简视图：只返回 id+name+mode，不暴露 url/用户名/密码。
+
+    让有管理节点权限的成员在添加执行节点时选择下载代理；具体地址/凭据由服务端
+    解析后烘焙进 bootstrap，用户侧不需要也不该看到。
+    """
+    from config import CONFIG_STORE
+
+    try:
+        main_cfg = await CONFIG_STORE.read_main_async()
+    except Exception:
+        return []
+    proxies = main_cfg.get("proxies") if isinstance(main_cfg, dict) else []
+    if not isinstance(proxies, list):
+        return []
+    # 仅暴露 node 模式以外的（node 隧道对节点自身下载无意义，resolve_proxy 会拒绝）。
+    out: list[dict] = []
+    for p in proxies:
+        if not isinstance(p, dict):
+            continue
+        mode = str(p.get("mode") or "network").strip().lower()
+        # direct 模式允许选择：用户可能明确要求 Apple ID 登录走服务端直连。
+        # node 模式也暴露给前端：Apple ID 登录可经节点隧道出网；节点二进制下载
+        # 那侧仍由 resolve_proxy 拒绝 node 模式（两条用途正交）。
+        out.append({"id": p.get("id") or "", "name": (p.get("name") or "").strip(), "mode": mode})
+    return out
+
+
 @team_router.get("/groups/{group_id}/nodes")
 async def team_list_group_nodes(
     group_id: str, team_id: str = Depends(get_current_team_id)
@@ -855,3 +959,160 @@ async def team_delete_execution_node(
         source_ip=ip, user_agent=ua,
     )
     return result
+
+
+# ── team self-service: execution-node runtime management ─────────────────────
+#
+# 删除/统一升级/编辑器升级/升级代理绑定原来只在管理端；这里按同样的服务层能力
+# 开一条用户侧通道，权限口径与其他 team 节点路由一致（``user_can_use_node`` 派生
+# 管理权），并统一加一道「仅执行节点」硬闸——管理节点在用户侧恒只读。
+
+
+@team_router.get("/nodes/latest-release")
+async def team_latest_node_release(user: User = Depends(get_current_user)) -> dict:
+    """用户侧节点详情「运行时」tab 用：服务端缓存的节点发行版本摘要。
+
+    全局只读信息（版本号/资产清单，不含任何凭据），登录即可读；节点级判定
+    （该节点是否落后）由 ``GET /nodes/{node_id}`` 的 detail 接口给出。
+    """
+    import node_release_catalog
+
+    latest = await node_release_catalog.get_latest_release()
+    cov = node_release_catalog.coverage(latest)
+    return {
+        "version": str(latest.get("version") or ""),
+        "version_notes": str(latest.get("version_notes") or ""),
+        "release_tag": str(latest.get("release_tag") or ""),
+        "updated_at": str(latest.get("updated_at") or ""),
+        "stale": bool(latest.get("stale")),
+        "coverage": cov,
+        "assets": cov,
+    }
+
+
+@team_router.get("/nodes/{node_id}")
+async def team_get_node_detail(node_id: str, user: User = Depends(get_current_user)) -> dict:
+    """用户侧单节点详情 + 服务端算好的版本判定（与管理端 get_node_detail 同源）。
+
+    详情弹框打开、升级/装编辑器后回调都调这里刷新；返回的 node 形状与管理端
+    ``/admin/nodes/{id}`` 一致（role/is_passive/capabilities/connected/…）。
+    """
+    await _require_user_node(user, node_id)
+    return await _guard(nodes_service.get_node_detail(node_id))
+
+
+@team_router.get("/nodes/{node_id}/upgrade-defaults")
+async def team_node_upgrade_defaults(
+    node_id: str, user: User = Depends(get_current_user)
+) -> dict:
+    """该节点上次成功升级用的代理 id，供升级弹窗预选（空=直连）。"""
+    row = await _require_user_node(user, node_id, execution_only=True)
+    return {"last_proxy_id": str(row.get("last_proxy_config_id") or "")}
+
+
+class TeamUpgradeNodeReq(BaseModel):
+    proxy_config_id: str = ""
+
+
+@team_router.post("/nodes/{node_id}/upgrade")
+async def team_upgrade_node(
+    node_id: str, body: TeamUpgradeNodeReq, user: User = Depends(get_current_user)
+) -> dict:
+    """用户侧统一升级执行节点：Runtime 热切换 + 节点程序替换，与管理端同口径。
+
+    服务端按 version.json 选资产、经所选代理探测可达后下发；只提交
+    ``proxy_config_id``，下载地址与校验和一律服务端解析。
+    """
+    await _require_user_node(user, node_id, execution_only=True)
+    result = await _guard(
+        nodes_service.upgrade_node(node_id, proxy_config_id=body.proxy_config_id or "")
+    )
+    await _audit_node_action(user, node_id, "node.upgrade", {"proxy_config_id": body.proxy_config_id or ""}, result)
+    return result
+
+
+@team_router.post("/nodes/{node_id}/editors/{editor}/upgrade")
+async def team_upgrade_node_editor(
+    node_id: str, editor: str, user: User = Depends(get_current_user)
+) -> dict:
+    """用户侧升级执行节点上一个已安装的编辑器 CLI 到最新版本。"""
+    if editor not in {"claude", "codex", "gemini", "opencode", "cursor"}:
+        raise HTTPException(status_code=400, detail="不支持该编辑器")
+    await _require_user_node(user, node_id, execution_only=True)
+    result = await _guard(nodes_service.manage_editor(node_id, editor, "upgrade"))
+    await _audit_node_action(user, node_id, "node.editor_upgrade", {"editor": editor}, result)
+    return result
+
+
+@team_router.get("/nodes/{node_id}/proxy-config")
+async def team_get_node_proxy_config(
+    node_id: str, user: User = Depends(get_current_user)
+) -> dict:
+    """读取执行节点绑定的出口代理（proxy_config_id + 解析后的代理模式）。"""
+    await _require_user_node(user, node_id, execution_only=True)
+    return await _guard(nodes_service.get_node_proxy_config(node_id))
+
+
+@team_router.put("/nodes/{node_id}/proxy-config")
+async def team_update_node_proxy_config(
+    node_id: str, body: NodeProxyConfigReq, user: User = Depends(get_current_user)
+) -> dict:
+    """更新执行节点绑定的出口代理并推送给该在线节点（空 id 即直连）。"""
+    await _require_user_node(user, node_id, execution_only=True)
+    result = await _guard(
+        nodes_service.update_node_proxy_config(node_id, body.proxy_config_id or "")
+    )
+    await _audit_node_action(
+        user, node_id, "node.proxy_config", {"proxy_config_id": body.proxy_config_id or ""}, result
+    )
+    return result
+
+
+@team_router.delete("/nodes/{node_id}")
+async def team_delete_node(
+    node_id: str, request: Request, user: User = Depends(get_current_user)
+) -> dict:
+    """用户侧删除执行节点，与管理端同口径：
+
+    pending（从未上线）→ 撤销入驻（未注册删记录）；其余状态 → 硬删除（记录从
+    台账消失，并清理全部分组绑定/任务占用/shell 授权）。管理节点不允许删除。
+    """
+    row = await _require_user_node(user, node_id, execution_only=True)
+    if str(row.get("status") or "") == "pending":
+        result = await _guard(nodes_service.revoke_onboard_node(node_id))
+    else:
+        result = await _guard(nodes_service.delete_node(node_id))
+    ip, ua = client_meta(request)
+    try:
+        from .deps import resolve_team_id
+
+        await team_users_service.record_audit(
+            await resolve_team_id(str(user.id)),
+            str(user.id),
+            "node.delete",
+            request={"node_id": node_id, "surface": "team"},
+            response=result,
+            source_ip=ip,
+            user_agent=ua,
+        )
+    except Exception:  # noqa: BLE001 - 审计失败不能让已完成的删除报错
+        pass
+    return result
+
+
+async def _audit_node_action(
+    user: User, node_id: str, operation: str, request_payload: dict, response_payload: dict
+) -> None:
+    """节点运行时管理动作（升级/装编辑器/改代理）best-effort 审计。"""
+    try:
+        from .deps import resolve_team_id
+
+        await team_users_service.record_audit(
+            await resolve_team_id(str(user.id)),
+            str(user.id),
+            operation,
+            request={"node_id": node_id, **request_payload},
+            response=response_payload,
+        )
+    except Exception:  # noqa: BLE001
+        return

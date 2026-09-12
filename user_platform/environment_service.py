@@ -248,6 +248,26 @@ async def add_environment_resource(
     allowed = {item["id"]: item for item in await visible_references(user_id, team_id, kind)}
     reference = allowed.get(str(rid))
     if reference is None:
+        # 双轨兜底：装环境存的是裸 UUID（TaskEnvironmentResource.resource_id），
+        # 新表（统一资源池）引用在此按可见性识别。MCP 不走池引用——任务 MCP
+        # 链按 owned_entity_id 落 mcp_services grant，池引用没有归属服务。
+        if kind != "mcp":
+            from .resource_reference_service import _team_is_admin
+
+            import resource_store
+
+            is_admin = await _team_is_admin(user_id, team_id)
+            # skill 通道混排：单 skill + 存量 skills 集合 + plugin 容器（带 entries）。
+            types = ("skill", "skills", "plugin") if kind == "skill" else (kind,)
+            for t in types:
+                v2_rows = await resource_store.visible_references(
+                    user_id, team_id, resource_type=t, is_admin=is_admin,
+                )
+                hit = next((row for row in v2_rows if str(row["id"]) == str(rid)), None)
+                if hit is not None:
+                    reference = hit
+                    break
+    if reference is None:
         raise EnvironmentError("permission_denied", "该资源未授权给你，无法加入环境")
     if await TaskEnvironmentResource.filter(env_id=row.id, kind=kind, resource_id=rid).exists():
         raise EnvironmentError("conflict", "该资源已在环境中")

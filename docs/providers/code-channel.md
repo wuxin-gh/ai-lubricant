@@ -653,6 +653,7 @@ class AutoRefreshChannel:
 | `SUPPORTS_MULTI_MESSAGES` | False | 是否把多轮 messages 整批发给上游 |
 | `NEEDS_STREAM_TOOL_FALLBACK` | False | 流式工具调用降级开关 |
 | `TOOLS_AS_PROMPT` | False | 上游不认 OpenAI function calling 时把工具说明进 system（见场景 K） |
+| `TOOL_PARSE_IN_CHANNEL` | False | 围栏解析（含「调用名是否在入参 tools 里」校验）由渠道自己做；框架流式/非流式出口不再对 content 二次解析围栏 |
 | `TOOLS_PROMPT_FORMAT` | "xml" | 文本工具形态：`xml`/`json`/`hermes` |
 | `REQUIRES_BASE_URL` | True | 渠道地址是否必填；不打外网的 spec（Echo、本地 mock）写 False 豁免 |
 | `ACCOUNT_FIELDS` | () | 账号字段名清单，挂实例属性；与 `account_schema` 字段求并集 |

@@ -84,7 +84,13 @@ class _Client:
             from user_platform.node_client.errors import Code, RPCError
 
             raise RPCError(Code.NOT_FOUND, f"session {session_id} is not placed on any node")
-        return {"accepted": True}
+        # Connect JSON omits proto3 zero-value fields, so a healthy ack
+        # (NodeSessionConfigAck ok=true) serializes as {"ok": true}; a not-ok
+        # ack drops the ``ok`` key entirely. Mirror that wire shape so the
+        # probe actually exercises the omission branch (see the not-ok probe
+        # test below) instead of a synthetic {"accepted": True} that no real
+        # node-server response ever carries.
+        return {"ok": True}
 
     async def send_session_input(self, session_id, kind, content, **kwargs):
         index = len(self.sent)
@@ -924,16 +930,22 @@ async def test_runtime_worker_leaves_healthy_processing_task_alone(monkeypatch):
 async def test_start_task_runtime_heals_not_ok_probe_ack(monkeypatch):
     """A live binding whose node lost the in-memory session must re-dispatch.
 
-    ``start_node_session_runtime`` answers HTTP 200 with ``ok=False`` (no
-    RPCError) when the node cannot place the session — e.g. the execution node
-    restarted and its in-memory session map is gone while the control-plane
-    binding row survived. The probe must read the ack body and treat the handle
-    as stale, or start would return a phantom session that 404s on first send.
+    ``start_node_session_runtime`` answers HTTP 200 with NO ``ok`` field when the
+    node cannot place the session (its ``startRuntime`` returns an error → the
+    ack is ``ok=false``), e.g. the execution node restarted and its in-memory
+    session map is gone while the control-plane binding row survived. Connect
+    JSON omits proto3 zero-value fields, so ``ok=false`` serializes to
+    ``{"error": ...}`` without an ``ok`` key — a probe that only catches an
+    explicit ``ok is False`` misses this and trusts the dead handle. The probe
+    must treat anything that is not an explicit ``ok=true`` as stale, or start
+    would return a phantom session that 404s on first send.
     """
     client = _Client()
 
     async def probe(session_id):
-        return {"ok": False, "error": f"start session {session_id}: not found"}
+        # Mirror the real wire body: Connect JSON omits the default ``ok=false``,
+        # leaving only the error string. The probe must still detect this as stale.
+        return {"error": f"start session {session_id}: not found"}
 
     client.start_node_session_runtime = probe
     task = _task(node_session_id="live-session")

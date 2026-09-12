@@ -580,18 +580,16 @@ def derive_target_modules_from_probe(probe: dict) -> list[str]:
 
 
 def derive_primary_type(probe: dict, repo_full_name: str = "") -> str:
-    """单选主类型，优先级 ``skills > plugin > skill > mcp > prompt``。PURE。
+    """单选主类型，优先级 ``plugin > skill > mcp > prompt``。PURE。
 
-    与 :func:`derive_target_modules_from_probe`（多模块清单）互补：那个返回"仓库
-    能装成什么"的全部形态，这个返回"默认按哪种形态装"的唯一答案。一个仓库同时
-    是插件（``.claude-plugin/marketplace.json``）又含多个 skill（如 anthropics/skills）
-    时按 skills 走——集合形态更细，能让任务按子技能勾选。
+    插件是容器类型：``.claude-plugin/marketplace.json`` 在场、**或** ≥2 个不同父目录
+    的技能条目，都算插件（后者是原 skills 集合形态，现已归入 plugin——技能集本质就是
+    一个多技能的插件包）。插件按 entries 子技能展开安装（github_clone 逐子技能），
+    或按 download_url 整包 zip 安装（由 resource_data 实际内容决定，不由类型决定）。
 
     判定（按优先级短路）：
-    - ``skills``：≥2 个**不同父目录**的 skill 条目（SKILL.md/AGENTS.md/.cursor 规则
-      按父目录去重——同目录多编辑器形态算一个技能）。
-    - ``plugin``：根 ``.claude-plugin/marketplace.json`` 在场（且 skill 条目 ≤1）。
-    - ``skill``：恰好 1 个 skill 条目。
+    - ``plugin``：marketplace.json 在场，**或** ≥2 个不同父目录的技能条目（容器形态）。
+    - ``skill``：恰 1 个技能条目（无 marketplace.json）。
     - ``mcp``：launch_spec 有 kind（.mcp.json 或 README 唯一 npx/uvx 提示）。
     - ``prompt``：命中 CLAUDE.md/AGENTS.md 提示词文件、且以上都没命中。
     """
@@ -601,9 +599,7 @@ def derive_primary_type(probe: dict, repo_full_name: str = "") -> str:
     files = probe.get("files") if isinstance(probe.get("files"), dict) else {}
     has_plugin = isinstance(files.get(".claude-plugin/marketplace.json"), dict)
     launch, _ = _derive_launch_spec(probe)
-    if len(distinct_paths) >= 2:
-        return "skills"
-    if has_plugin:
+    if has_plugin or len(distinct_paths) >= 2:
         return "plugin"
     if entries:
         return "skill"

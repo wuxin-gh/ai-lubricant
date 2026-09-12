@@ -22,31 +22,36 @@ from typing import Any
 
 import requests
 
-from . import anisette, tls
+from . import anisette, gsa, tls
 from .errors import DeveloperServicesError
 
 _BASE = "https://developerservices2.apple.com/services/QH65B2/"
 _CLIENT_ID = "XABBG36SBA"
 _PROTOCOL_VERSION = "QH65B2"
-_USER_AGENT = "Xcode"
-_XCODE_VERSION = "11.2 (11B41)"
 _APP_INFO = "com.apple.gs.xcode.auth"
 _TIMEOUT = 30
 
 
 def _headers(session: dict[str, Any], anisette_headers: dict[str, str]) -> dict[str, str]:
+    # isideload DeveloperSession::get_headers：anisette 三头 + GS token + 身份 id，
+    # 叠在 GrandSlam base_headers 上（plist Accept + Client-Info + Xcode 头）。
+    # 远程 v3 anisette 不返回 X-Mme-Client-Info，取空会 404——落 isideload 固定值。
     headers = {
         "Content-Type": "text/x-xml-plist",
-        "User-Agent": _USER_AGENT,
+        "User-Agent": "akd/1.0 CFNetwork/808.1.4",
         "Accept": "text/x-xml-plist",
         "Accept-Language": "en-us",
+        "X-Mme-Client-Info": anisette_headers.get("X-Mme-Client-Info")
+        or "<Mac15,7> <macOS;27.0;26A5378j> <com.apple.AuthKit/1 (com.apple.akd/1.0)>",
         "X-Apple-App-Info": _APP_INFO,
-        "X-Xcode-Version": _XCODE_VERSION,
+        "X-Xcode-Version": "27.0 (27A5218g)",
         "X-Apple-I-Identity-Id": session["adsid"],
         "X-Apple-GS-Token": session["auth_token"],
-        "X-Apple-I-Locale": anisette_headers.get("X-Apple-Locale", "en_US"),
     }
-    headers.update(anisette_headers)
+    # v3 服务器 JSON 带 result 等非头键——只透传 X- 头，绝不把垃圾键发给 Apple。
+    for key, value in anisette_headers.items():
+        if key.startswith("X-"):
+            headers[key] = value
     return headers
 
 
@@ -67,15 +72,33 @@ def _request(
     if params:
         body.update(params)
 
-    resp = requests.post(
-        f"{_BASE}{endpoint}?clientId={_CLIENT_ID}",
-        headers=_headers(session, anisette.get_headers()),
-        data=plistlib.dumps(body),
-        timeout=_TIMEOUT,
-        verify=tls.ca_bundle(),
-    )
-    resp.raise_for_status()
-    result = plistlib.loads(resp.content)
+    # GSA 引擎的统一出口：transport（节点隧道）优先，否则 requests + proxies。
+    # 与 gsa 同口径——登录用的出口在物化签名请求时也复用，Apple 对 IP 一致。
+    transport = gsa.current_transport()
+    if transport is not None:
+        try:
+            status, _hdrs, content = transport(
+                "POST",
+                f"{_BASE}{endpoint}?clientId={_CLIENT_ID}",
+                _headers(session, anisette.get_headers()),
+                plistlib.dumps(body),
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise DeveloperServicesError(f"节点隧道签名请求失败：{exc}") from exc
+        if status >= 400:
+            raise DeveloperServicesError(f"developer services HTTP {status}")
+        result = plistlib.loads(content)
+    else:
+        resp = requests.post(
+            f"{_BASE}{endpoint}?clientId={_CLIENT_ID}",
+            headers=_headers(session, anisette.get_headers()),
+            data=plistlib.dumps(body),
+            timeout=_TIMEOUT,
+            verify=tls.ca_bundle(),
+            proxies=gsa.current_proxies(),
+        )
+        resp.raise_for_status()
+        result = plistlib.loads(resp.content)
 
     result_code = result.get("resultCode")
     if result_code not in (0, None, "0"):

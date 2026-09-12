@@ -311,14 +311,29 @@ async def _do_host_file(node_id: str, req: HostFileRequest) -> dict[str, Any]:
             path = _path(req.path)
             qpath = shlex.quote(path)
             if op == "list":
-                command = f"if [ -d {qpath} ]; then find {qpath} -mindepth 1 -maxdepth 1 -printf '%y\\t%s\\t%p\\n'; else exit 2; fi"
+                # 纯 POSIX 实现：GNU find 的 -printf 是 Linux 专属，macOS/BSD find
+                # 直接报 "unknown primary or operator"。cd 进目录用内置 [ ] 判类型、
+                # wc -c 取字节数（FIFO 等特殊文件不打开内容，避免 wc 挂死等写入端），
+                # 输出仍是「类型\t字节数\t绝对路径」，解析协议不变。
+                command = (
+                    f"if [ -d {qpath} ]; then cd {qpath} || exit 2; "
+                    f'for name in .* *; do case "$name" in .|..) continue;; esac; '
+                    f'[ -e "$name" ] || [ -L "$name" ] || continue; '
+                    f'if [ -d "$name" ]; then printf \'d\\t0\\t%s\\n\' "${{PWD%/}}/$name"; '
+                    f'elif [ -f "$name" ]; then printf \'f\\t%s\\t%s\\n\' "$(wc -c < "$name")" "${{PWD%/}}/$name"; '
+                    f'else printf \'f\\t0\\t%s\\n\' "${{PWD%/}}/$name"; fi; '
+                    f"done; else exit 2; fi"
+                )
             elif op == "read":
                 command = f"if [ -f {qpath} ]; then head -c {_MAX_READ_BYTES} {qpath}; else exit 2; fi"
             elif op == "mkdir":
                 command = f"mkdir -p {qpath}"
             elif op == "write":
-                encoded = base64.b64encode(req.content.encode("utf-8")).decode("ascii")
-                command = f"printf %s {shlex.quote(encoded)} | base64 -d > {qpath}"
+                # 不走 base64：macOS base64 解码是 -D（-d 是 GNU 专有）。内容经
+                # shlex.quote 进单引号不做任何展开；NUL 穿不过 argv，明确拒绝。
+                if "\x00" in req.content:
+                    raise HTTPException(status_code=400, detail="仅支持写入 UTF-8 文本内容")
+                command = f"printf %s {shlex.quote(req.content)} > {qpath}"
             elif op == "rename":
                 destination_path = _path(req.destination)
                 command = f"mv {qpath} {shlex.quote(destination_path)}"

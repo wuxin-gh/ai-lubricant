@@ -45,6 +45,10 @@ AGENCY_AGENTS_INTERVAL_HOURS = 24
 AGENTSCOPE_BASE = "https://platform.agentscope.io"
 AGENTSCOPE_INTERVAL_HOURS = 24
 
+# skillhub 技能源：公开 API（/api/skills?sortBy=score + /api/v1/download），无需鉴权。
+SKILLHUB_BASE = "https://api.skillhub.cn"
+SKILLHUB_INTERVAL_HOURS = 24
+
 _CONFIG_KEY = "marketplace"
 
 # 字符串项：DB 缺失时留空，由 marketplace.config 回落到 env/ini/内置默认。
@@ -105,11 +109,18 @@ def _normalize(data: dict[str, Any] | None) -> dict[str, Any]:
     except (TypeError, ValueError):
         as_hours = AGENTSCOPE_INTERVAL_HOURS
     merged["agentscope_interval_hours"] = max(1, min(720, as_hours))
+    merged["skillhub_enabled"] = raw.get("skillhub_enabled") is True
+    try:
+        sh_hours = int(raw.get("skillhub_interval_hours") or SKILLHUB_INTERVAL_HOURS)
+    except (TypeError, ValueError):
+        sh_hours = SKILLHUB_INTERVAL_HOURS
+    merged["skillhub_interval_hours"] = max(1, min(720, sh_hours))
     # 最近一次同步时间（同步收尾时由 record_source_sync 写入，跟配置同一 blob）。
     # 内存 _last_result 重启即失，这里持久化让面板重启后仍能显示「上次 X 时间同步过」。
     for _k in (
         "leaderboard_last_sync_at", "agency_agents_last_sync_at",
         "agency_agents_zh_last_sync_at", "agentscope_last_sync_at",
+        "skillhub_last_sync_at",
     ):
         merged[_k] = str(raw.get(_k) or "").strip()
     return merged
@@ -121,6 +132,7 @@ _SOURCE_KEYS: dict[str, tuple[str, str]] = {
     "agency-agents": ("agency_agents_proxy_id", "agency_agents_last_sync_at"),
     "agency-agents-zh": ("agency_agents_zh_proxy_id", "agency_agents_zh_last_sync_at"),
     "agentscope": ("", "agentscope_last_sync_at"),  # agentscope 不单独配代理，恒走全局
+    "skillhub": ("", "skillhub_last_sync_at"),  # skillhub 国内公开 API，同 agentscope 恒走全局
 }
 
 
@@ -230,6 +242,14 @@ async def update_source_config(patch: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError):
             as_hours = AGENTSCOPE_INTERVAL_HOURS
         merged["agentscope_interval_hours"] = max(1, min(720, as_hours))
+    if "skillhub_enabled" in patch:
+        merged["skillhub_enabled"] = patch.get("skillhub_enabled") is True
+    if "skillhub_interval_hours" in patch:
+        try:
+            sh_hours = int(patch.get("skillhub_interval_hours") or SKILLHUB_INTERVAL_HOURS)
+        except (TypeError, ValueError):
+            sh_hours = SKILLHUB_INTERVAL_HOURS
+        merged["skillhub_interval_hours"] = max(1, min(720, sh_hours))
 
     blob = await _read_config_blob_async()
     blob[_CONFIG_KEY] = merged
@@ -273,6 +293,8 @@ def public_view(source: dict[str, Any], resolved: dict[str, Any]) -> dict[str, A
         "agency_agents_zh_ref": source.get("agency_agents_zh_ref") or "",
         "agentscope_enabled": bool(source.get("agentscope_enabled")),
         "agentscope_interval_hours": int(source.get("agentscope_interval_hours") or AGENTSCOPE_INTERVAL_HOURS),
+        "skillhub_enabled": bool(source.get("skillhub_enabled")),
+        "skillhub_interval_hours": int(source.get("skillhub_interval_hours") or SKILLHUB_INTERVAL_HOURS),
         # 各源出网代理：留空回落 proxy_id 全局（effective_proxy_id 计算；agentscope 无此字段恒走全局）
         "leaderboard_proxy_id": source.get("leaderboard_proxy_id") or "",
         "agency_agents_proxy_id": source.get("agency_agents_proxy_id") or "",
@@ -282,6 +304,7 @@ def public_view(source: dict[str, Any], resolved: dict[str, Any]) -> dict[str, A
         "agency_agents_last_sync_at": source.get("agency_agents_last_sync_at") or "",
         "agency_agents_zh_last_sync_at": source.get("agency_agents_zh_last_sync_at") or "",
         "agentscope_last_sync_at": source.get("agentscope_last_sync_at") or "",
+        "skillhub_last_sync_at": source.get("skillhub_last_sync_at") or "",
         "default_leaderboard_repo": DEFAULT_LEADERBOARD_REPO,
         "default_leaderboard_boards": DEFAULT_LEADERBOARD_BOARDS,
         "effective": resolved,

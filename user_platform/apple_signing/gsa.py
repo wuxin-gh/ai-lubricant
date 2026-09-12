@@ -35,14 +35,111 @@ from .errors import GsaError
 srp.rfc5054_enable()
 srp.no_username_in_x()
 
-_GS_ENDPOINT = "https://gsa.apple.com/grandslam/GsService2"
-_TRUSTED_TRIGGER = "https://gsa.apple.com/auth/verify/trusteddevice"
-_VALIDATE = "https://gsa.apple.com/grandslam/GsService2/validate"
-
-_GS_USER_AGENT = "akd/1.0 CFNetwork/978.0.7 Darwin/18.7.0"
+_GS_LOOKUP = "https://gsa.apple.com/grandslam/GsService2/lookup"
 _XCODE_APP_INFO = "com.apple.gs.xcode.auth"
-_XCODE_VERSION = "11.2 (11B41)"
 _TIMEOUT = 30
+
+# isideload GrandSlam base_headers：URL bag / gsService / mid / 2FA 端点的公共
+# 底座头。anisette 三头不进 HTTP 头——它们只随 cpd 走 body（isideload 同款）。
+_BASE_HEADERS = {
+    "Content-Type": "text/x-xml-plist",
+    "Accept": "text/x-xml-plist",
+    "X-Mme-Client-Info": "<Mac15,7> <macOS;27.0;26A5378j> <com.apple.AuthKit/1 (com.apple.akd/1.0)>",
+    "User-Agent": "akd/1.0 CFNetwork/808.1.4",
+    "X-Xcode-Version": "27.0 (27A5218g)",
+    "X-Apple-App-Info": _XCODE_APP_INFO,
+}
+
+# URL bag（isideload GrandSlam::new 启动取一次）：所有端点动态取，不硬编码——
+# 2FA 的 trustedDeviceSecondaryAuth/validateCode、gsService、mid 端点全在里面。
+_url_bag: dict[str, Any] | None = None
+
+
+def _base_request_headers() -> dict[str, str]:
+    return dict(_BASE_HEADERS)
+
+
+def _fetch_url_bag() -> dict[str, Any]:
+    global _url_bag
+    if _url_bag is not None:
+        return _url_bag
+    status, _hdrs, content = _http("GET", _GS_LOOKUP, _base_request_headers(), b"")
+    if status >= 400:
+        raise GsaError(f"URL bag 请求失败 (HTTP {status})：{content[:200]!r}")
+    urls = plistlib.loads(content).get("urls")
+    if not isinstance(urls, dict):
+        raise GsaError("URL bag 响应缺 urls")
+    _url_bag = urls
+    return _url_bag
+
+
+def _bag_url(key: str) -> str:
+    urls = _fetch_url_bag()
+    url = urls.get(key)
+    if not url:
+        raise GsaError(f"URL bag 缺 {key}（现有: {sorted(urls)}）")
+    return str(url)
+
+# 出口路由（二选一，调用方在登录前设置）：
+# 1. _proxies：requests proxies 形态（如 {"http": "http://127.0.0.1:7890"}），
+#    network 模式代理池条目。None = 直连。
+# 2. _transport：可替换 HTTP 发送函数 (method, url, headers, body) ->
+#    (status, headers, body_bytes)，node 模式代理池条目用——服务端把整个请求
+#    塞进 NodeProxyRequest 帧发给指定执行节点出网（节点 IP 可能是 Apple 认可
+#    的住宅/宽带 IP）。同步桥在工作线程内 asyncio.run() 跑帧往返。
+# gsa.apple.com 对数据中心/非 Apple 认可网络 IP 直接回 503（无友好错误码）。
+# 模块级而非参数：登录是同步函数链，逐参透传会把每个私有函数签名都污染一遍。
+_proxies: dict[str, str] | None = None
+_transport: Any | None = None
+
+# transport 异常：统一由 routes 层映射成可读 HTTP 错误。
+class GsaTransportError(GsaError):
+    pass
+
+
+def set_gsa_proxies(proxies: dict[str, str] | None) -> None:
+    """设置/清除 GSA 请求的出口代理。调用方在每次登录前按配置决定。"""
+    global _proxies, _transport
+    _proxies = proxies
+    _transport = None
+
+
+def set_gsa_transport(transport: Any | None) -> None:
+    """设置/清除 GSA 请求的节点隧道传输函数（node 模式代理）。"""
+    global _proxies, _transport
+    _transport = transport
+    _proxies = None
+
+
+def current_proxies() -> dict[str, str] | None:
+    """当前 GSA 出口代理（developer.py 等同族请求复用同一出口口径）。"""
+    return _proxies
+
+
+def current_transport() -> Any | None:
+    """当前节点隧道传输函数（developer.py 签名请求同样复用）。"""
+    return _transport
+
+
+def _http(method: str, url: str, headers: dict[str, str], body: bytes) -> tuple[int, dict[str, str], bytes]:
+    """统一的 HTTP 出口：transport 优先（节点隧道），否则 requests 直连/代理。"""
+    if _transport is not None:
+        try:
+            return _transport(method, url, headers, body)
+        except GsaError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — 隧道失败统一成可读错误
+            raise GsaTransportError(f"节点隧道请求失败：{exc}") from exc
+    resp = requests.request(
+        method,
+        url,
+        headers=headers,
+        data=body,
+        timeout=_TIMEOUT,
+        verify=tls.ca_bundle(),
+        proxies=_proxies,
+    )
+    return resp.status_code, dict(resp.headers), resp.content
 
 _PLIST_PROLOG = (
     b'<?xml version="1.0" encoding="UTF-8"?>\n'
@@ -55,41 +152,37 @@ _PLIST_PROLOG = (
 # 请求管线
 # --------------------------------------------------------------------------- #
 def _cpd(headers: dict[str, str]) -> dict[str, Any]:
-    """Client-provided data：标志位 + anisette（client-info 在 header）。"""
-    cpd: dict[str, Any] = {
+    """Client-provided data：对齐 isideload——只放固定标志位 + 这三个 anisette 字段。
+
+    多放 X-Apple-I-MD-LU / X-Apple-I-MD-RINFO 会让 Apple 报 MID is invalid (-80009)。
+    loc 固定 en_US（isideload 也是硬编码，不读 X-Apple-Locale）。
+    """
+    return {
         "bootstrap": True,
         "icscrec": True,
         "pbe": False,
         "prkgen": True,
         "svct": "iCloud",
-        "loc": headers.get("X-Apple-Locale", "en_US"),
+        "loc": "en_US",
+        "X-Mme-Device-Id": headers.get("X-Mme-Device-Id", ""),
+        "X-Apple-I-MD": headers.get("X-Apple-I-MD", ""),
+        "X-Apple-I-MD-M": headers.get("X-Apple-I-MD-M", ""),
     }
-    for key, value in headers.items():
-        if key != "X-MMe-Client-Info":
-            cpd[key] = value
-    return cpd
 
 
 def _gs_request(params: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
-    body = {
-        "Header": {"Version": "1.0.1"},
-        "Request": {"cpd": _cpd(headers), **params},
-    }
-    req_headers = {
-        "Content-Type": "text/x-xml-plist",
-        "Accept": "*/*",
-        "User-Agent": _GS_USER_AGENT,
-        "X-MMe-Client-Info": headers.get("X-MMe-Client-Info", ""),
-    }
-    resp = requests.post(
-        _GS_ENDPOINT,
-        headers=req_headers,
-        data=plistlib.dumps(body),
-        timeout=_TIMEOUT,
-        verify=tls.ca_bundle(),
-    )
-    resp.raise_for_status()
-    return plistlib.loads(resp.content)["Response"]
+    # cpd 必须作为 Request 下的嵌套字典（"cpd": {...}），不可把它的字段平铺进
+    # Request——isideload plist!{ "Request": {"cpd": cpd, ...}}。
+    # 平铺会让 Apple 找不到 cpd，报 -80009 MID is invalid。
+    request_body = dict(params)
+    request_body["cpd"] = _cpd(headers)
+    body = {"Header": {"Version": "1.0.1"}, "Request": request_body}
+    status, _hdrs, content = _http("POST", _bag_url("gsService"), _base_request_headers(), plistlib.dumps(body))
+    if status >= 400:
+        from . import anisette as _a
+        src = "远程" if _a._remote_server else "本地库"
+        raise GsaError(f"Apple GSA 请求失败 (HTTP {status}，anisette 来源: {src})：{content[:200]!r}")
+    return plistlib.loads(content)["Response"]
 
 
 def _check(response: dict[str, Any]) -> None:
@@ -165,53 +258,67 @@ def _authenticate_once(
 
     spd = _decrypt_spd(usr.get_session_key(), complete["spd"])
     secondary = complete.get("Status", {}).get("au")
+    # isideload：repair = 没开 2FA → LoggedIn；未知 au → NeedsExtraStep，
+    # 取 com.apple.gs.idms.pet token 兜底成功则同样视为已登录。
+    if secondary == "repair":
+        secondary = None
+    elif secondary and secondary not in ("trustedDeviceSecondaryAuth", "secondaryAuth"):
+        pet_ok = False
+        try:
+            pet_ok = bool(
+                spd.get("t", {}).get("com.apple.gs.idms.pet", {}).get("token")
+            )
+        except Exception:  # noqa: BLE001 — spd 字段形态异常按无 pet 处理
+            pet_ok = False
+        if pet_ok:
+            secondary = None
     return spd, secondary
 
 
 # --------------------------------------------------------------------------- #
-# 两步验证（受信设备推送）
+# 两步验证（受信设备推送）——isideload build_2fa_headers + URL bag 端点
 # --------------------------------------------------------------------------- #
 def _identity_token(adsid: str, idms_token: str) -> str:
     return base64.b64encode(f"{adsid}:{idms_token}".encode()).decode()
 
 
 def _twofa_headers(adsid: str, idms_token: str, headers: dict[str, str]) -> dict[str, str]:
-    out = {
-        "Content-Type": "text/x-xml-plist",
-        "User-Agent": "Xcode",
-        "Accept": "text/x-xml-plist",
-        "Accept-Language": "en-us",
-        "X-Apple-Identity-Token": _identity_token(adsid, idms_token),
-        "X-Apple-App-Info": _XCODE_APP_INFO,
-        "X-Xcode-Version": _XCODE_VERSION,
-    }
-    out.update(headers)
+    """isideload：grandslam get() 的 base_headers + anisette 三头 + 身份头。
+
+    anisette 头只带 X-Mme-Device-Id / X-Apple-I-MD / X-Apple-I-MD-M
+    （AnisetteData::get_header_map），**不带 X-Apple-I-MD-LU**——isideload 里
+    LU 是注释掉的，多带会改变 Apple 对请求的设备指纹判定。
+    """
+    out = _base_request_headers()
+    for key in ("X-Mme-Device-Id", "X-Apple-I-MD", "X-Apple-I-MD-M"):
+        out[key] = headers.get(key, "")
+    out["X-Apple-Identity-Token"] = _identity_token(adsid, idms_token)
+    out["X-Apple-I-MD-RINFO"] = headers.get("X-Apple-I-MD-RINFO", "")
     return out
 
 
 def _trigger_trusted(adsid: str, idms_token: str, headers: dict[str, str]) -> None:
-    """让 Apple 往受信设备推送 2FA 验证码。
+    """让 Apple 往受信设备推送 2FA 验证码（URL 从 bag 取，不硬编码）。
 
-    响应体即使成功也是 HTML 中间页，**status 才是信号**。忽略非 2xx（旧版做法）
-    会让 issue #5 看起来像「码已发出」，实际 Apple 因坏 X-Apple-Locale 回了 500。
+    响应体即使成功也是 HTML 中间页，**status 才是信号**。
     """
-    resp = requests.get(
-        _TRUSTED_TRIGGER,
-        headers=_twofa_headers(adsid, idms_token, headers),
-        timeout=_TIMEOUT,
-        verify=tls.ca_bundle(),
+    status, _hdrs, _content = _http(
+        "GET", _bag_url("trustedDeviceSecondaryAuth"),
+        _twofa_headers(adsid, idms_token, headers), b""
     )
-    if resp.status_code != 200:
+    if status != 200:
         raise GsaError(
-            f"Apple 未发送验证码 (HTTP {resp.status_code})。请检查网络后重试。"
+            f"Apple 未发送验证码 (HTTP {status})。请检查网络后重试。"
         )
 
 
 def _submit_trusted(adsid: str, idms_token: str, code: str, headers: dict[str, str]) -> None:
     req_headers = _twofa_headers(adsid, idms_token, headers)
     req_headers["security-code"] = code
-    resp = requests.get(_VALIDATE, headers=req_headers, timeout=_TIMEOUT, verify=tls.ca_bundle())
-    _check(plistlib.loads(resp.content))
+    status, _hdrs, content = _http("GET", _bag_url("validateCode"), req_headers, b"")
+    if status >= 400:
+        raise GsaError(f"Apple 2FA 验证失败 (HTTP {status})：{content[:200]!r}")
+    _check(plistlib.loads(content))
 
 
 # --------------------------------------------------------------------------- #

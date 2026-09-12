@@ -18,6 +18,7 @@ revoked/offline node is reflected immediately.
 """
 from __future__ import annotations
 
+import base64
 import re
 import uuid
 from pathlib import Path
@@ -866,22 +867,44 @@ UNIT
   echo "  unit: $HOME/.config/systemd/user/agent-compose-node.service"
   echo "  logs: systemctl --user status agent-compose-node.service"
 else
-  # No usable systemd user session. Install a @reboot row when crontab exists;
-  # either way start the fixed launcher now in the background so the installer
+  # No usable systemd user session (macOS, or a systemd-less linux): do NOT
+  # install crontab autostart here. The node binary asks the operator once at
+  # its next interactive start (launchd on macOS / crontab-free) and manages
+  # the per-user entry itself; a silent root cron row would never match that
+  # choice. Start the fixed launcher now in the background so the installer
   # can return instead of becoming the node process.
-  if command -v crontab >/dev/null 2>&1; then
-    ( crontab -l 2>/dev/null | sed '/agent-compose-node/d'; echo "@reboot cd $root && $root/start-node.sh >> $root/node.log 2>&1" ) | crontab -
-    echo "installed an @reboot startup row."
-  else
-    echo "warning: neither systemd user services nor crontab are available; use $root/start-node.sh after reboot" >&2
-  fi
-  # A background job inherits the installer's cwd. That cwd can disappear after a
-  # reinstall/terminal cleanup, which makes bash print `job-working-directory:
-  # getcwd: cannot access parent directories`. Start from the durable install root
-  # explicitly; start-node.sh repeats the cd before exec as a second guard.
   ( cd "$root" && nohup ./start-node.sh >> ./node.log 2>&1 </dev/null & )
   echo "agent-compose node started (log: $root/node.log)."
   echo "  launcher: $root/start-node.sh"
+  echo "  autostart: 未配置 — 首次交互式启动节点时会询问是否开启开机自启"
+fi
+
+# Desktop entry "Ai Lubricant 节点" (macOS): a double-clickable .command that
+# pops the start/stop/restart dialog served by the node binary's `service`
+# subcommand. Finder runs .command files via Terminal; the dialog itself is
+# native (osascript). On linux the same content lands as a Desktop .desktop
+# file when a desktop dir exists.
+desktop_dir="$HOME/Desktop"
+if [ -d "$desktop_dir" ]; then
+  if [ "$(uname -s)" = "Darwin" ]; then
+    cat > "$desktop_dir/Ai Lubricant 节点.command" <<'ENTRY'
+#!/bin/bash
+# Ai Lubricant 节点 — 桌面服务入口：启动 / 关闭 / 重启节点服务。
+exec "{root}/bin/{binary_name}" service
+ENTRY
+    chmod +x "$desktop_dir/Ai Lubricant 节点.command"
+  else
+    cat > "$desktop_dir/ai-lubricant-node.desktop" <<'ENTRY'
+[Desktop Entry]
+Type=Application
+Name=Ai Lubricant 节点
+Comment=启动 / 关闭 / 重启节点服务
+Exec={root}/bin/{binary_name} service
+Terminal=true
+ENTRY
+    chmod +x "$desktop_dir/ai-lubricant-node.desktop"
+  fi
+  echo "desktop entry: $desktop_dir"
 fi
 echo ""
 echo "agent-compose node installed to: $root"
@@ -951,6 +974,33 @@ def render_install_bat(
 
     # Values are generated from UUID/base32/HTTP inputs. Keep them in `set "..."`
     # assignments so spaces in a deployment URL do not split the command.
+    # The desktop shortcut's display name is Chinese ("Ai Lubricant 节点"). The
+    # .bat is served as UTF-8, but cmd.exe parses .bat files with the OEM
+    # codepage, so Chinese embedded directly in the source would mangle. We ship
+    # the shortcut creation as a PowerShell UTF-16LE Base64 command (`-EncodedCommand`)
+    # — PowerShell decodes it itself, never touching cmd's codepage.
+    ps_script = (
+        "$ErrorActionPreference='Stop';"
+        "$w=New-Object -ComObject WScript.Shell;"
+        "$p=[Environment]::GetFolderPath('Desktop')+'\\Ai Lubricant 节点.lnk';"
+        "$s=$w.CreateShortcut($p);"
+        "$s.TargetPath='%LOCALAPPDATA%\\agent-compose\\bin\\{binary_name}.exe';"
+        "$s.Arguments='service';"
+        "$s.WorkingDirectory='%LOCALAPPDATA%\\agent-compose';"
+        "$s.WindowStyle=7;"
+        "$s.Description='Ai Lubricant 节点：启动 / 关闭 / 重启节点服务';"
+        "$s.Save();"
+        # Drop the legacy ASCII-named shortcuts after an upgrade install.
+        "$old1=[Environment]::GetFolderPath('Desktop')+'\\AiLubricantNode.lnk';"
+        "$old2=[Environment]::GetFolderPath('Desktop')+'\\Agent Compose Node.lnk';"
+        "foreach($o in @($old1,$old2)){ if(Test-Path $o){ Remove-Item $o -Force } }"
+    )
+    ps_b64 = base64.b64encode(ps_script.encode("utf-16-le")).decode("ascii")
+    ps_shortcut_cmd = (
+        f"powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand {ps_b64}"
+        " >nul 2>&1\r\n"
+        "if errorlevel 1 echo warning: could not create desktop shortcut >&2"
+    )
     return f"""@echo off
 setlocal EnableExtensions DisableDelayedExpansion
 rem Agent Compose node Windows installer ({role}).
@@ -978,7 +1028,7 @@ set "TASK=agent-compose-node"
 set "CONFIG=%APPDATA%\\agent-compose\\node\\config.json"
 set "STATE_DIR=%APPDATA%\\agent-compose\\node"
 set "RT_DIR=%STATE_DIR%\\runtime"
-set "SHORTCUT=%USERPROFILE%\\Desktop\\Agent Compose Node.lnk"
+set "SHORTCUT=%USERPROFILE%\\Desktop\\AiLubricantNode.lnk"
 
 if not exist "%ROOT%" mkdir "%ROOT%"
 if not exist "%BINDIR%" mkdir "%BINDIR%"
@@ -1188,21 +1238,26 @@ if errorlevel 1 (
   exit /b 1
 )
 
-rem One stable desktop entry. Reinstalling updates the same shortcut.
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$w=New-Object -ComObject WScript.Shell; $s=$w.CreateShortcut('%SHORTCUT%'); $s.TargetPath='%RUNNER%'; $s.WorkingDirectory='%ROOT%'; $s.WindowStyle=7; $s.Description='Start the Agent Compose node'; $s.Save()" >nul 2>&1
-if errorlevel 1 echo warning: could not create desktop shortcut "%SHORTCUT%" >&2
+rem One stable desktop entry. Reinstalling updates the same shortcut. It runs
+rem the node binary's `service` subcommand - a start/stop/restart dialog -
+rem instead of launching the node directly, so the desktop entry manages the
+rem service rather than being it. The visible name is Chinese; cmd reads .bat
+rem files with the OEM codepage, so the Chinese must never appear as cmd
+rem source. The .lnk creation runs as a PowerShell **Base64 command** decoded
+rem from UTF-16LE at runtime: the .bat stays pure ASCII on the wire.
+{ps_shortcut_cmd}
 
 rem Start it now. The host lock makes a second launch print "already running" and
 rem exit, so this never produces a duplicate process.
-start "Agent Compose node" /min cmd.exe /d /c call "%RUNNER%"
+start "Ai Lubricant node" /min cmd.exe /d /c call "%RUNNER%"
 
 echo.
 echo Agent Compose node installed.
-echo   task:     %TASK%
+echo   task:     %TASK% ^(logon autostart^)
 echo   launcher: %RUNNER%
-echo   desktop:  %SHORTCUT%
+echo   desktop:  %SHORTCUT% ^(start/stop/restart dialog^)
 echo   config:   %CONFIG%
-echo You can close the node and later double-click the desktop shortcut to start it again.
+echo You can double-click the desktop shortcut to start, stop or restart the node service.
 endlocal
 """
 
@@ -1415,6 +1470,18 @@ class NodesService:
         client = get_local_node_client()
         return await client.manage_editor(node_id, editor, action)
 
+    async def refresh_node_labels(self, node_id: str) -> dict:
+        """让在线节点重新探测全部能力标签（无需重启节点进程）。
+
+        控制台节点详情「刷新标签」按钮走这里：运维者在节点主机上装/卸了
+        编辑器、host tool 或改了 --labels 后，点一下即可让注册口径的能力
+        快照即时更新。节点回复与注册时同构的 NodeCapabilities，控制面合并
+        进存量 capabilities（保留 role/hostname/server_seen_address 等服务端
+        簿记）。
+        """
+        client = get_local_node_client()
+        return await client.refresh_node_labels(node_id)
+
     async def install_host_tool(
         self, node_id: str, tool: str, *, proxy_config_id: str = ""
     ) -> dict:
@@ -1444,11 +1511,12 @@ class NodesService:
             raise NodesServiceError("invalid_argument", "节点尚未上报 os/arch，无法选择安装方式")
 
         if tool == "xcode":
-            # 检测型：仅 macOS 节点可检，无归档 target，也不需要代理。
+            # 异步任务模式（2026-09 定稿）：解析 xcodereleases 目录 → .xip 直链
+            # → 下发 HostToolJob 帧，节点后台下载/解压/激活，进度经事件帧轮询。
+            # 旧的同步 InstallHostTool 检测仍可用，但不再是主入口。
             if os_name != "darwin":
                 raise NodesServiceError("invalid_argument", "Xcode 仅可安装在 macOS 节点上")
-            client = get_local_node_client()
-            return await client.install_host_tool(node_id, tool, target=None)
+            return await self.start_xcode_install_job(node_id, proxy_config_id=proxy_config_id)
 
         # 没显式传代理就用节点常驻绑定；再空才直连（与 upgrade_node 同规则）。
         chosen_proxy_id = (proxy_config_id or "").strip() or str(node.get("proxy_config_id") or "")
@@ -1475,6 +1543,81 @@ class NodesService:
         }
         client = get_local_node_client()
         return await client.install_host_tool(node_id, tool, target=target)
+
+    # ── 异步 Xcode 安装任务（xcodereleases 目录解析 + HostToolJob 帧下发） ──────
+
+    async def start_xcode_install_job(
+        self, node_id: str, *, target_version: str = "", proxy_config_id: str = ""
+    ) -> dict:
+        """启动一次 Xcode 自动安装任务（异步任务模式，立即返回 job_id）。
+
+        版本与 .xip 直链在服务端解析（xcodereleases.com 目录，TTL 缓存）：
+        target_version 为空时取配置默认（XCODE_TARGET_VERSION，默认 latest =
+        最新非 beta 且兼容节点 macOS 的版本）。下载一律直连：.xip 最终 302
+        到 Apple 官方 CDN，节点直连即可，且 12GB 归档过代理易被截断/改写
+        （「archive is damaged」的实测根因）。proxy_config_id 仅保留 API 兼容，
+        实际被忽略——目录直连拉取，任务帧显式 proxy_mode="direct" 覆盖节点
+        端残留的代理快照。job_id 由数据侧铸造（前缀 htj-），节点受理 ack 后
+        立刻返回，进度/结果走事件与 result 帧，前端用 get_xcode_install_job
+        轮询、cancel_xcode_install_job 取消。
+        """
+        node = await self.get_node_if_exists(node_id)
+        if node is None:
+            raise NodesServiceError("not_found", f"节点 {node_id} 不存在")
+        caps = node.get("capabilities") or {}
+        if str(caps.get("os") or "").strip().lower() != "darwin":
+            raise NodesServiceError("invalid_argument", "Xcode 仅可安装在 macOS 节点上")
+
+        # Xcode 的 .xip 最终 302 到 Apple 官方 CDN，节点直连下载——不经任何
+        # 出口代理（12GB 大文件过代理被截断/改写是「archive is damaged」的
+        # 头号成因，且该链路已实测可直连）。proxy_config_id 仍接受（API 兼容）
+        # 但被忽略：目录直连拉取，任务帧显式带 proxy_mode="direct"，覆盖节点
+        # 端可能残留的代理快照回退。
+        proxy_fields: dict = {"proxy_mode": "direct"}
+        desired = (target_version or "").strip() or str(
+            config.settings.xcode_target_version or "latest"
+        )
+        from . import xcode_releases
+
+        try:
+            target = await xcode_releases.resolve(desired, proxy_fields=proxy_fields)
+        except xcode_releases.XcodeReleasesError as exc:
+            raise NodesServiceError("invalid_argument", str(exc)) from exc
+
+        job_id = f"htj-{uuid.uuid4().hex[:12]}"
+        client = get_local_node_client()
+        result = await client.start_host_tool_job(
+            node_id,
+            job_id,
+            tool="xcode",
+            target_version=target["target_version"],
+            download_url=target["download_url"],
+            download_size_bytes=int(target.get("download_size_bytes") or 0),
+            sha256="",
+            timeout_seconds=0,
+            **proxy_fields,
+        )
+        return {
+            "node_id": node_id,
+            "job_id": job_id,
+            "status": result.get("status") or "accepted",
+            "target_version": target["target_version"],
+            "download_url": target["download_url"],
+            "download_size_bytes": target.get("download_size_bytes") or 0,
+            "requires_macos": target.get("requires_macos") or "",
+            "beta": bool(target.get("beta")),
+            "stale": bool(target.get("stale")),
+        }
+
+    async def get_xcode_install_job(self, node_id: str, job_id: str) -> dict:
+        """轮询 Xcode 安装任务快照（控制面内存快照，转发）。"""
+        client = get_local_node_client()
+        return await client.get_host_tool_job_status(node_id, job_id)
+
+    async def cancel_xcode_install_job(self, node_id: str, job_id: str) -> dict:
+        """请求取消运行中的 Xcode 安装任务（节点在阶段边界协作取消）。"""
+        client = get_local_node_client()
+        return await client.cancel_host_tool_job(node_id, job_id)
 
     # ── 共享环境：node_server 只做「下发 + 回报磁盘事实」，不持台账 ──────────────
     # 用户级台账（哪些环境、各自的资源集）在 environment_service，这里只把
@@ -1720,7 +1863,15 @@ class NodesService:
             "role": (live or {}).get("role") or link.node_role,
             "node_role": (live or {}).get("role") or link.node_role,
             "is_passive": bool((live or {}).get("is_passive")),
-            "startup_method": (live or {}).get("startup_method") or "",
+            # 节点自报的 startup_method capability（"autostart"/"standalone"，
+            # 反映安装后真实的启动形态）优先；台账值（onboard 时管理员选的
+            # standalone/systemd/docker 形态）只在节点还没上报时兜底。
+            "startup_method": (
+                ((live or {}).get("capabilities") or {}).get("startup_method")
+                or (live or {}).get("startup_method")
+                or ""
+            ),
+            "ledger_startup_method": (live or {}).get("startup_method") or "",
             "status": (live or {}).get("status") or "unknown",
             "connected": bool((live or {}).get("connected")),
             # Heartbeat freshness is distinct from a registered connection.
@@ -1823,7 +1974,11 @@ class NodesService:
             "node_role": live.get("role") or "management",
             "role": live.get("role") or "management",
             "is_passive": bool(live.get("is_passive")),
-            "startup_method": live.get("startup_method") or "",
+            "startup_method": (
+                ((live.get("capabilities") or {}).get("startup_method"))
+                or live.get("startup_method")
+                or ""
+            ),
             "status": "",
             "connected": False,
             "online": False,

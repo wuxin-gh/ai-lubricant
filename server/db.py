@@ -692,12 +692,15 @@ class PostgresClient:
                     model_id TEXT NOT NULL,
                     account_tpm INTEGER,
                     extra_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    enabled BOOLEAN NOT NULL DEFAULT TRUE,
                     PRIMARY KEY (provider, upstream_model_id)
                 )
             """)
             await conn.execute("ALTER TABLE provider_models ADD COLUMN IF NOT EXISTS account_tpm INTEGER")
             await conn.execute("ALTER TABLE provider_models ALTER COLUMN account_tpm DROP NOT NULL")
             await conn.execute("ALTER TABLE provider_models ADD COLUMN IF NOT EXISTS extra_config JSONB NOT NULL DEFAULT '{}'::jsonb")
+            # 行级启用开关：False = 模型保留在表中但运行时不路由（渠道编辑弹框模型 tab 可切换）。
+            await conn.execute("ALTER TABLE provider_models ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT TRUE")
             # 旧版渠道模型表上的 max_tokens / thinking_mode / thinking_max_tokens 字段已废弃：
             # 能力下沉到 extra_config（通用覆盖出站请求），不再用专用列。删除遗留列。
             await conn.execute("ALTER TABLE provider_models DROP COLUMN IF EXISTS max_tokens")
@@ -1522,7 +1525,7 @@ class PostgresClient:
             # ON CONFLICT (source) DO UPDATE），只留最新一次，不无限增长。
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS marketplace_sync_runs (
-                    source VARCHAR(40) PRIMARY KEY,  -- agent-leaderboard|agency-agents|agency-agents-zh|agentscope
+                    source VARCHAR(40) PRIMARY KEY,  -- agent-leaderboard|agency-agents|agency-agents-zh|agentscope|skillhub
                     started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     finished_at TIMESTAMPTZ,
                     ok BOOLEAN,                     -- NULL=进行中
@@ -2588,6 +2591,33 @@ class PostgresClient:
                     ALTER TABLE builtin_tool_tokens
                         ADD CONSTRAINT builtin_tool_tokens_target_exclusive_check
                         CHECK (resource_id IS NULL OR service_id IS NULL);
+                END $$;
+            """)
+            # target_type 白名单扩 'task'：任务级 MCP identity token 走
+            # target_type='task' + target_id=task.id，网关 resolve_identity_to_principal
+            # 按 task → tasks.mcp_user_id 反查 principal 收口判权（替代旧 "agent"
+            # 类型装 task id 的 hack）。建表时这条 CHECK 还没有 'task'，已部署库的
+            # 旧约束拒绝写入——task_service._principal_mcp_specs 里 issue_token 整条
+            # 链路（签发 → 网关反查）都认 'task'，唯独 DB CHECK 是半成品。CREATE IF
+            # NOT EXISTS 不更新存量约束，幂等 drop+add 成最新列表。
+            await conn.execute("""
+                DO $$ BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints
+                        WHERE table_name = 'builtin_tool_tokens'
+                          AND constraint_name = 'builtin_tool_tokens_target_type_check'
+                          AND pg_get_constraintdef(
+                                (SELECT oid FROM pg_constraint
+                                 WHERE conrelid = 'builtin_tool_tokens'::regclass
+                                   AND conname = 'builtin_tool_tokens_target_type_check')
+                              ) NOT LIKE '%task%'
+                    ) THEN
+                        ALTER TABLE builtin_tool_tokens
+                            DROP CONSTRAINT builtin_tool_tokens_target_type_check;
+                        ALTER TABLE builtin_tool_tokens
+                            ADD CONSTRAINT builtin_tool_tokens_target_type_check
+                            CHECK (target_type IN ('agent', 'node', 'user', 'external', 'task'));
+                    END IF;
                 END $$;
             """)
 
@@ -8427,10 +8457,13 @@ class PostgresClient:
             upstream_id = (item.get("upstream_model_id") or item.get("upstream") or "").strip()
             model_id = (item.get("model_id") or item.get("model") or upstream_id).strip()
             extra_config = item.get("extra_config") if isinstance(item.get("extra_config"), dict) else {}
+            # 行级开关：缺省/None 视为启用（旧客户端与定时同步的 to_add 都不带该字段）。
+            enabled = item.get("enabled")
             return {
                 "upstream_model_id": upstream_id,
                 "model_id": model_id or upstream_id,
                 "extra_config": extra_config,
+                "enabled": True if enabled is None else bool(enabled),
             }
         upstream_id = str(item[0] if len(item) > 0 else "").strip()
         model_id = str(item[1] if len(item) > 1 else upstream_id).strip() or upstream_id
@@ -8438,6 +8471,7 @@ class PostgresClient:
             "upstream_model_id": upstream_id,
             "model_id": model_id,
             "extra_config": {},
+            "enabled": True,
         }
 
     @staticmethod
@@ -8454,7 +8488,7 @@ class PostgresClient:
     async def list_provider_models(cls, provider: str | None = None, lite: bool = False) -> list[dict]:
         if not cls.pool:
             return []
-        fields = "upstream_model_id, model_id" if lite else "provider, upstream_model_id, model_id, extra_config"
+        fields = "upstream_model_id, model_id" if lite else "provider, upstream_model_id, model_id, extra_config, enabled"
         async with cls.pool.acquire() as conn:
             if provider is None:
                 rows = await conn.fetch(
@@ -8484,14 +8518,17 @@ class PostgresClient:
         model_id: str,
         *,
         extra_config: dict | None = None,
+        enabled: bool | None = None,
     ) -> None:
+        """新增或重命名单行。enabled=None 时不动开关：新行吃列默认（启用），
+        已有行在冲突时保留原 enabled（定时同步改名路径不该重置开关）。"""
         if not cls.pool:
             return
         async with cls.pool.acquire() as conn:
             await conn.execute(
                 """
-                INSERT INTO provider_models(provider, upstream_model_id, model_id, extra_config)
-                VALUES($1, $2, $3, $4::jsonb)
+                INSERT INTO provider_models(provider, upstream_model_id, model_id, extra_config, enabled)
+                VALUES($1, $2, $3, $4::jsonb, $5)
                 ON CONFLICT(provider, upstream_model_id) DO UPDATE SET
                     model_id=EXCLUDED.model_id,
                     extra_config=EXCLUDED.extra_config
@@ -8500,6 +8537,7 @@ class PostgresClient:
                 upstream_model_id,
                 model_id,
                 cls._dumps(extra_config or {}),
+                True if enabled is None else bool(enabled),
             )
 
     @classmethod
@@ -8533,16 +8571,18 @@ class PostgresClient:
                 for payload in payloads:
                     await conn.execute(
                         """
-                        INSERT INTO provider_models(provider, upstream_model_id, model_id, extra_config)
-                        VALUES($1, $2, $3, $4::jsonb)
+                        INSERT INTO provider_models(provider, upstream_model_id, model_id, extra_config, enabled)
+                        VALUES($1, $2, $3, $4::jsonb, $5)
                         ON CONFLICT(provider, upstream_model_id) DO UPDATE SET
                             model_id=EXCLUDED.model_id,
-                            extra_config=EXCLUDED.extra_config
+                            extra_config=EXCLUDED.extra_config,
+                            enabled=EXCLUDED.enabled
                         """,
                         provider,
                         payload["upstream_model_id"],
                         payload["model_id"],
                         cls._dumps(payload["extra_config"]),
+                        payload.get("enabled", True),
                     )
         return len(payloads)
 

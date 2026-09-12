@@ -269,7 +269,7 @@ def test_refresh_models_strips_prefix_only_on_add_not_update(monkeypatch):
     async def list_provider_models(cls, provider=None):
         return list(provider_rows)
 
-    async def upsert_provider_model(cls, provider, upstream_model_id, model_id):
+    async def upsert_provider_model(cls, provider, upstream_model_id, model_id, extra_config=None):
         upserts.append((provider, upstream_model_id, model_id))
         provider_rows.append({"provider": provider, "upstream_model_id": upstream_model_id, "model_id": model_id})
 
@@ -321,7 +321,7 @@ def _patch_refresh(monkeypatch, pool, provider_rows):
     async def list_provider_models(cls, provider=None):
         return list(provider_rows)
 
-    async def upsert_provider_model(cls, provider, upstream_model_id, model_id):
+    async def upsert_provider_model(cls, provider, upstream_model_id, model_id, extra_config=None):
         upserts.append((provider, upstream_model_id, model_id))
         provider_rows.append({"provider": provider, "upstream_model_id": upstream_model_id, "model_id": model_id})
 
@@ -385,6 +385,70 @@ def test_refresh_no_rules_keeps_all_unchanged(monkeypatch):
     upserted_ids = [uid for _, uid, _ in upserts]
     assert "glm-5.2" in upserted_ids
     assert "glm-5.2:free" in upserted_ids
+    assert deletes == []
+
+
+def test_fetch_upstream_models_search_only_rule_hits_full_name(monkeypatch):
+    """只搜索规则：pattern 写全量名（含 owner/ 前缀）也能命中。
+
+    普通规则跑在切完前缀的名字上，带前缀的 pattern 永远搜不到——这条测试锁定
+    只搜索规则的全量名判定：命中行 is_regex=True、名字保持切前缀默认形态。
+    """
+
+    class _Provider:
+        auto_update_models = True
+        _last_fetch_models_error = ""
+
+        async def fetch_upstream_model_list(self):
+            return [
+                {"id": "deepseek-ai/deepseek-v4"},      # 命中只搜索规则
+                {"id": "deepseek-ai/deepseek-v4-chat"},  # 前缀不同，不命中
+                {"id": "openai/gpt-4o"},                 # 不命中
+            ]
+
+    pool = _make_pool_with_provider(_Provider())
+    pool.channel.apply({"model_id_rewrite_rules": [
+        {"pattern": r"^deepseek-ai/deepseek-v4$", "replacement": "", "search_only": True},
+    ]})
+
+    async def list_provider_models(cls, provider=None):
+        return []
+
+    monkeypatch.setattr(ModelClientPool, "get_provider_pool", classmethod(lambda cls, name: pool))
+    monkeypatch.setattr(rate_limiter.PostgresClient, "list_provider_models", classmethod(list_provider_models))
+
+    result = asyncio.run(ModelClientPool.fetch_provider_upstream_models("prov"))
+    by_upstream = {m["upstream_model_id"]: m for m in result["upstream_models"]}
+
+    hit = by_upstream["deepseek-ai/deepseek-v4"]
+    assert hit["is_regex"] is True
+    # 不参与改名：名字就是切完前缀的默认形态。
+    assert hit["regex_model_id"] == "deepseek-v4"
+    assert by_upstream["deepseek-ai/deepseek-v4-chat"]["is_regex"] is False
+    assert by_upstream["openai/gpt-4o"]["is_regex"] is False
+
+
+def test_refresh_keeps_only_search_rule_matched_models(monkeypatch):
+    """自动同步：只搜索规则命中的模型保留（名字走切前缀默认），不命中的丢掉。"""
+
+    class _Provider:
+        auto_update_models = True
+        _last_fetch_models_error = ""
+
+        async def fetch_upstream_model_list(self):
+            return [{"id": "1111/glm-5.2"}, {"id": "other/drop-me"}]
+
+    pool = _make_pool_with_provider(_Provider())
+    pool.channel.apply({"model_id_rewrite_rules": [
+        {"pattern": r"^1111/", "replacement": "", "search_only": True},
+    ]})
+    upserts, deletes = _patch_refresh(monkeypatch, pool, [])
+
+    asyncio.run(ModelClientPool.refresh_models())
+
+    by_uid = {uid: mid for _, uid, mid in upserts}
+    assert "1111/glm-5.2" in by_uid and by_uid["1111/glm-5.2"] == "glm-5.2"
+    assert "other/drop-me" not in by_uid
     assert deletes == []
 
 

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Ai Lubricant 浏览器助手",
-  "version": "0.5.0",
+  "version": "0.5.2",
   "description": "Ai Lubricant 智能开发平台的浏览器端：让 Agent 帮你打开网页、点击按钮、填写表单、提取信息，并在任意网页内直接与 Agent 对话。",
   "permissions": [
     "tabs",

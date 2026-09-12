@@ -238,10 +238,83 @@ async function handleExtMessage(msg, sender) {
 // reqId 关联请求与回帧；按 reqId → tabId 记录待投递目标，收到回帧时转发给对应标签页。
 const _chatReqs = new Map(); // reqId -> tabId
 
-function sendChatFrame(msg, sender) {
-  if (!ws || ws.readyState !== WebSocket.OPEN || !authenticated) {
-    return { ok: false, error: 'bridge websocket is not authenticated' };
+// 建连/握手窗口内到达的聊天帧排队：SW 常被「点重试/发消息」这枚消息本身唤醒——
+// top-level 的 connectWS() 才刚开始握手，handleExtMessage 却已同步执行到
+// sendChatFrame。立刻失败会让唤醒后的第一个请求永远吃瘪（面板表现为「点了没反应」）。
+// 排队后由 auth_ok 的 flushChatFrameQueue 续发；连接彻底失败由 markDisconnected 兜底失败。
+const _chatFrameQueue = []; // { reqId, frame, tabId }
+const CHAT_QUEUE_TIMEOUT_MS = 8000;
+let _chatQueueTimer = null;
+
+function _failChatFrame(reqId, tabId, message) {
+  if (tabId == null) return;
+  chrome.tabs.sendMessage(Number(tabId), {
+    cmd: 'chat_frame',
+    data: { type: 'chat_error', reqId, message },
+  }).catch(() => { /* 标签页可能已关，忽略 */ });
+}
+
+function failChatFrameQueue(message) {
+  while (_chatFrameQueue.length) {
+    const item = _chatFrameQueue.shift();
+    _failChatFrame(item.reqId, item.tabId, message);
   }
+  if (_chatQueueTimer !== null) { clearTimeout(_chatQueueTimer); _chatQueueTimer = null; }
+}
+
+function flushChatFrameQueue() {
+  while (_chatFrameQueue.length) {
+    if (!ws || ws.readyState !== WebSocket.OPEN || !authenticated) return; // 还没就绪：继续排队等
+    const item = _chatFrameQueue.shift();
+    _chatReqs.set(item.reqId, item.tabId);
+    try {
+      ws.send(JSON.stringify(item.frame));
+    } catch (e) {
+      // 发送失败按断连口径回投 chat_error，别让面板永远等回帧。
+      _chatReqs.delete(item.reqId);
+      _failChatFrame(item.reqId, item.tabId, '桥接连接已断开，请稍后重试');
+    }
+  }
+  if (_chatQueueTimer !== null) { clearTimeout(_chatQueueTimer); _chatQueueTimer = null; }
+}
+
+function queueChatFrame(reqId, frame, tabId) {
+  _chatFrameQueue.push({ reqId, frame, tabId });
+  // 兜底超时：连接一直起不来（服务端没回来）时按断连口径失败，绝不悬挂。
+  if (_chatQueueTimer === null) {
+    _chatQueueTimer = setTimeout(() => {
+      _chatQueueTimer = null;
+      if (!authenticated) failChatFrameQueue('桥接连接已断开，请稍后重试');
+      else flushChatFrameQueue();
+    }, CHAT_QUEUE_TIMEOUT_MS);
+  }
+}
+
+function sendChatFrame(msg, sender) {
+  const ready = Boolean(ws && ws.readyState === WebSocket.OPEN && authenticated);
+  if (!ready) {
+    // 建立中或已开但认证握手中（connectWS 的守卫同样用 readyState<=1）→ 排队等
+    // auth_ok 续发；完全没在连 → 立刻失败（content 侧会等重连再点）。
+    const connectingNow = connecting || Boolean(ws && ws.readyState <= WebSocket.OPEN);
+    if (!connectingNow) {
+      return { ok: false, error: 'bridge websocket is not authenticated' };
+    }
+    const queued = _assembleChatFrame(msg, sender);
+    queueChatFrame(queued.reqId, queued.frame, queued.tabId);
+    return { ok: true, reqId: queued.reqId, queued: true };
+  }
+  const { reqId, frame, tabId } = _assembleChatFrame(msg, sender);
+  _chatReqs.set(reqId, tabId);
+  // 清理过期 reqId（防止 SW 长跑后内存累积）。
+  if (_chatReqs.size > 200) {
+    const firstKey = _chatReqs.keys().next().value;
+    _chatReqs.delete(firstKey);
+  }
+  ws.send(JSON.stringify(frame));
+  return { ok: true, reqId };
+}
+
+function _assembleChatFrame(msg, sender) {
   const reqId = String(msg.reqId || ('chat_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8)));
   const tabId = msg.tabId != null ? msg.tabId : (sender.tab && sender.tab.id);
   const frame = {
@@ -293,14 +366,7 @@ function sendChatFrame(msg, sender) {
   if (msg.cmd === 'chat_list_agents' || msg.cmd === 'chat_list_conversations') {
     // 仅取列表，无需额外字段。
   }
-  _chatReqs.set(reqId, tabId);
-  // 清理过期 reqId（防止 SW 长跑后内存累积）。
-  if (_chatReqs.size > 200) {
-    const firstKey = _chatReqs.keys().next().value;
-    _chatReqs.delete(firstKey);
-  }
-  ws.send(JSON.stringify(frame));
-  return { ok: true, reqId };
+  return { reqId, frame, tabId };
 }
 
 function forwardChatFrameToTab(data) {
@@ -343,6 +409,7 @@ function markDisconnected() {
   lastFrameAt = 0;
   chrome.alarms.clear('tmwd-ws-keepalive');
   failPendingChatRequests('桥接连接已断开，请稍后重试');
+  failChatFrameQueue('桥接连接已断开，请稍后重试'); // 握手中排队未发的帧同样失败掉
   void loadBridgeConfig().then(() => {
     void broadcastBridgeStatus(); // 断开了：推给所有 tab，徽标变灰/认证中
     if (!bridgeConfig.bridgeEnabled || !bridgeConfig.clientToken || reconnectBlocked) return;
@@ -966,6 +1033,7 @@ async function connectWS() {
         reconnectBlocked = false;
         alreadyConnectedBackoff = 0; // 重连成功，清空退避计数
         await sendReadyFrames(socket);
+        flushChatFrameQueue(); // 握手期间排队的聊天帧现在续发（面板重试/首发不再被唤醒竞态吃掉）
         void broadcastBridgeStatus(); // 连上了：推给所有 tab，徽标变绿
         return;
       }

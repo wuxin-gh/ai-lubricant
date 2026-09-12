@@ -242,6 +242,76 @@ async def test_posix_list_keeps_existing_protocol(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_posix_list_command_is_bsd_portable(monkeypatch):
+    """macOS/BSD find 没有 GNU 专有的 -printf：列目录命令必须纯 POSIX。"""
+    client = FakeNodeClient(os_name="linux", result={"stdout": ""})
+    install_client(monkeypatch, client)
+
+    await files.node_host_file(
+        "node-1", files.HostFileRequest(path="/tmp/my dir", operation="list"), user=None
+    )
+
+    command = client.calls[0][1]
+    # shlex 把带空格的路径包成单引号；命令先判目录、再 cd，而非 GNU find -printf。
+    assert command.startswith("if [ -d '/tmp/my dir' ]; then cd '/tmp/my dir' || exit 2;")
+    assert "find" not in command
+    assert "-printf" not in command
+
+
+@pytest.mark.asyncio
+async def test_posix_list_parses_bsd_wc_padded_sizes(monkeypatch):
+    """macOS wc 输出的字节数带前导空格，解析必须容忍。"""
+    client = FakeNodeClient(os_name="linux", result={"stdout": "f\t  12\t/tmp/z.txt\nd\t0\t/tmp/a\n"})
+    install_client(monkeypatch, client)
+
+    result = await files.node_host_file(
+        "node-1", files.HostFileRequest(path="/tmp", operation="list"), user=None
+    )
+
+    assert result["entries"][0] == {"name": "a", "path": "/tmp/a", "is_dir": True, "size": 0}
+    assert result["entries"][1] == {"name": "z.txt", "path": "/tmp/z.txt", "is_dir": False, "size": 12}
+
+
+@pytest.mark.asyncio
+async def test_posix_write_command_is_bsd_portable(monkeypatch):
+    """macOS base64 解码是 -D 不是 -d：写入命令不能依赖 GNU base64。"""
+    client = FakeNodeClient(os_name="linux", result={"success": True})
+    install_client(monkeypatch, client)
+
+    result = await files.node_host_file(
+        "node-1",
+        files.HostFileRequest(
+            path="/tmp/notes", operation="write", content="第一行\nit's $HOME `x`\n"
+        ),
+        user=None,
+    )
+
+    assert result["ok"] is True
+    command = client.calls[0][1]
+    assert "base64" not in command
+    assert command.startswith("printf %s '")
+    assert command.endswith("' > /tmp/notes")
+    # 单引号内的 $ ` 不被展开，单引号本身按 '"'"' 转义。
+    assert "$HOME" in command and "`x`" in command
+    assert "'\"'\"'" in command
+
+
+@pytest.mark.asyncio
+async def test_posix_write_rejects_nul_content(monkeypatch):
+    client = FakeNodeClient(os_name="linux", result={"success": True})
+    install_client(monkeypatch, client)
+
+    with pytest.raises(HTTPException) as exc:
+        await files.node_host_file(
+            "node-1", files.HostFileRequest(path="/tmp/a", operation="write", content="x\x00y"), user=None
+        )
+
+    assert exc.value.status_code == 400
+    assert "UTF-8" in exc.value.detail
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
 async def test_explicit_host_exec_failure_is_reported(monkeypatch):
     client = FakeNodeClient(result={"exit_code": 2, "stderr": "access denied"})
     install_client(monkeypatch, client)

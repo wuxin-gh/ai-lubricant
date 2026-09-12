@@ -449,6 +449,171 @@ async def test_capability_call_unknown_capability_errors(ga_registry: ToolRegist
     assert result["code"] == "capability_not_found"
 
 
+def _attach_mcp(
+    ga_registry: ToolRegistry,
+    methods: list[dict],
+    runtime: object | None = None,
+    service: str = "cdp-bridge",
+) -> None:
+    ga_registry.set_mcp_runtime(
+        runtime,
+        capability_index=[{"service": service, "methods": methods, "method_names": [m["name"] for m in methods]}],
+        browser_service=service,
+    )
+
+
+async def _noop_seed(*_args, **_kwargs) -> None:
+    """SOP 落盘依赖 file_memory 的 agent 目录结构，测试里让它整体短路。"""
+    return None
+
+
+@pytest.mark.asyncio
+async def test_capability_call_missing_required_params_guides_model(ga_registry: ToolRegistry, monkeypatch) -> None:
+    """空 args 调带 required 参数的方法：错误要点名缺哪些参数并给参数清单。
+
+    复现 CDP 网页对话的真实故障：模型连发 5 次
+    ``{"args":{},"name":"cdp-bridge.browser_execute_js"}``，每次只收到
+    ``missing 1 required positional argument: 'script'`` 就原样重发。校验 +
+    可行动文案一轮即可纠正。
+    """
+    methods = [{
+        "name": "browser_execute_js",
+        "description": "Execute JavaScript in the browser.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "script": {"type": "string"},
+                "switch_tab_id": {"type": "string", "default": ""},
+            },
+            "required": ["script"],
+        },
+    }]
+    # SOP 落盘依赖 file_memory 的 agent 目录结构，测试里让它整体短路。
+    monkeypatch.setattr(ToolRegistry, "_maybe_seed_mcp_sop", _noop_seed)
+    runtime = AsyncMock()
+    runtime.call_tool = AsyncMock(return_value={"status": "ok"})
+    _attach_mcp(ga_registry, methods, runtime=runtime)
+
+    result = await ga_registry.execute(
+        "capability_call", {"name": "cdp-bridge.browser_execute_js", "args": {}}
+    )
+    assert result["status"] == "error"
+    assert result["code"] == "missing_required_params"
+    assert "script" in result["msg"]
+    # 参数清单进文案，模型下一轮就知道该填什么。
+    assert "script" in result["msg"] and "switch_tab_id" in result["msg"]
+    # 缺参校验在 call_tool 之前拦截，不产生 MCP 调用。
+    runtime.call_tool.assert_not_awaited()
+
+    # 补齐 required 后放行。
+    ok = await ga_registry.execute(
+        "capability_call",
+        {"name": "cdp-bridge.browser_execute_js", "args": {"script": "1+1"}},
+    )
+    assert ok["status"] == "ok"
+    runtime.call_tool.assert_awaited_once_with("cdp-bridge__browser_execute_js", {"script": "1+1"})
+
+
+@pytest.mark.asyncio
+async def test_capability_call_typeerror_translated(ga_registry: ToolRegistry, monkeypatch) -> None:
+    """schema 未声明 required 但函数签名必填：TypeError 原文翻成可行动口径。"""
+    methods = [{
+        "name": "browser_wait",
+        "description": "Wait.",
+        "input_schema": {"type": "object", "properties": {"condition_js": {"type": "string"}}},
+    }]
+    monkeypatch.setattr(ToolRegistry, "_maybe_seed_mcp_sop", _noop_seed)
+    runtime = AsyncMock()
+    runtime.call_tool = AsyncMock(
+        side_effect=TypeError("browser_wait() missing 1 required positional argument: 'condition_js'")
+    )
+    _attach_mcp(ga_registry, methods, runtime=runtime)
+
+    result = await ga_registry.execute(
+        "capability_call", {"name": "cdp-bridge.browser_wait", "args": {}}
+    )
+    assert result["status"] == "error"
+    assert result["code"] == "bad_arguments"
+    assert "condition_js" in result["msg"]
+    assert "不要原样重试" in result["msg"]
+
+
+# ---------------------------------------------------------------------------
+# Stale seeded MCP SOP (params missing) gets backfilled, Experience preserved
+# ---------------------------------------------------------------------------
+
+
+_STALE_SOP = """# cdp-bridge MCP SOP
+
+## Service
+
+cdp-bridge
+
+## Invocation
+
+MCP methods are not first-class tools. Call them through `capability_call(name="cdp-bridge.<method>", args={...})`.
+
+## Available methods
+
+- `capability_call(name="cdp-bridge.browser_execute_js", args={...})`: Execute JavaScript in the browser and capture results plus DOM changes.
+
+## Experience
+
+人工沉淀的经验，补写不得动这里。
+"""
+
+
+@pytest.mark.asyncio
+async def test_stale_sop_backfills_params_keeps_experience(
+    ga_registry: ToolRegistry, tmp_path: Path, monkeypatch
+) -> None:
+    """老版 seed 的 SOP（methods 区无参数行）在下次调用前被补写参数清单。
+
+    场景段把这个文件整体内联进系统提示；没有参数行时模型只能拿方法名猜
+    args（CDP 网页对话 5 连空 args 的根因）。补写只动 methods 区。
+    """
+    from agent import file_memory as fm
+
+    # _MEMORY_ROOT 是模块级常量（默认 data/agents）——不重定向的话本用例会写到
+    # 真实 Agent 的 SOP 文件上，把它的 Experience 区覆盖掉。
+    monkeypatch.setattr(fm, "_MEMORY_ROOT", tmp_path / "agents")
+    sop_root = fm.agent_sop_root(1)  # ga_registry agent_id=1
+    target = sop_root / "mcp" / "cdp-bridge_sop.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(_STALE_SOP, encoding="utf-8")
+
+    methods = [{
+        "name": "browser_execute_js",
+        "description": "Execute JavaScript in the browser and capture results plus DOM changes.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "script": {"type": "string"},
+                "switch_tab_id": {"type": "string", "default": ""},
+            },
+            "required": ["script"],
+        },
+    }]
+    runtime = AsyncMock()
+    runtime.call_tool = AsyncMock(return_value={"status": "ok"})
+    _attach_mcp(ga_registry, methods, runtime=runtime)
+
+    # capability_call 路径触发 _maybe_seed_mcp_sop → 检测老文件 → 补写参数行。
+    await ga_registry.execute(
+        "capability_call", {"name": "cdp-bridge.browser_execute_js", "args": {"script": "1+1"}}
+    )
+    text = target.read_text(encoding="utf-8")
+    assert "script" in text and "(string, required)" in text, "params backfilled"
+    assert "人工沉淀的经验，补写不得动这里。" in text, "Experience section preserved"
+
+    # 已是新格式（有参数行）时不再改写。
+    before = target.read_text(encoding="utf-8")
+    await ga_registry.execute(
+        "capability_call", {"name": "cdp-bridge.browser_execute_js", "args": {"script": "1+1"}}
+    )
+    assert target.read_text(encoding="utf-8") == before, "idempotent on current-format SOP"
+
+
 def test_async_tool_executes_within_loop(ga_registry: ToolRegistry) -> None:
     async def call_in_loop() -> dict:
         return await ga_registry.execute("update_working_checkpoint", {"goal": "g"})

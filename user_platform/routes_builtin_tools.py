@@ -279,28 +279,28 @@ async def create_device_pairing_resource(body: MintPairingCodeReq, user: User = 
 @router.get("/resources/ios-hosts")
 async def list_ios_hosts(user: User = Depends(get_current_user)) -> dict:
     """List available iOS host nodes the user can access."""
-    from .nodes_service import list_my_nodes
+    from .nodes_service import nodes_service
 
-    all_nodes = await list_my_nodes(user.id)
-    hosts = [n for n in all_nodes if n.get("role") == "ios_host"]
+    my_nodes = (await nodes_service.list_my_nodes(user.id)).get("nodes") or []
+    hosts = [n for n in my_nodes if n.get("role") == "ios_host"]
     return {"ios_hosts": hosts}
 
 
 @router.get("/resources/ios-hosts/{node_id}/devices")
 async def list_ios_devices(node_id: str, user: User = Depends(get_current_user)) -> dict:
     """Retrieve the cached device inventory for one ios_host node."""
-    from .nodes_service import user_can_use_node
-    from .node_client import get_node_client
+    from .nodes_service import nodes_service
+    from .node_client import get_node_client, NodeServerUnavailable, RPCError
 
-    if not await user_can_use_node(user.id, node_id):
+    if not await nodes_service.user_can_use_node(user.id, node_id):
         raise HTTPException(status_code=403, detail="您无权访问此节点")
 
     client = get_node_client()
     try:
         return await client.get_ios_devices(node_id)
-    except client.NodeServerUnavailable as exc:
+    except NodeServerUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except client.RPCError as exc:
+    except RPCError as exc:
         if exc.code == "not_found":
             raise HTTPException(status_code=404, detail=exc.message) from exc
         if exc.code == "permission_denied":
@@ -316,8 +316,8 @@ async def claim_ios_device(
     user: User = Depends(get_current_user),
 ) -> dict:
     """Claim an iOS device: mint a pairing code, dispatch claim frame, wait for ack."""
-    from .nodes_service import user_can_use_node
-    from .node_client import get_node_client
+    from .nodes_service import nodes_service
+    from .node_client import get_node_client, NodeServerUnavailable, RPCError
     import mcp_builtin.device_control.store as dc_store
     from server import builtin_tool_store
 
@@ -327,7 +327,7 @@ async def claim_ios_device(
     if not node_id or not udid:
         raise HTTPException(status_code=400, detail="node_id and udid are required")
 
-    if not await user_can_use_node(user.id, node_id):
+    if not await nodes_service.user_can_use_node(user.id, node_id):
         raise HTTPException(status_code=403, detail="您无权访问此节点")
 
     # Conflict check: is this UDID already claimed by anyone?
@@ -350,9 +350,9 @@ async def claim_ios_device(
     client = get_node_client()
     try:
         result = await client.ios_claim_device(node_id, udid, label, code)
-    except client.NodeServerUnavailable as exc:
+    except NodeServerUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except client.RPCError as exc:
+    except RPCError as exc:
         if exc.code == "not_found":
             raise HTTPException(status_code=404, detail=exc.message) from exc
         if exc.code == "permission_denied":
@@ -369,7 +369,7 @@ async def claim_ios_device(
 @router.post("/resources/{resource_id}/release-device")
 async def release_ios_device(resource_id: int, user: User = Depends(get_current_user)) -> dict:
     """Release a claimed iOS device: dispatch release frame, stop the node-side goroutine."""
-    from .node_client import get_node_client
+    from .node_client import get_node_client, NodeServerUnavailable, RPCError
 
     resource = await _owned_resource(resource_id, user, resource_type="device")
     data = resource.get("data") or {}
@@ -386,9 +386,9 @@ async def release_ios_device(resource_id: int, user: User = Depends(get_current_
     client = get_node_client()
     try:
         await client.ios_release_device(node_id, device_id, udid, delete_credential=True)
-    except client.NodeServerUnavailable:
+    except NodeServerUnavailable:
         pass  # node offline: the device is already disconnected
-    except client.RPCError:
+    except RPCError:
         pass  # node-side failure: still revoke the resource
 
     # Revoke the device resource (same as the existing Android path)

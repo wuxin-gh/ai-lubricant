@@ -81,6 +81,11 @@ CLASS_FLAGS = (
     # 不发 tools 是硬要求：上游收到该字段就查自家工具表，本地工具在它那边不存在，
     # 会直接回「工具名称不存在: xxx」，提示词措辞拦不住。
     "TOOLS_AS_PROMPT",
+    # 围栏解析在渠道内做（含「调用名是否存在于入参 tools」的校验：方法存在 -> 按
+    # tool_calls 返回；方法不存在 -> 围栏文本原封不动当正文透传）。声明 True 后框架
+    # 流式出口与非流式聚合出口不再对 content 二次解析围栏，避免把渠道已判不存在的
+    # 方法又解析成 tool_calls、推翻渠道校验。
+    "TOOL_PARSE_IN_CHANNEL",
     # 文本形态：xml / json / hermes，决定提示词与历史轮渲染（两侧必须同形态）。
     "TOOLS_PROMPT_FORMAT",
     # 渠道地址是否必填。默认 True：管理端建/改渠道时 base_url 空就 400，因为「渠道地址」

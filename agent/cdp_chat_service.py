@@ -43,7 +43,7 @@ from agent.api import (
 )
 from user_platform.node_client.approvals import ApprovalDenied, ApprovalTimeout
 from agent.config import AgentConfig
-from agent.context_manager import rebuild_history_messages, attach_tool_result
+from agent.context_manager import rebuild_history_messages, attach_tool_result, _collect_attachment_media
 from agent import conversation_store, scene_context
 
 
@@ -194,6 +194,48 @@ async def client_list_models(
     return {"data": out, "default_model": default_model}
 
 
+def _merge_question_into_content(content: str, event: dict) -> str:
+    """Append an ask_user question to the persisted assistant text."""
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    question = str(data.get("question") or event.get("message") or "")
+    if not question:
+        return content
+    return f"{content}\n\n{question}".strip("\n")
+
+
+def _sign_question_media(event: dict) -> None:
+    """Add short-lived signed URLs to transient CDP question media.
+
+    The URL is attached only to the SSE event sent to the extension. Persisted
+    media parts are signed again when conversation history is read, so an
+    expiring URL is never stored as durable message data.
+    """
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    media = data.get("media")
+    if not isinstance(media, list):
+        return
+    try:
+        import attachment_signing
+    except Exception:  # noqa: BLE001 - signing is optional for the panel
+        return
+    for item in media:
+        if not isinstance(item, dict) or item.get("kind") != "attachment":
+            continue
+        attachment_id = item.get("id") or item.get("attachment_id")
+        try:
+            attachment_id = int(attachment_id)
+        except (TypeError, ValueError):
+            continue
+        if attachment_id <= 0:
+            continue
+        try:
+            signed = attachment_signing.sign_attachment_url(attachment_id, "content")
+        except Exception:  # noqa: BLE001 - a missing signing key is a soft fallback
+            signed = None
+        if signed:
+            item["content_url"] = signed
+
+
 async def _run_cdp_conversation_turn(
     *,
     conv: dict,
@@ -221,10 +263,23 @@ async def _run_cdp_conversation_turn(
     collected_usage: dict[str, Any] | None = None
     collected_reasoning = ""
     collected_content = ""  # 流式正文增量累积，供中途落库；run_agent 结尾仍以 final_content 为准。
+    collected_media: list[dict[str, Any]] = []
     _last_persist_ts = 0.0  # 节流：正文/思考高频到达时最多每 1.5s 落一次中间态。
 
     # 先把 conversation_id 发给扩展，便于后续 abort / 多轮。
     await queue.put({"type": "conversation", "conversation_id": conv_id})
+
+    # 网页对话没有 C 端 session，只有 X-Cdp-Client-Id：反查客户端所属用户，
+    # 作为本轮 AI 副作用（如建定时任务）的归属人与 ask_user 附件的认领人。
+    # 失败留 None——add_job 兜底会按 agent_id 查 agents.user_id；都拿不到才落
+    # NULL（用户态不可见）。在 on_event 之前解析：question 事件的附件认领要用。
+    client_owner: str | None = None
+    if client_id:
+        try:
+            import mcp_plugin_store
+            client_owner = await mcp_plugin_store.get_cdp_client_owner_user_id(client_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"解析 CDP 客户端 {client_id} owner 失败: {exc}")
 
     async def checkpoint() -> None:
         """把当前已累积的正文/思考/工具调用/结果渐进写回 assistant 消息，status 仍留 streaming。
@@ -241,6 +296,7 @@ async def _run_cdp_conversation_turn(
                 content=collected_content,
                 tool_calls=collected_tool_calls or None,
                 tool_results=collected_tool_results or None,
+                media=collected_media or None,
                 status="streaming",
                 reasoning=collected_reasoning,
             )
@@ -281,6 +337,17 @@ async def _run_cdp_conversation_turn(
                 result=event.get("data"),
             )
             await checkpoint()
+        elif etype == "question":
+            # ask_user 的提问不是普通工具调用：把问题并入正文落库（与 agent/api.py
+            # 同口径），否则网页面板只见一张 ask_user 工具卡、看不到问题本身；
+            # 刷新后历史回放也只会剩工具卡。附件抽成 media part 并认领给客户端
+            # 所属用户，回读会话时经 _sign_media_urls 现签直链。
+            collected_content = _merge_question_into_content(collected_content, event)
+            await _collect_attachment_media(event, collected_media, client_owner, conv_id)
+            await checkpoint()
+            # 瞬态事件流附免登录签名直链（只进 SSE，不落库——落库的 media part 在
+            # serve 时现签，不会把过期签名存成消息数据），面板据此内联渲染图片。
+            _sign_question_media(event)
         elif etype == "done" and isinstance(event.get("usage"), dict):
             collected_usage = event["usage"]
         await queue.put(event)
@@ -290,17 +357,6 @@ async def _run_cdp_conversation_turn(
         try:
             from agent.agent_main import GenericAgent
             from agent.agent_loop import agent_runner_loop, BaseHandler as _BH
-
-            # 网页对话没有 C 端 session，只有 X-Cdp-Client-Id：反查客户端所属用户，
-            # 作为本轮 AI 副作用（如建定时任务）的归属人。失败留 None——add_job 兜底
-            # 会按 agent_id 查 agents.user_id；都拿不到才落 NULL（用户态不可见）。
-            client_owner: str | None = None
-            if client_id:
-                try:
-                    import mcp_plugin_store
-                    client_owner = await mcp_plugin_store.get_cdp_client_owner_user_id(client_id)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(f"解析 CDP 客户端 {client_id} owner 失败: {exc}")
 
             agent_system_prompt = agent.get("system_prompt") or ""
             # Agent LLM 只走网关。让 GenericAgent 按 agent_id 从数据库加载权威的
@@ -477,11 +533,17 @@ async def _run_cdp_conversation_turn(
                 except Exception:  # noqa: BLE001 — 收尾镜像失败不影响对话结果
                     pass
 
+            # ask_user 退出时 agent_runner_loop yield 的 data 是 {status:"question",...}
+            # dict 而非正文文本——直接写 content 会把整个 dict 落进字符串列。与
+            # agent/api.py 同口径：正文用累积全文；EXITED-question 的问题文本已由
+            # on_event 的 question 分支并入 collected_content，dict 在这里只作废。
+            final_text = final_content if isinstance(final_content, str) else ""
             await conversation_store.update_message(
                 assistant_msg_id,
-                content=final_content,
+                content=collected_content or final_text,
                 tool_calls=collected_tool_calls or None,
                 tool_results=collected_tool_results or None,
+                media=collected_media or None,
                 status="done",
                 model=effective_model,
                 usage=collected_usage or None,
@@ -502,6 +564,7 @@ async def _run_cdp_conversation_turn(
                 content=collected_content,
                 tool_calls=collected_tool_calls or None,
                 tool_results=collected_tool_results or None,
+                media=collected_media or None,
                 status="done",
                 model=effective_model,
                 usage=collected_usage or None,
@@ -517,6 +580,7 @@ async def _run_cdp_conversation_turn(
                 content=collected_content,
                 tool_calls=collected_tool_calls or None,
                 tool_results=collected_tool_results or None,
+                media=collected_media or None,
                 status="error",
                 error=error_text,
                 reasoning=collected_reasoning,
@@ -1055,6 +1119,9 @@ async def client_get_conversation(
                 "content": m.get("content") or "",
                 "tool_calls": m.get("tool_calls") or [],
                 "tool_results": m.get("tool_results") or [],
+                # media：ask_user 附件的回放载体（attachment part 经 _sign_media_urls
+                # 带免登录签名直链，面板无需登录态即可内联渲染图片）。
+                "media": m.get("media") or [],
                 "status": m.get("status") or "done",
                 "error": m.get("error") or "",
                 "created_at": _iso_value(m.get("created_at")),

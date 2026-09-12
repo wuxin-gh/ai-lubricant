@@ -197,6 +197,65 @@ def test_failure_without_snapshot_raises(fetch):
 
 # ── refresh_all：模块索引 + marker 预热，逐文件容错 ──────────────────────────
 
+def test_refresh_all_warms_manifests_too(fetch, monkeypatch):
+    """只读部署的 /consumer/item 只能 peek 命中，后台必须把 manifest 也一起预热。"""
+    settings = _settings(modules=("mcp",))
+    consumer = MarketplaceConsumerSettings(
+        repo_url=settings.repo_url, github_owner="o", github_repo="r",
+        github_branch="main", modules=("mcp",), index_name="index.json", platform="github",
+    )
+    monkeypatch.setattr(consumer_cache.mp_config, "settings", settings)
+    monkeypatch.setattr(consumer_cache.mp_config, "consumer_settings", consumer)
+
+    fetch.files["modules/mcp/index.json"] = {
+        "items": [
+            {"id": "alpha", "status": "published"},   # 应预热其 manifest
+            {"id": "draft", "status": "draft"},        # 非发布，不预热
+        ]
+    }
+    fetch.files["modules/mcp/items/alpha.json"] = {"id": "alpha"}
+    fetch.files["modules/node-versions/index.json"] = {"items": []}
+    fetch.files["modules/mobile-versions/index.json"] = {"items": []}
+    fetch.files["marketplace.json"] = {"schema": "ai-lubricant.market.v1"}
+
+    asyncio.run(consumer_cache.refresh_all())
+
+    # published 条目的 manifest 被预热；draft 条目没有。
+    assert "modules/mcp/items/alpha.json" in consumer_cache._cache
+    assert fetch.calls.count("modules/mcp/items/alpha.json") == 1
+
+
+# ── peek：HTTP 读路径专用，绝不触发网络 ───────────────────────────────────────
+
+def test_peek_never_fetches_on_miss(fetch):
+    """缓存未命中时 peek 返回 (None, False)，绝不现拉远程。"""
+    data, stale = asyncio.run(consumer_cache.peek("modules/mcp/index.json"))
+    assert fetch.calls == []
+    assert data is None
+    assert stale is False
+
+
+def test_peek_returns_fresh_then_stale(fetch):
+    """命中未过期直接回；过期后回旧值并标 stale，全程不出网。"""
+    fetch.files["modules/mcp/index.json"] = {"items": [{"id": "a"}]}
+    # 先用 get_raw warm（模拟后台 sync_loop），peek 不应再打网络。
+    asyncio.run(consumer_cache.get_raw("modules/mcp/index.json"))
+
+    fresh, stale_fresh = asyncio.run(consumer_cache.peek("modules/mcp/index.json"))
+    assert fresh == {"items": [{"id": "a"}]}
+    assert stale_fresh is False
+    assert fetch.calls.count("modules/mcp/index.json") == 1  # 只有 warm 那次
+
+    # 过期：peek 仍回旧值（标 stale），不现拉。
+    consumer_cache._cache["modules/mcp/index.json"]["fetched_at"] -= (
+        consumer_cache._item_ttl_seconds() + 1
+    )
+    stale_data, stale = asyncio.run(consumer_cache.peek("modules/mcp/index.json"))
+    assert stale_data == {"items": [{"id": "a"}]}
+    assert stale is True
+    assert fetch.calls.count("modules/mcp/index.json") == 1  # 没有第二次出网
+
+
 def test_refresh_all_warms_indexes_and_marker(fetch, monkeypatch):
     settings = _settings(modules=("mcp", "skills"))
     consumer = MarketplaceConsumerSettings(

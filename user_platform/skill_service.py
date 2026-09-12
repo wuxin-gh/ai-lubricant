@@ -16,7 +16,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from .models_skill import AgentPlugin, AgentRule, AgentSkill
+from .models_skill import AgentPlugin, AgentPluginRepo, AgentRule, AgentSkill
 
 _PRIVILEGED_ROLES = {"admin"}
 
@@ -33,12 +33,14 @@ def _skill_dict(s: AgentSkill) -> dict:
         "is_force_delivery": s.is_force_delivery,
         "enabled": s.enabled,
         "admin_tags": s.admin_tags,
+        "source_type": s.source_type,
+        "source_url": s.source_url,
         "created_at": s.created_at.isoformat() if s.created_at else None,
         "updated_at": s.updated_at.isoformat() if s.updated_at else None,
     }
 
 
-def _plugin_dict(p: AgentPlugin) -> dict:
+def _plugin_dict(p: AgentPlugin, repo: AgentPluginRepo | None = None) -> dict:
     return {
         "id": str(p.id),
         "repo_id": str(p.repo_id),
@@ -49,6 +51,8 @@ def _plugin_dict(p: AgentPlugin) -> dict:
         "active_version_id": str(p.active_version_id) if p.active_version_id else None,
         "is_force_delivery": p.is_force_delivery,
         "enabled": p.enabled,
+        "source_type": repo.source_type if repo else None,
+        "source_url": repo.github_url if repo else None,
         "created_at": p.created_at.isoformat() if p.created_at else None,
         "updated_at": p.updated_at.isoformat() if p.updated_at else None,
     }
@@ -89,14 +93,19 @@ class SkillService:
     ) -> list[dict]:
         rows = await AgentPlugin.filter(is_deleted=False).order_by("name")
         if self._is_privileged(role):
-            return [_plugin_dict(r) for r in rows if r.active_version_id and (r.enabled or include_disabled_owned)]
-        visible = set(self._visible_scopes(user_id, team_id))
-        return [
-            _plugin_dict(r) for r in rows
-            if r.active_version_id
-            and (r.scope_type, r.scope_id) in visible
-            and (r.enabled or (include_disabled_owned and r.scope_type == "user" and r.scope_id == str(user_id)))
-        ]
+            visible = [r for r in rows if r.active_version_id and (r.enabled or include_disabled_owned)]
+        else:
+            scopes = set(self._visible_scopes(user_id, team_id))
+            visible = [
+                r for r in rows
+                if r.active_version_id
+                and (r.scope_type, r.scope_id) in scopes
+                and (r.enabled or (include_disabled_owned and r.scope_type == "user" and r.scope_id == str(user_id)))
+            ]
+        # 来源（source_type/github_url）在 repo 行上，批量取一次避免 N+1。
+        repo_ids = list({r.repo_id for r in visible})
+        repos = {str(r.id): r for r in await AgentPluginRepo.filter(id__in=repo_ids)} if repo_ids else {}
+        return [_plugin_dict(r, repos.get(str(r.repo_id))) for r in visible]
 
 
 skill_service = SkillService()

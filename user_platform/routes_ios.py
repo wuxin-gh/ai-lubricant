@@ -64,6 +64,13 @@ class AppleIdLoginReq(BaseModel):
     password: str
     # 原地更新已有配置（重新登录）：id 不变，设备绑定的 signing_profile_id 链不断。
     profile_id: int | None = None
+    # 出口代理池条目 id（network 模式）：gsa.apple.com 对数据中心 IP 直接 503，
+    # 服务端所在网络被拒时经代理出境登录。空 = 直连。
+    proxy_config_id: str = ""
+    # 远程 anisette 服务器 URL（如 ani.sidestore.io）。本地 anisette 库生成虚拟
+    # 设备指纹，Apple 会 503 拒收；远程服务器用真实 provisioning 数据生成头。
+    # 空 = 用本地 anisette 库。
+    anisette_server: str = ""
 
 
 class AppleIdVerify2faReq(BaseModel):
@@ -72,6 +79,10 @@ class AppleIdVerify2faReq(BaseModel):
     password: str
     code: str
     profile_id: int | None = None
+    # 与 login 同口径：2FA 完成那步请求也经同一代理出网。
+    proxy_config_id: str = ""
+    # 与 login 同口径：远程 anisette 服务器（2FA 完成那步也用它取真实指纹）。
+    anisette_server: str = ""
 
 
 # ── Apple ID 登录中间态（进程内 TTL dict，仿 _BUILD_META 模式）────────────────
@@ -108,6 +119,102 @@ def _load_apple_engine() -> Any:
             status_code=503, detail=f"Apple ID 签名引擎不可用（依赖未安装）：{exc}"
         ) from exc
     return SimpleNamespace(gsa=apple_gsa, developer=apple_developer, provision=apple_provision)
+
+
+async def _apple_gsa_egress(proxy_config_id: str) -> None:
+    """按签名配置的代理池条目设置 GSA 引擎出口。
+
+    三种路径：
+    * node 模式：node_id 指向一台执行节点，GSA 请求经 NodeProxyRequest 帧发给该
+      节点出网（节点 IP 可能是 Apple 认可的住宅/宽带 IP）。同步桥在工作线程内
+      asyncio.run() 跑帧往返。
+    * network 模式：requests proxies 形态（http://...），直接给 requests 用。
+    * 空/直连：什么都不设置，引擎走默认直连。
+
+    url_prefix 模式对 GSA API 请求无意义（它是下载前缀改写），400 拒绝。
+    gsa.apple.com 对数据中心 IP 直接 503——服务端所在网络被拒时必须经代理出境。
+    """
+    wanted = (proxy_config_id or "").strip()
+    if not wanted:
+        return
+    # node 模式拿不到 node_id，得绕过 resolve_proxy（它对 node 模式直接 raise）。
+    from config import CONFIG_STORE
+
+    try:
+        main = await CONFIG_STORE.read_main_async()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"读取代理池失败：{exc}") from exc
+    proxies = main.get("proxies") if isinstance(main, dict) else []
+    entry = None
+    if isinstance(proxies, list):
+        for p in proxies:
+            if isinstance(p, dict) and (p.get("id") or "") == wanted:
+                entry = p
+                break
+    if entry is None:
+        raise HTTPException(status_code=400, detail=f"代理配置 {wanted} 不存在")
+    mode = str(entry.get("mode") or "network").strip().lower()
+
+    if mode == "node":
+        node_id = str(entry.get("node_id") or "").strip()
+        if not node_id:
+            raise HTTPException(status_code=400, detail="节点隧道代理未配置目标节点")
+        engine = _load_apple_engine()
+        engine.gsa.set_gsa_transport(_node_tunnel_transport(node_id))
+        return
+
+    if mode == "network":
+        from proxy_utils import canonical_proxy, proxy_effective_url
+
+        url = proxy_effective_url(entry)
+        if not url:
+            raise HTTPException(status_code=400, detail="网络代理未配置地址")
+        engine = _load_apple_engine()
+        engine.gsa.set_gsa_proxies({"http": url, "https": url})
+        return
+
+    if mode == "direct":
+        # 显式直连：清掉同一进程上一次登录可能留下的 node/network 出口。
+        engine = _load_apple_engine()
+        engine.gsa.set_gsa_proxies(None)
+        return
+
+    raise HTTPException(
+        status_code=400,
+        detail="Apple ID 登录仅支持直连、网络代理或节点隧道代理（direct/network/node 模式）",
+    )
+
+
+def _node_tunnel_transport(node_id: str):
+    """构造同步 transport：GSA 引擎线程内调，经节点隧道发请求取完整响应。
+
+    工作线程（asyncio.to_thread）无 running loop，asyncio.run() 安全。
+    RemoteNodeConnectManager 每次请求新建 aiohttp session，无跨 loop 亲和问题。
+    """
+    from providers.proxy_manager import get_proxy_manager
+
+    manager = getattr(get_proxy_manager(), "_node_manager", None)
+    if manager is None:
+        raise RuntimeError("节点代理未就绪（node manager 未注入）")
+
+    def transport(method: str, url: str, headers: dict, body: bytes) -> tuple[int, dict, bytes]:
+        import asyncio
+
+        async def _do() -> tuple[int, dict, bytes]:
+            resp = await manager.request(
+                node_id, method=method, url=url, headers=headers, body=body
+            )
+            chunks: list[bytes] = []
+            try:
+                async for chunk in resp.iter_chunks():
+                    chunks.append(chunk)
+            finally:
+                await resp.close()
+            return resp.status, dict(resp.headers), b"".join(chunks)
+
+        return asyncio.run(_do())
+
+    return transport
 
 
 async def _resolve_market_wda_asset() -> dict:
@@ -510,6 +617,16 @@ async def apple_id_login(body: AppleIdLoginReq, user: User = Depends(get_current
         if str(existing.get("kind") or "") != "apple_id":
             raise HTTPException(status_code=400, detail="该配置不是 Apple ID 类型")
 
+    # 出口路由：必须在 begin_login 前设置——登录/2FA/物化全链路用同一出口。
+    await _apple_gsa_egress(body.proxy_config_id)
+    # 远程 anisette 服务器（真实设备指纹，避开本地虚拟指纹被 Apple 503）。
+    engine.gsa.set_gsa_transport(None)  # 防御：清掉上次的 transport
+    try:
+        from .apple_signing import anisette as _anisette_mod
+        _anisette_mod.set_remote_server(body.anisette_server or "")
+    except Exception:  # noqa: BLE001
+        pass
+
     try:
         result = await asyncio.to_thread(engine.gsa.begin_login, email, body.password)
     except Exception as exc:  # noqa: BLE001 — 引擎错误统一映射 HTTP
@@ -549,6 +666,15 @@ async def apple_id_verify_2fa(body: AppleIdVerify2faReq, user: User = Depends(ge
         raise HTTPException(status_code=403, detail="验证码不属于当前用户")
     if str(entry.get("email") or "") != body.email.strip():
         raise HTTPException(status_code=400, detail="邮箱与登录时不一致")
+
+    # 与 login 同口径出口代理；2FA 完成那步请求同样要经同一代理出网。
+    await _apple_gsa_egress(body.proxy_config_id)
+    # 远程 anisette 服务器（与 login 同口径）。
+    try:
+        from .apple_signing import anisette as _anisette_mod
+        _anisette_mod.set_remote_server(body.anisette_server or "")
+    except Exception:  # noqa: BLE001
+        pass
 
     pending = {
         "email": entry.get("email"),
@@ -692,7 +818,7 @@ async def prepare_wda(resource_id: int, body: WdaJobRequest, user: User = Depend
     直链 + sha256，节点经自身出口代理下载。
     """
     import uuid
-    from .node_client import get_node_client
+    from .node_client import get_node_client, NodeServerUnavailable, RPCError
 
     device = await _owned_device(resource_id, user)
     data = device.get("data") or {}
@@ -742,9 +868,9 @@ async def prepare_wda(resource_id: int, body: WdaJobRequest, user: User = Depend
             wda_bundle_id=wda_bundle_id,
             xctest_config_name=body.xctest_config_name,
         )
-    except client.NodeServerUnavailable as exc:
+    except NodeServerUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except client.RPCError as exc:
+    except RPCError as exc:
         if exc.code == "not_found":
             raise HTTPException(status_code=404, detail=exc.message) from exc
         if exc.code == "permission_denied":
@@ -781,7 +907,7 @@ async def renew_wda(resource_id: int, body: WdaJobRequest, user: User = Depends(
     落库的绑定（自动续签依赖此路径）。
     """
     import uuid
-    from .node_client import get_node_client
+    from .node_client import get_node_client, NodeServerUnavailable, RPCError
 
     device = await _owned_device(resource_id, user)
     data = device.get("data") or {}
@@ -827,9 +953,9 @@ async def renew_wda(resource_id: int, body: WdaJobRequest, user: User = Depends(
             wda_bundle_id=wda_bundle_id,
             xctest_config_name=body.xctest_config_name,
         )
-    except client.NodeServerUnavailable as exc:
+    except NodeServerUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except client.RPCError as exc:
+    except RPCError as exc:
         if exc.code == "failed_precondition":
             raise HTTPException(status_code=412, detail=exc.message) from exc
         if exc.code == "deadline_exceeded":
@@ -852,7 +978,7 @@ async def reinstall_wda(resource_id: int, body: WdaJobRequest, user: User = Depe
     下发）。签名配置回退到 prepare 时落库的绑定。
     """
     import uuid
-    from .node_client import get_node_client
+    from .node_client import get_node_client, NodeServerUnavailable, RPCError
 
     device = await _owned_device(resource_id, user)
     data = device.get("data") or {}
@@ -895,9 +1021,9 @@ async def reinstall_wda(resource_id: int, body: WdaJobRequest, user: User = Depe
             wda_bundle_id=wda_bundle_id,
             xctest_config_name=body.xctest_config_name,
         )
-    except client.NodeServerUnavailable as exc:
+    except NodeServerUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except client.RPCError as exc:
+    except RPCError as exc:
         if exc.code == "failed_precondition":
             raise HTTPException(status_code=412, detail=exc.message) from exc
         if exc.code == "deadline_exceeded":
@@ -915,7 +1041,7 @@ async def reinstall_wda(resource_id: int, body: WdaJobRequest, user: User = Depe
 @router.get("/devices/{resource_id}/wda/jobs/{job_id}")
 async def get_wda_job_status(resource_id: int, job_id: str, user: User = Depends(get_current_user)) -> dict:
     """查询 WDA job 状态（轮询端点）。"""
-    from .node_client import get_node_client
+    from .node_client import get_node_client, NodeServerUnavailable, RPCError
 
     device = await _owned_device(resource_id, user)
     data = device.get("data") or {}
@@ -929,9 +1055,9 @@ async def get_wda_job_status(resource_id: int, job_id: str, user: User = Depends
     try:
         snapshot = await client.get_ios_wda_job_status(node_id, job_id)
         return snapshot
-    except client.NodeServerUnavailable as exc:
+    except NodeServerUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except client.RPCError as exc:
+    except RPCError as exc:
         if exc.code == "not_found":
             raise HTTPException(status_code=404, detail=exc.message) from exc
         if exc.code == "failed_precondition":
@@ -942,7 +1068,7 @@ async def get_wda_job_status(resource_id: int, job_id: str, user: User = Depends
 @router.post("/devices/{resource_id}/wda/jobs/{job_id}/cancel")
 async def cancel_wda_job(resource_id: int, job_id: str, user: User = Depends(get_current_user)) -> dict:
     """取消运行中的 WDA job。"""
-    from .node_client import get_node_client
+    from .node_client import get_node_client, NodeServerUnavailable, RPCError
 
     device = await _owned_device(resource_id, user)
     data = device.get("data") or {}
@@ -956,9 +1082,9 @@ async def cancel_wda_job(resource_id: int, job_id: str, user: User = Depends(get
     try:
         result = await client.ios_cancel_wda_job(node_id, job_id)
         return result
-    except client.NodeServerUnavailable as exc:
+    except NodeServerUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except client.RPCError as exc:
+    except RPCError as exc:
         if exc.code == "failed_precondition":
             raise HTTPException(status_code=412, detail=exc.message) from exc
         raise HTTPException(status_code=500, detail=exc.message) from exc

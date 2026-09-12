@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-VALID_SOURCES = ("agent-leaderboard", "agency-agents", "agency-agents-zh", "agentscope")
+VALID_SOURCES = ("agent-leaderboard", "agency-agents", "agency-agents-zh", "agentscope", "skillhub")
 
 
 def _loads(value: Any, default: Any) -> Any:

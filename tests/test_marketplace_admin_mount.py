@@ -98,3 +98,67 @@ def test_admin_rejects_non_admin_even_when_writable(client, monkeypatch):
     client.app.dependency_overrides[routes.get_current_user] = lambda: type("U", (), {"role": "user"})()
     resp = client.get("/api/v1/marketplace/admin/catalog", params={"module": "mcp"})
     assert resp.status_code == 403
+
+
+def test_admin_catalog_is_store_only_never_hits_github(client, monkeypatch):
+    """目录读取只打本地 store，绝不回退 GitHub：未填充时返回空目录，不调 _client。"""
+    monkeypatch.setattr(mp_config, "settings", WRITABLE_SETTINGS)
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("catalog must not call the GitHub client in a request")
+
+    monkeypatch.setattr(routes, "_client", _boom)
+    # 没有 PG pool → store.list_summaries 返回 []；catalog 应直接回空目录。
+    resp = client.get("/api/v1/marketplace/admin/catalog", params={"module": "mcp"})
+    assert resp.status_code == 200
+    assert resp.json()["items"] == []
+
+
+def test_admin_export_is_store_only_never_hits_github(client, monkeypatch):
+    """导出同样只读本地 store；未填充时各模块为空，不现拉 GitHub。"""
+    monkeypatch.setattr(mp_config, "settings", WRITABLE_SETTINGS)
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("export must not call the GitHub client in a request")
+
+    monkeypatch.setattr(routes, "_client", _boom)
+    resp = client.get("/api/v1/marketplace/admin/export")
+    assert resp.status_code == 200
+    body = resp.json()
+    # 各模块都在导出结构里但内容为空（本地 store 未填充），不现拉 GitHub。
+    assert set(body["modules"]) == set(WRITABLE_SETTINGS.modules)
+    for mod in body["modules"].values():
+        assert mod["index"]["items"] == []
+        assert mod["manifests"] == {}
+
+
+def test_consumer_index_returns_empty_without_network(client, monkeypatch):
+    """只读消费侧：store 未填充且缓存未预热时返回空索引，不在请求线程出网。"""
+    from user_platform.marketplace import consumer_cache
+
+    consumer_cache._cache.clear()
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("consumer/index must not fetch in the request thread")
+
+    monkeypatch.setattr(consumer_cache, "get_raw", _boom)
+    monkeypatch.setattr(consumer_cache, "_fetch_raw", _boom)
+    resp = client.get("/api/v1/marketplace/consumer/index/mcp")
+    assert resp.status_code == 200
+    assert resp.json()["items"] == []
+
+
+def test_consumer_status_uses_peek_not_get_raw(client, monkeypatch):
+    """/consumer/status 只读后台预热的 marker 快照，不现拉。"""
+    from user_platform.marketplace import consumer_cache
+
+    consumer_cache._cache.clear()
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("consumer/status must not fetch in the request thread")
+
+    monkeypatch.setattr(consumer_cache, "get_raw", _boom)
+    resp = client.get("/api/v1/marketplace/consumer/status")
+    assert resp.status_code == 200
+    # 缓存未预热 → 未验证（verified=False），但请求必须秒回，不抛错。
+    assert resp.json()["verified"] is False

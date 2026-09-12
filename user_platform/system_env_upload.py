@@ -70,10 +70,19 @@ def base_url() -> str:
     — so the archive upload lands on the process that serves these routes. Using
     ``node_server_public_url`` here would point the node at the control plane,
     which serves no ``/api/v1/resources`` route at all.
+
+    A remote node cannot reach the loopback default: ``gateway_public_url`` unset
+    resolves to ``http://127.0.0.1:{port}``, and a node handed that URL POSTs to
+    its OWN loopback and the upload dies in a fraction of a second. So the origin
+    goes through ``gateway_base_url_for_nodes`` — which keeps an explicitly
+    configured non-loopback origin verbatim and, for the loopback default with a
+    non-loopback control plane, swaps in the control-plane host (same box, two
+    ports) — the same rule MCP gateway URLs already use.
     """
     from . import config as compat_config
+    from .config import gateway_base_url_for_nodes
 
-    origin = (compat_config.settings.gateway_public_url or "").strip().rstrip("/")
+    origin = gateway_base_url_for_nodes(compat_config.settings).strip().rstrip("/")
     if not origin:
         raise RuntimeError("gateway_public_url 未配置，无法生成节点上传地址")
     return origin

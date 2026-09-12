@@ -57,7 +57,9 @@ from db import PostgresClient
 from request_log_writer import request_log_writer
 
 
-_LOG_DIR = Path(__file__).resolve().parent / "logs"
+# 文件日志目录。默认仓库内 logs/；releases+current 布局下经 LOG_DIR 指到跨版本
+# 共享目录（shared/logs），避免随旧 release 被 GC 清掉。
+_LOG_DIR = Path(os.environ.get("LOG_DIR") or Path(__file__).resolve().parent / "logs")
 _file_log_sink_id = None
 
 
@@ -423,10 +425,10 @@ async def lifespan(_app: FastAPI):
         leaderboard_sync.sync_loop(), name="leaderboard-sync"
     )
 
-    # 内容源定时同步（agency-agents / agency-agents-zh / agentscope）：与 leaderboard
-    # 同款 asyncio 后台循环。各源的 enabled/interval_hours 在市场管理配置里；默认全关，
-    # 未打开时空转每小时复查，不抓取。已在跑时由模块级 _progress.running 挡重入。
-    from user_platform.marketplace import agency_agents_convert, agentscope_convert
+    # 内容源定时同步（agency-agents / agency-agents-zh / agentscope / skillhub）：与
+    # leaderboard 同款 asyncio 后台循环。各源的 enabled/interval_hours 在市场管理配置里；
+    # 默认全关，未打开时空转每小时复查，不抓取。已在跑时由模块级 _progress.running 挡重入。
+    from user_platform.marketplace import agency_agents_convert, agentscope_convert, skillhub_convert
     agency_agents_sync_task = asyncio.create_task(
         agency_agents_convert.sync_loop(), name="agency-agents-sync"
     )
@@ -435,6 +437,9 @@ async def lifespan(_app: FastAPI):
     )
     agentscope_sync_task = asyncio.create_task(
         agentscope_convert.sync_loop(), name="agentscope-sync"
+    )
+    skillhub_sync_task = asyncio.create_task(
+        skillhub_convert.sync_loop(), name="skillhub-sync"
     )
 
     # 消费侧市场读缓存：索引与根 marker 后台预热，单条 manifest read-through；
@@ -1414,6 +1419,19 @@ async def _validate_chat_request(body: dict, api_key: str | None = None):
         logger.warning("缺少 model 参数")
         raise HTTPException(status_code=400, detail="缺少 model 参数")
 
+    # 诊断日志：请求体里写死的 model 值——这是用户说的"一进入请求方法就写死"
+    # 的那层。任何"模型跑错"的线上问题，拿这条日志和 runtime 侧 [claude-query]
+    # 对值，就能定位是 runtime 发过来的就是这个值，还是网关路由阶段改了。
+    # 不含密钥：只记录 model 名、api_key 前缀、stream 标记。
+    _key_prefix = (api_key[:12] + "...") if api_key else "<none>"
+    logger.info(
+        "[gateway] chat-validate model='{}' api_key_prefix='{}' stream={} "
+        "is_model_group={} has_routes={}",
+        model, _key_prefix, bool(body.get("stream")),
+        await _catalog_call(config.Config.is_model_group, model, snapshot=catalog_snapshot),
+        bool(ModelClientPool.get_model_routes(model)),
+    )
+
     messages = body.get("messages")
     if not messages:
         logger.warning("缺少 messages 参数")
@@ -2041,6 +2059,15 @@ async def _validate_task_request_context(api_key: str | None, headers, body: dic
     bound_thread = (task.get("provider_thread_id") or "").strip()
     first_seen = bool(task.get("first_request_seen"))
     bootstrap_consumed = bool(task.get("bootstrap_consumed"))
+    # 诊断日志：网关收到的 task 请求 thread 与 DB 绑定值。403 "Task API Key 与
+    # provider 会话不匹配" 的根因在这里——两个值不一致就是 mismatch，一致就
+    # 排除这条。也记录 bound 是否为空（首请求绑定前 vs 已绑定后的分叉点）。
+    logger.info(
+        "[gateway] task-auth task_id='{}' provider='{}' incoming_thread='{}' "
+        "db_bound_thread='{}' first_seen={} bootstrap_consumed={}",
+        str(task.get("id") or ""), provider, provider_thread_id,
+        bound_thread or "<unbound>", first_seen, bootstrap_consumed,
+    )
     if bound_thread:
         # Already bound: the request thread must match the Task's thread.
         if bound_thread != provider_thread_id:
@@ -4464,6 +4491,19 @@ async def _chat_with_retry_for_model(model, messages, stream, api_key: str | Non
     route = None
     provider_whitelist = kwargs.pop("provider_whitelist", None) or set()
     provider_blacklist = kwargs.pop("provider_blacklist", None) or set()
+    account_whitelist = kwargs.pop("account_whitelist", None)
+    # 诊断日志：进入选路重试编排前的模型值与请求归属（正对"请求日志里写死的
+    # model"这一层——它在此函数的下游 route_info 组装前就已经定型）。任何
+    # "跑错模型"先拿这条和 [gateway] chat-validate / runtime [claude-query] 对值。
+    logger.info(
+        "[gateway] chat-retry-enter model='{}' chat_method='{}' stream={} api_key_prefix='{}' "
+        "task_id='{}' editor_id='{}' session_id='{}'",
+        model, chat_method, stream,
+        (api_key[:12] + "...") if api_key else "<none>",
+        str(kwargs.get("task_id") or "") or "<none>",
+        str(kwargs.get("editor_id") or "") or "<none>",
+        str(kwargs.get("session_id") or "") or "<none>",
+    )
     account_whitelist = kwargs.pop("account_whitelist", None)
     is_test = bool(kwargs.pop("is_test", False))
     is_probe = bool(kwargs.pop("is_probe", False))

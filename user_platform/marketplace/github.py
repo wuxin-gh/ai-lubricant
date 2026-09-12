@@ -40,8 +40,8 @@ from .config import MarketplaceSettings
 #   - 写/删内部取 sha 永远绕过缓存，成功后失效该 path —— 保证 PUT 拿到的 sha 是
 #     GitHub 当前的，不会因旧 sha 冲突 409；
 #   - 缓存存取一律深拷贝，调用方（routes 里 index.update 等就地改写）改不动缓存本体；
-#   - 其他实例 / 网页端的外部改动最多在 TTL 内不可见；管理页「刷新」带 fresh=1 可
-#     强制绕过（见 routes._read_index）。
+#   - 其他实例 / 网页端的外部改动最多在 TTL 内不可见；管理页「刷新」走本地 store，
+#     不再绕过读缓存（HTTP 读路径已 store-only，见 routes 的 /admin/* 与 /consumer/*）。
 _CACHE_TTL_SECONDS = 300
 _CACHE_MAX_ENTRIES = 512
 _read_cache: dict[tuple[str, str, str, str], tuple[float, Any, str]] = {}

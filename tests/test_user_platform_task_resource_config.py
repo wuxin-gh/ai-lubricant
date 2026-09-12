@@ -136,7 +136,8 @@ async def test_resolve_routes_reference_id_bindings_to_new_store(monkeypatch):
         return False
 
     async def fake_visible(user_id, team_id, *, resource_type=None, is_admin=False):
-        assert resource_type in ("skill", "skills")  # skill 主类型会连查 skills 集合
+        # skill 主类型会连查 skills 集合与 plugin 容器（带 entries 的插件）。
+        assert resource_type in ("skill", "skills", "plugin")
         return [{
             "id": "new-ref-1", "params": {}, "display_name": "", "version": "",
             "resource": {
@@ -352,9 +353,12 @@ async def test_service_id_binding_resolves_wire_spec(monkeypatch):
         "transport": "remote",
         "command": "",
         "args": [],
-        "env": {},
+        # env/headers 是 repeated EnvVarSpec——必须是 [{name, value}] 列表。
+        # 历史字典形态会被控制面 JSON 解析拒绝（repeated field must be in a
+        # list），派发整体失败；行里存的 env_template/headers 字典在产出时转换。
+        "env": [],
         "url": "http://127.0.0.1:9693/sse",
-        "headers": {"X-K": "v"},
+        "headers": [{"name": "X-K", "value": "v"}],
     }
     # 无 resource_id/service_id 的旧形态原样透传。
     assert specs[1] == {"name": "legacy", "command": "echo"}

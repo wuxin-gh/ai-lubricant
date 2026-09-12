@@ -140,6 +140,41 @@ async def delete_resource_reference(
     return _envelope({"deleted": True})
 
 
+@router.post("/v2/references/from-resource")
+async def create_reference_from_resource(
+    body: dict = Body(...),
+    user: User = Depends(get_current_user),
+    team_id: str = Depends(get_current_team_id),
+) -> dict:
+    """引用已有资源池行，不重复执行 GitHub 识别。"""
+    import resource_store
+
+    raw_id = body.get("resource_id")
+    try:
+        resource_id = int(raw_id)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "invalid_resource_id") from None
+    resource = await resource_store.get_resource(resource_id)
+    if not resource:
+        raise HTTPException(404, "resource_not_found")
+    if str(resource.get("status") or "") != "published":
+        raise HTTPException(409, "resource_not_published")
+    params = body.get("params") if isinstance(body.get("params"), dict) else {}
+    try:
+        reference = await resource_store.create_reference(
+            team_id=team_id,
+            resource_id=resource_id,
+            params=params,
+            display_name=str(resource.get("display_name") or resource.get("name") or ""),
+            description=str(resource.get("description") or ""),
+            version=str(resource.get("version") or ""),
+            created_by=str(user.id),
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return _envelope(reference, "已引用")
+
+
 @router.post("/references/from-github")
 async def create_reference_from_github(
     body: dict = Body(...),
@@ -237,6 +272,9 @@ async def create_reference_from_github_v2(
     if not repo_input:
         raise HTTPException(400, "请输入 GitHub 仓库地址")
     kind = str(body.get("kind") or body.get("type") or "").strip().lower()
+    # legacy 'skills'（技能集）→ plugin 容器：识别端点也做了同样归一，这里同步
+    # 把落池类型/模块对齐——技能集本质是多技能的插件包。
+    is_collection = kind == "skills"
     if kind not in ("skills", "skill", "plugin", "mcp"):
         raise HTTPException(400, "kind 只能是 skills、skill、plugin 或 mcp")
     ref = str(body.get("ref") or "").strip()
@@ -254,21 +292,31 @@ async def create_reference_from_github_v2(
     pin_commit = str(body.get("pin_commit") or "").strip()
     clone_url = f"https://github.com/{full_name}.git"
 
-    if kind == "skills":
+    if is_collection:
+        # 技能集 = 多技能插件容器：落 plugin 类型，resource_data 同时带 entries
+        # （技能勾选按子技能 git clone 展开）与 download_url（插件勾选整包 zip）。
         entries = recognized.get("skill_entries") or (install_spec.get("skill") or {}).get("entries") or []
         if len({str(e.get("path") or "") for e in entries}) < 2:
             raise HTTPException(422, "未识别到可作为技能集合的多个技能条目")
-        resource_type = "skills"
+        plugin_spec = install_spec.get("plugin") or {}
+        download_url = str(plugin_spec.get("download_url") or "")
+        if not download_url:
+            download_url = f"https://github.com/{full_name}/archive/refs/heads/{use_ref}.zip"
+        resource_type = "plugin"
         resource_data = {
             "install_method": "github_clone",
             "source": "github",
             "ref": use_ref,
             "clone_url": clone_url,
+            "download_url": download_url,
             "entries": [
                 {
                     "name": str(e.get("name") or ""),
                     "path": str(e.get("path") or "").strip("/"),
                     "entry": str(e.get("entry") or "SKILL.md"),
+                    # 子技能描述（frontmatter）随容器入池：展开勾选时卡片显示描述而非路径。
+                    **({"description": str(e.get("description") or "").strip()}
+                       if str(e.get("description") or "").strip() else {}),
                 }
                 for e in entries
             ],
@@ -378,9 +426,10 @@ async def list_references_v2(
 ) -> dict:
     """列团队引用（新表：resource_references JOIN resources，含本体投影）。
 
-    ``resource_type`` 兼容旧枚举：skill → 同时返回 skill 与 skills（集合）；
-    project_prompt → prompt。管理端语义：管理员全量、成员按分组授权——
-    走与 resolve 相同的可见性口径（TeamMember 角色 + resource_grants）。
+    ``resource_type`` 兼容旧枚举：skill → 同时返回 skill、skills（存量集合）与
+    plugin（容器插件按子技能展开进技能通道）；project_prompt → prompt。
+    管理端语义：管理员全量、成员按分组授权——走与 resolve 相同的可见性口径
+    （TeamMember 角色 + resource_grants）。
     """
     import resource_store
     from .resource_reference_service import _team_is_admin
@@ -391,7 +440,8 @@ async def list_references_v2(
         base = {"project_prompt": "prompt"}.get(requested, requested)
         types.append(base)
         if base == "skill":
-            types.append("skills")
+            # skill 通道混排：单 skill + 存量 skills 集合 + plugin 容器（带 entries）。
+            types.extend(["skills", "plugin"])
     is_admin = await _team_is_admin(str(user.id), team_id)
     rows: list[dict] = []
     seen: set[str] = set()
@@ -451,13 +501,14 @@ async def list_group_references_v2(
         raise HTTPException(404, "分组不存在")
 
     # 获取分组授权的 v2 引用；如果 resource_type 为空或 skill，需合并 skills 集合
+    # 与 plugin 容器（skill 通道混排：单 skill + 存量 skills + 容器插件）。
     requested = str(resource_type or "").strip()
     types: list[str] = []
     if requested:
         base = {"project_prompt": "prompt"}.get(requested, requested)
         types.append(base)
         if base == "skill":
-            types.append("skills")
+            types.extend(["skills", "plugin"])
     rows: list[dict] = []
     seen: set[str] = set()
     for t in types:

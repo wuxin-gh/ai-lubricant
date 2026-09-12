@@ -222,6 +222,34 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def _download_filename(original_url: str, final_url: str, response) -> str:
+    """定下载文件名：Content-Disposition > 原始 URL 文件名 > 最终 URL 文件名。
+
+    GitHub archive 直链会 302 到 codeload（``.../zip/refs/heads/main``，路径末尾
+    没有 ``.zip``），只按最终 URL 取名会把扩展名丢掉，``parse_skill_source`` 的
+    .zip/SKILL.md/Markdown 校验直接拒收；codeload 的 Content-Disposition 带真实
+    文件名，原始 URL 文件名兜底。扩展名缺失但 Content-Type 标 zip 的（agentscope
+    ``/api/v1/skills/{id}/download`` 这类无后缀直连源）补上 .zip。
+    """
+    headers = response.headers if response is not None else {}
+    disposition = str(headers.get("Content-Disposition") or "")
+    match = (
+        re.search(r"filename\*=(?:[^']*'){1,3}([^;]+)", disposition, re.IGNORECASE)
+        or re.search(r'filename="?([^";]+)"?', disposition, re.IGNORECASE)
+    )
+    if match:
+        name = urllib.parse.unquote(match.group(1)).strip().strip('"').strip()
+        if name:
+            return _safe_filename(name, "resource.zip")
+    for candidate in (original_url, final_url):
+        name = Path(urllib.parse.unquote(urllib.parse.urlparse(candidate).path)).name
+        if name:
+            if not Path(name).suffix and "zip" in str(headers.get("Content-Type") or "").lower():
+                name = f"{name}.zip"
+            return _safe_filename(name, "resource.zip")
+    return "resource.zip"
+
+
 def _download_remote(url: str) -> tuple[bytes, str]:
     """Bounded download with protocol, redirect, content-length, and SSRF checks."""
     current = url
@@ -248,10 +276,7 @@ def _download_remote(url: str) -> tuple[bytes, str]:
             data = response.read(_MAX_IMPORT_BYTES + 1)
             if len(data) > _MAX_IMPORT_BYTES:
                 raise _resource_error("下载文件超过 20 MB 限制")
-            filename = _safe_filename(
-                urllib.parse.unquote(Path(urllib.parse.urlparse(response.url).path).name),
-                "resource.zip",
-            )
+            filename = _download_filename(url, current, response)
             return data, filename
     raise _resource_error("下载重定向次数超过限制")
 
@@ -339,7 +364,7 @@ async def _create_plugin_import(
         await resource.save(update_fields=["is_deleted", "updated_at"])
         await repo.save(update_fields=["is_deleted", "updated_at"])
         raise
-    return _plugin_dict(resource)
+    return _plugin_dict(resource, repo)
 
 
 @skill_router.get("")
@@ -588,7 +613,8 @@ async def update_plugin(plugin_id: str, payload: ResourcePatch, user: User = Dep
     for key, value in payload.model_dump(exclude_none=True).items():
         setattr(row, key, value)
     await row.save()
-    return _plugin_dict(row)
+    repo = await AgentPluginRepo.get_or_none(id=row.repo_id)
+    return _plugin_dict(row, repo)
 
 
 @plugin_router.delete("/{plugin_id}")

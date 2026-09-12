@@ -186,6 +186,11 @@ class UserPlatformSettings:
     # as self/runtime upgrade), not by the server.
     agent_compose_nodejs_version: str
     agent_compose_nodejs_mirror: str
+    # Default Xcode the async install job targets when the operator doesn't
+    # pick one: "latest" (newest non-beta with a direct .xip on
+    # xcodereleases.com) or an explicit "16.0". Resolved server-side into the
+    # .xip URL/size the node downloads.
+    xcode_target_version: str
     # In-process NodeService server (the Python reimplementation of the
     # agent-compose daemon's node control plane). Enabled by default when the
     # compatibility layer is enabled; the env switch remains an emergency
@@ -308,6 +313,7 @@ def load_settings() -> UserPlatformSettings:
         agent_compose_agent_image=_resolve("AGENT_COMPOSE_AGENT_IMAGE", "ai-lubricant-node:local"),
         agent_compose_nodejs_version=_resolve("AGENT_COMPOSE_NODEJS_VERSION", "22.17.0"),
         agent_compose_nodejs_mirror=_resolve("AGENT_COMPOSE_NODEJS_MIRROR", "https://nodejs.org/dist"),
+        xcode_target_version=_resolve("XCODE_TARGET_VERSION", "latest"),
         node_review_image=_resolve("AI_LUBRICANT_NODE_REVIEW_IMAGE", "ai-lubricant-node-review:local", legacy_name="MONKEYCODE_NODE_REVIEW_IMAGE"),
         node_server_enabled=_resolve_bool("AGENT_COMPOSE_NODE_SERVER_ENABLED", default=True),
         node_credential_encryption_key=_resolve_first(("NODE_CREDENTIAL_ENCRYPTION_KEY",), ""),

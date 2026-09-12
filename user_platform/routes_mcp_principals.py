@@ -88,23 +88,30 @@ async def authorization_options(user: User = Depends(get_current_user)) -> dict:
     # services 段三来源：平台 builtin（cdp-bridge/mail/device-control 等全员可用）+
     # 管理端配置（user_id IS NULL，enabled）+ 个人服务（user_id=自己）。与 agent 侧
     # list_available_mcp 的三分组口径一致，前端添加式选择器据此展示全量可选项。
-    seen_service_ids: set[int] = set()
-    all_services = await mcp_plugin_store.list_services()
-    services: list[dict] = []
-    for item in all_services:
+    kept: list[dict] = []              # builtin / 个人服务：直接保留
+    admin_candidates: list[dict] = []  # 平台管理服务：批量授权校验（消除 N+1）
+    for item in await mcp_plugin_store.list_services():
         if item.get("name") == "marketplace-status" or not item.get("enabled", True):
             continue
         is_builtin = bool(item.get("builtin")) or (item.get("kind") or "") == "builtin"
         svc_owner = item.get("user_id")
+        # 他人的个人服务不在此用户可见范围（与旧逐条 can_use_service 口径一致）。
         if not (is_builtin or svc_owner is None or str(svc_owner) == owner):
             continue
-        # 管理端服务仍按用户授权过滤（个人/内置全员可见，管理服务需 can_use_service）。
-        if not is_builtin and svc_owner is None:
-            if not await mcp_plugin_store.can_use_service(user_id=owner, service_id=int(item["id"])):
-                continue
-        if int(item["id"]) in seen_service_ids:
+        if is_builtin or svc_owner is not None:
+            kept.append(item)
+        else:
+            admin_candidates.append(item)
+    # 一条查询算出平台管理服务里该用户可用的集合，替代旧版「逐条 can_use_service」
+    # 的 N+1。个人/内置服务无需查授权，已在 kept 中。
+    usable_ids = await mcp_plugin_store.usable_service_ids(user_id=owner, services=admin_candidates)
+    seen_service_ids: set[int] = set()
+    services: list[dict] = []
+    for item in kept + [a for a in admin_candidates if int(a["id"]) in usable_ids]:
+        sid = int(item["id"])
+        if sid in seen_service_ids:
             continue
-        seen_service_ids.add(int(item["id"]))
+        seen_service_ids.add(sid)
         services.append(item)
     resources: list[dict] = [
         {

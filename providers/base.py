@@ -347,6 +347,11 @@ class BaseProvider(ABC):
     # （提示词生成、历史轮渲染、解析三侧统一切）。保留 xml/json/hermes 取值供既有
     # 渠道配置兼容；实际形态一致。首选 "tool_function"。
     TOOLS_PROMPT_FORMAT: str = "tool_function"
+    # 围栏解析（含工具名是否存在于入参 tools 的校验）由渠道 spec 自己做（如 eaichat
+    # 按方法是否存在决定「按方法返回 / 原样透传」）。声明 True 后框架流式出口与
+    # 非流式聚合出口不再对 content 二次解析围栏 —— 否则渠道已判为「方法不存在」
+    # 原样透传的围栏文本会被框架又切出来解析成 tool_calls，渠道侧校验整个失效。
+    TOOL_PARSE_IN_CHANNEL: bool = False
     # 账号凭据过期后能否由系统自动恢复（重新登录 / refresh_token 刷新 / 自动 bootstrap）。
     # True：账号失效只是暂时的，定时任务或下次请求会自愈，前端标记为“已过期（等待自动刷新）”。
     # False：凭据（cookie/token/PAT）只能人工重新获取，前端标记为“异常（需人工处理）”。
@@ -783,7 +788,10 @@ class BaseProvider(ABC):
             # 把工具调用当普通文本 delta 透传，流式出口这里把 ` <function=...>` 从
             # content 中切出来，解析成标准 OpenAI tool_calls delta 下发，文本不下发。
             # 仅当本次请求带了 tools 才启用，避免误吞无工具对话的正常文本。
-            tools_enabled = bool(kwargs.get("tools"))
+            # 渠道声明 TOOL_PARSE_IN_CHANNEL（围栏解析含工具名校验在渠道内做）时，
+            # 框架侧解析必须整体关掉：渠道已判「方法不存在」原样透传的围栏文本，
+            # 到这里再解析会变成 tool_calls，等于把渠道的校验结果推翻。
+            tools_enabled = bool(kwargs.get("tools")) and not self.TOOL_PARSE_IN_CHANNEL
             tool_call_buffer = ""
 
             # 统计输入消息详情

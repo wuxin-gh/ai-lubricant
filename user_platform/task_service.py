@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -47,6 +48,56 @@ _CLI_TO_PROVIDER = {
     "cursor": "cursor",
 }
 _DEFAULT_PROVIDER = "claude"
+
+# Claude Code CLI 内置模型别名表（从 claude.exe 二进制 strings 提取）。
+# 这些名字经过 Claude Code 时会被静默替换为对应的完整型号名（如 opus →
+# claude-opus-4-8），导致网关收到的 model 与用户选择的自定义模型组名不符，
+# 路由到错误渠道。provider=claude 的任务必须拒绝这些名字，引导用户改组名
+# 或为模型组添加不冲突的别名（如 custom-opus）后选择别名。
+_CLAUDE_RESERVED_EXACT = frozenset({"opus", "sonnet", "haiku", "fast", "cheap", "fable", "mythos"})
+_CLAUDE_RESERVED_RE = re.compile(
+    r"^(opus|sonnet|haiku|fable|mythos)\s+(\d+(\.\d+)?|preview)$",
+    re.IGNORECASE,
+)
+
+# 用户可见的错误文案。routes_task 把 ValueError("claude_reserved_model_alias")
+# 映射成 400 + 这个 detail。
+_CLAUDE_RESERVED_MODEL_HINT = (
+    "该模型名「{name}」是 Claude Code 内置别名，经过 Claude Code 会被自动替换为"
+    " claude-opus/sonnet 等完整型号名，导致请求路由到错误渠道。"
+    "请将该自定义模型组改名为不冲突的名字（如 custom-opus），"
+    "或为该模型组添加一个不冲突的别名后在任务中选择该别名。"
+)
+
+
+def _is_claude_reserved_model_alias(name: str) -> bool:
+    """Return True when ``name`` collides with a Claude Code builtin model alias.
+
+    Covers bare aliases (opus/sonnet/haiku/fast/cheap/fable/mythos) and
+    version-qualified variants (opus 4.8, sonnet 4.6, haiku 4.5, …).
+    Full model IDs like ``claude-opus-4-8`` or ``glm-5.2`` are NOT affected.
+    """
+    n = (name or "").strip().lower()
+    if not n:
+        return False
+    if n in _CLAUDE_RESERVED_EXACT:
+        return True
+    return bool(_CLAUDE_RESERVED_RE.match(n))
+
+
+def _reject_claude_reserved_models(provider: str, models: list[str] | None) -> None:
+    """Raise ValueError if a claude-provider task uses a reserved alias.
+
+    Non-claude providers are not affected — the alias substitution only
+    happens inside the Claude Code CLI.
+    """
+    if (provider or "").strip().lower() != "claude":
+        return
+    for name in models or []:
+        if _is_claude_reserved_model_alias(name):
+            raise ValueError(
+                f"claude_reserved_model_alias:{name}"
+            )
 
 # Keep fire-and-forget create dispatches strongly referenced until they finish.
 # asyncio only holds weak references to tasks, so a long plugin/skill download
@@ -775,6 +826,9 @@ class TaskService:
             models_list,
             active_model=(req.get("model_id") or (models_list[0] if models_list else None)),
         )
+        _reject_claude_reserved_models(provider, validated_models)
+        if validated_model is not None and _is_claude_reserved_model_alias(validated_model):
+            raise ValueError(f"claude_reserved_model_alias:{validated_model}")
         req = dict(req)
         req["models"] = validated_models or None
         if validated_model is not None:
@@ -1622,6 +1676,11 @@ class TaskService:
                     session["activeSkills"] = [str(s) for s in active_skills if str(s).strip()]
                 if isinstance(active_plugins, list) and active_plugins:
                     session["activePlugins"] = [str(s) for s in active_plugins if str(s).strip()]
+        # Platform-level task prompt (all env tiers). The node writes it to
+        # stateRoot/agents/system-prompts/system-prompt.txt; the runtime splices
+        # it into the provider's systemContext every turn (hot-switch, no
+        # restart). Empty = no prompt injected (the node skips the write).
+        session["systemPrompt"] = str(cfg.get("system_prompt") or "")
         # Internal callers (webhook review, issue workflow) may attach a reviewed
         # capability bundle. Public CreateTaskReq does not expose these underscore
         # keys, so an API client cannot inject arbitrary skill/MCP endpoints.
@@ -1834,7 +1893,18 @@ class TaskService:
                         current.id, existing,
                     )
                 else:
-                    if isinstance(probe_ack, dict) and probe_ack.get("ok") is False:
+                    # ``ok=false`` is the proto3 bool default, so Connect JSON
+                    # (json_format.MessageToDict, omitting zero-value fields)
+                    # serializes a not-ok ack as ``{"error": ...}`` with NO ``ok``
+                    # key. A ``is False`` check never fires on that body, the dead
+                    # handle is trusted as healthy, and the next turn is sent to a
+                    # session the node already dropped ("session input dropped:
+                    # unknown session") — the message row sticks at ``dispatching``,
+                    # the task at ``processing``, and the page spins "generating"
+                    # forever. Treat anything that is not an explicit ``ok=true``
+                    # as stale: the non-default ``true`` is always present on the
+                    # wire, so a live ack still short-circuits here.
+                    if isinstance(probe_ack, dict) and probe_ack.get("ok") is not True:
                         stale_handle = True
                         logger.info(
                             "[user-platform] task {} handle {} stale (node ack not ok: {}); re-dispatching",
@@ -1920,6 +1990,19 @@ class TaskService:
             }
             req["_session_llm"] = await self._task_llm_config(
                 req, current, str(key_row["key"])
+            )
+            # 诊断日志：恢复派发的模型值全貌（快照/激活/session.model/llm.model）。
+            # 线上"任务跑错模型"或"停止后重发 403"先看这条：DB 里的值此刻是什么。
+            _llm = req["_session_llm"] if isinstance(req["_session_llm"], dict) else {}
+            logger.info(
+                "[user-platform] task-model redispatch task={} provider={} node={} "
+                "models_snapshot={} binding.model_id={} session.model_id='{}' "
+                "session.model='{}' llm.model='{}' bound_thread='{}'",
+                current.id, current.provider, node_id,
+                list(current.models_snapshot or []) if isinstance(current.models_snapshot, list) else [],
+                model_id, req.get("model_id") or "", str(current.models_snapshot[0]) if isinstance(current.models_snapshot, list) and current.models_snapshot else "",
+                str(_llm.get("model") or ""),
+                str(getattr(current, "provider_thread_id", None) or "") or "<unbound>",
             )
 
             try:
@@ -2504,6 +2587,30 @@ class TaskService:
                     if isinstance(value, list) else [],
                 )
                 changed.append(key)
+        # 编辑技能/插件勾选 → 同步 config_snapshot.active_skills/active_plugins。
+        # 创建时（见 create_task）写了一次 active_skills/active_plugins，之后编辑
+        # 只改 skill_config/plugin_config 列、不更新 config_snapshot，导致重启重派
+        # 拿到的是旧名单。这里从新落库的 skill_config/plugin_config 提取名字写回
+        # （spec 的 "name" 即节点侧 activeSkills 的稳定标识，见 resolve_reference_specs）。
+        # 空列表 = 不收窄 = 全量（与 _build_session shared/system 分支语义一致）；
+        # isolated 任务也写，只是该档不读 active_*。仅在对应字段传入时更新，否则不
+        # 动 config_snapshot，避免覆盖 reasoning_effort 等其他键的并发改动。
+        if "skill_config" in fields or "plugin_config" in fields:
+            snapshot = dict(task.config_snapshot or {}) if isinstance(task.config_snapshot, dict) else {}
+            if "skill_config" in fields:
+                snapshot["active_skills"] = [
+                    str(s.get("name"))
+                    for s in (task.skill_config or [])
+                    if isinstance(s, dict) and str(s.get("name") or "").strip()
+                ]
+            if "plugin_config" in fields:
+                snapshot["active_plugins"] = [
+                    str(s.get("name"))
+                    for s in (task.plugin_config or [])
+                    if isinstance(s, dict) and str(s.get("name") or "").strip()
+                ]
+            task.config_snapshot = snapshot
+            changed.append("config_snapshot")
         resync: dict[str, list[str]] = {"applied": [], "failed": [], "skipped": []}
         if changed:
             changed.append("updated_at")
@@ -2565,6 +2672,15 @@ class TaskService:
         client = get_local_node_client()
         if not client.enabled:
             return
+        # 诊断日志：停止前任务的关键状态。thread 绑定刻意保留（stop=暂停不是销毁，
+        # 恢复后 runtime 应 resume 原 thread）；这条日志让"停止→重发 403 thread
+        # mismatch"能直接对出 DB 保存的 thread 与 runtime 新带的 thread 差在哪。
+        logger.info(
+            "[user-platform] task-stop task={} node_session_id='{}' provider_thread_id='{}' "
+            "first_request_seen={} workspace_state='{}'",
+            task.id, session_id, str(task.provider_thread_id or "") or "<unbound>",
+            bool(task.first_request_seen), task.workspace_state,
+        )
         try:
             await client.delete_node_session(session_id)
         except Exception:
@@ -2923,6 +3039,16 @@ class TaskService:
                 llm = await self._task_llm_config(
                     {"model_id": active_model}, task, str(key_row["key"])
                 )
+        # 诊断日志：本轮投递的模型值与来源。线上任何"任务实际跑的不是所选模型"
+        # 的报告，先用这条日志核对投递帧里的 model 与任务快照头部是否一致。
+        _llm_model = str((llm or {}).get("model") or "") if isinstance(llm, dict) else ""
+        logger.info(
+            "[user-platform] task-model dispatch task={} provider={} snapshot={} "
+            "active_model='{}' llm.model='{}' client_message_id={} attempt={}",
+            task.id, task.provider,
+            list(task.models_snapshot or []) if isinstance(task.models_snapshot, list) else [],
+            active_model, _llm_model, client_message_id, delivery_attempt,
+        )
         try:
             result = await client.send_session_input(
                 node_session_id,
@@ -3129,6 +3255,7 @@ class TaskService:
         )
         if resolved != model_id:
             raise ValueError("model_not_available_for_key")
+        _reject_claude_reserved_models(task.provider, [model_id])
         # 目标进头部（活跃），旧成员保序跟在后面：白名单是并集，活跃模型取头部。
         models = [model_id] + [m for m in snapshot if m != model_id]
         task.models_snapshot = models
@@ -3159,6 +3286,7 @@ class TaskService:
             raise ValueError("model_required")
         validate_key = task.parent_api_key_id or task.api_key_id
         legal, _ = await _validate_models_for_key(validate_key, candidates, active_model=None)
+        _reject_claude_reserved_models(task.provider, legal)
         snapshot = list(task.models_snapshot or []) if isinstance(task.models_snapshot, list) else []
         merged = list(snapshot)
         for model in legal:

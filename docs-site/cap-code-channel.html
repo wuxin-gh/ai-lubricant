@@ -185,6 +185,18 @@ yield {"content": "", "thinking": "", "tool_calls": [{
 
 <p>文档页只提供上述说明性片段；完整的认证和协议实现应由你根据上游接口自行设计，并通过框架提供的 <code>p._make_session()</code>、<code>p.send_sse_request()</code> 等能力接入。</p>
 
+<h2 id="ai-gen">让 AI 帮你生成</h2>
+<p>平台提供一份<strong>自包含的需求说明</strong>（Markdown）：里面是情况判定表、脚本元素到 spec 的映射表、全部钩子的签名与返回契约、注入命名空间、自查清单和最小完整样例。把下面这句话连同你的脚本 / 仓库地址发给任何 AI 编码助手，它读完该文档即可产出符合本页规范的 spec 类：</p>
+<pre><code>请根据 https://ai-lubricant.vip100.de5.net/code-channel-ai.md 的要求，写一份自定义代码渠道（spec 类）。
+对应的脚本 / 参考代码在：&lt;仓库地址，或直接把代码粘贴在后面&gt;</code></pre>
+<p>用法要点：</p>
+<ul>
+<li>仓库地址可以是 AI 能访问的任何 URL（GitHub 仓库、单文件脚本、API 文档页都可以），也可以直接把代码粘贴在句子后面。</li>
+<li>AI 交付的是一段 Python 源码 + 渠道配置建议（协议、路径、账号字段）。<strong>先人工审阅</strong>，再贴入「源码」Tab——贴入的代码以服务进程权限执行。</li>
+<li>同一个句子人类也能用：拿着文档第 10、11 节的交付契约与自查清单，手动核对 AI 的产出即可。</li>
+<li>直接查看：<a href="code-channel-ai.md">code-channel-ai.md</a>（同域原文，AI 可直接抓取）。</li>
+</ul>
+
 <h2 id="errors">常见错误</h2>
 <div class="table-wrap"><table><thead><tr><th>错误</th><th>处理</th></tr></thead><tbody>
 <tr><td>渠道地址留空就保存</td><td>保存被拒绝；填地址，或写 <code>REQUIRES_BASE_URL = False</code> 声明不打外网</td></tr>

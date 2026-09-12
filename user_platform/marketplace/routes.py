@@ -46,6 +46,11 @@ from .community_config import (
     public_view as community_public_view,
     update_community_config,
 )
+from .node_ip_config import (
+    get_node_ip_config_async,
+    public_view as node_ip_public_view,
+    update_node_ip_config,
+)
 from .validator import (
     MARKET_EXPORT_SCHEMA,
     MARKET_INDEX_SCHEMA,
@@ -150,19 +155,6 @@ def _github_write_guard(action: str):
     return decorator
 
 
-async def _read_index(client: MarketplaceGitHub, module: str, *, use_cache: bool = True) -> tuple[dict, str]:
-    """读模块索引；新仓库缺文件时返回空索引（不 500）。"""
-    got = await client.read_json_or_none(
-        index_path(module, mp_config.settings.index_name), use_cache=use_cache
-    )
-    if got is None:
-        return empty_index(module), ""
-    data, sha = got
-    if not isinstance(data, dict):
-        return empty_index(module), sha
-    return data, sha
-
-
 # ── public ──────────────────────────────────────────────────────────────────
 
 
@@ -188,8 +180,9 @@ async def status() -> dict:
 async def consumer_status() -> dict:
     """用根标识文件校验消费侧仓库，而不是只校验配置字符串。
 
-    marker 走 consumer_cache（``useMarketplaceEnabled`` 在多个页面挂载时高频
-    打这里，此前每请求现拉一次 raw）。
+    marker 只读 consumer_cache 的**后台预热快照**（``peek``，绝不出网）：``useMarketplaceEnabled``
+    在多个页面挂载时高频打这里，此前每请求现拉一次 raw。后台 ``sync_loop`` 定时刷新
+    marker，远端暂不可用时沿用上次快照或降级为未验证——请求线程永远不等 GitHub。
     """
     from . import consumer_cache, urls
 
@@ -207,10 +200,8 @@ async def consumer_status() -> dict:
     }
     if not c.enabled:
         return result
-    try:
-        marker, _stale = await consumer_cache.get_raw("marketplace.json")
-    except Exception:
-        return result
+    # peek：只读内存快照，不在请求线程出网（后台 sync_loop 负责 warm）。
+    marker, _stale = await consumer_cache.peek("marketplace.json")
     if isinstance(marker, dict) and marker.get("schema") == "ai-lubricant.market.v1":
         modules = marker.get("modules")
         if isinstance(modules, list):
@@ -235,9 +226,9 @@ async def consumer_index(module: str) -> dict:
     """消费侧条目列表：过滤 hidden/deleted/draft，只留 published。
 
     store 已填充（writable 部署）时直接读 PG——管理端保存即对用户生效，无需等
-    仓库发布传播；只读部署 / bootstrap 完成前走 consumer_cache（定时后台刷新 +
-    写失效），拉取失败但有旧快照时回旧数据并标 ``stale``；完全没有快照时返回
-    空索引，不 500（市场不可用不应打断主功能）。
+    仓库发布传播；只读部署 / bootstrap 完成前读 consumer_cache 的**后台预热快照**
+    （``peek``，绝不在请求线程出网）。快照未预热时返回空索引并标 ``stale``，不 500
+    （市场不可用不应打断主功能）；后台 ``sync_loop`` 会随后把数据 warm 进内存。
     """
     if not _valid_module(module):
         raise HTTPException(status_code=400, detail=f"unknown module: {module}")
@@ -254,13 +245,11 @@ async def consumer_index(module: str) -> dict:
         }
     from . import consumer_cache
 
-    try:
-        data, stale = await consumer_cache.get_raw(
-            index_path(module, mp_config.consumer_settings.index_name)
-        )
-    except GitClientError:
-        return empty_index(module)
+    data, stale = await consumer_cache.peek(
+        index_path(module, mp_config.consumer_settings.index_name)
+    )
     if not isinstance(data, dict):
+        # 快照未预热：返回空索引（后台 sync_loop 负责填充），绝不在请求里现拉远程。
         return empty_index(module)
     items = [
         it for it in (data.get("items") or [])
@@ -273,8 +262,9 @@ async def consumer_index(module: str) -> dict:
 async def consumer_item(module: str, item: str) -> dict:
     """消费侧单条 manifest。文件不存在返回 404（调用方据此判断「无此条目」）。
 
-    store 已填充时读 PG（保存即生效）；否则走 consumer_cache（read-through +
-    写失效），404 也会被缓存，不再重复打网络。
+    store 已填充时读 PG（保存即生效）；否则读 consumer_cache 的**后台预热快照**
+    （``peek``，绝不在请求线程出网）——快照未预热命中时返回 404，后台 ``sync_loop``
+    会随后 warm 单条 manifest，不卡请求线程。
     """
     if not _valid_module(module):
         raise HTTPException(status_code=400, detail=f"unknown module: {module}")
@@ -296,13 +286,9 @@ async def consumer_item(module: str, item: str) -> dict:
         return row["manifest"]
     from . import consumer_cache
 
-    try:
-        data, _stale = await consumer_cache.get_raw(item_path(module, safe))
-    except GitClientError as exc:
-        if "HTTP 404" in str(exc):
-            raise HTTPException(status_code=404, detail="item not found")
-        raise HTTPException(status_code=502, detail=str(exc))
+    data, _stale = await consumer_cache.peek(item_path(module, safe))
     if data is None:
+        # 快照未预热/确认不存在：404，绝不在请求里现拉远程。
         raise HTTPException(status_code=404, detail="item not found")
     if not isinstance(data, dict):
         raise HTTPException(status_code=502, detail="manifest is not an object")
@@ -318,13 +304,10 @@ async def consumer_version() -> dict:
     """
     import node_release_catalog as nrc
 
+    # 只读内存快照（启动 load_snapshot 加载 PG 上次成功快照 + 后台 sync_loop 定时
+    # 刷新），绝不在请求线程现拉 version.json——未同步过时返回空快照，下一轮后台
+    # 同步自然补上。
     snapshot = await nrc.get_latest_release()
-    if not snapshot.get("version") and not snapshot.get("assets"):
-        # 内存空：触发一次同步（不阻塞响应过久——失败就返回当前空快照）。
-        try:
-            snapshot = await nrc.refresh(publish=False)
-        except Exception:
-            pass
     return {
         "version": str(snapshot.get("version") or ""),
         "version_notes": str(snapshot.get("version_notes") or ""),
@@ -346,12 +329,8 @@ async def consumer_mobile_version() -> dict:
     """
     import mobile_release_catalog as mrc
 
+    # 只读内存快照（启动加载 PG 快照 + 后台 sync_loop 刷新），绝不在请求线程现拉。
     snapshot = await mrc.get_latest_release()
-    if not snapshot.get("version") and not snapshot.get("assets"):
-        try:
-            snapshot = await mrc.refresh(publish=False)
-        except Exception:
-            pass
     android = mrc.select_android_asset(snapshot) or {}
     ios = snapshot.get("ios") if isinstance(snapshot.get("ios"), dict) else {}
     # 尾段带真实文件名：忽略 Content-Disposition 的手机浏览器按 URL 尾段
@@ -395,12 +374,8 @@ async def consumer_device_control_version() -> dict:
     """
     import device_control_release_catalog as dcrc
 
+    # 只读内存快照（启动加载 PG 快照 + 后台 sync_loop 刷新），绝不在请求线程现拉。
     snapshot = await dcrc.get_latest_release()
-    if not snapshot.get("version") and not snapshot.get("assets"):
-        try:
-            snapshot = await dcrc.refresh(publish=False)
-        except Exception:
-            pass
 
     def _platform_block(platform: str) -> dict:
         asset = dcrc.select_asset(snapshot, platform) or {}
@@ -505,12 +480,8 @@ async def _proxy_download_mobile_android_apk() -> StreamingResponse:
     """``/consumer/download/mobile-android`` 实现：移动控制端 APK（目前只有 Android）。"""
     import mobile_release_catalog as mrc
 
+    # 只读内存快照（后台 sync_loop 负责 warm），绝不在请求线程现拉。
     snapshot = await mrc.get_latest_release()
-    if not snapshot.get("version") and not snapshot.get("assets"):
-        try:
-            snapshot = await mrc.refresh(publish=False)
-        except Exception:
-            pass
     android = mrc.select_android_asset(snapshot) or {}
     url = str(android.get("download_url") or "")
     if not url:
@@ -531,12 +502,8 @@ async def _proxy_download_device_control(platform: str) -> StreamingResponse:
 
     if platform not in _DC_PROXY_MEDIA_TYPES:
         raise HTTPException(status_code=404, detail=f"不支持的设备类型：{platform}")
+    # 只读内存快照（后台 sync_loop 负责 warm），绝不在请求线程现拉。
     snapshot = await dcrc.get_latest_release()
-    if not snapshot.get("version") and not snapshot.get("assets"):
-        try:
-            snapshot = await dcrc.refresh(publish=False)
-        except Exception:
-            pass
     asset = dcrc.select_asset(snapshot, platform) or {}
     url = str(asset.get("download_url") or "")
     if not url:
@@ -672,6 +639,35 @@ async def update_community_config_route(
     return {"ok": True, **community_public_view(config)}
 
 
+# ── 节点公网 IP 探测备份（市场管理 → 节点公网 IP tab）──────────────────────────
+# 与市场仓库无关、与「全局配置 → 节点网络」互不关联：这里只存一份备份 URL 列表，
+# 全局配置仍是节点在用的唯一真相源。挂 ``router``（非 ``admin_router``）以避开
+# ``_require_market_writable`` 门禁，仅 ``_require_admin``——与 community-config 同口径。
+# diff 与「同步市场数据」按钮在全局配置 → 节点网络 tab 内（那里拿节点在用配置与
+# 本备份比对），本接口不读 node_server，只返回备份 + 内置默认。
+
+
+@router.get("/admin/node-ip-config")
+async def get_node_ip_config_route(_: User = Depends(_require_admin)) -> dict:
+    """读取节点 IP 备份 + 内置默认列表（供市场 tab 编辑与全局配置 tab diff）。"""
+    return node_ip_public_view(await get_node_ip_config_async())
+
+
+@router.put("/admin/node-ip-config")
+async def update_node_ip_config_route(
+    body: dict = Body(...), _: User = Depends(_require_admin)
+) -> dict:
+    """保存节点 IP 备份（``ipv4_urls`` / ``ipv6_urls`` 各自全量替换，未传不动）。
+
+    只落市场备份 blob，**不**下发、**不**动全局配置——与全局配置 tab 互不关联。
+    要把备份导入全局配置见全局配置 → 节点网络 tab 的「同步市场数据」按钮。
+    """
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="配置必须是对象")
+    config = await update_node_ip_config(body)
+    return {"ok": True, **node_ip_public_view(config)}
+
+
 # ── admin: read ───────────────────────────────────────────────────────────────
 
 
@@ -716,37 +712,26 @@ async def catalog(
     module: str = Query(...),
     q: str | None = None,
     kind: str | None = None,
-    fresh: bool = Query(False, description="是否绕过服务端 GitHub 读缓存（store 路径下无操作）"),
+    fresh: bool = Query(False, description="保留参数：读取恒为本地 store，不再绕过出网缓存"),
     _: User = Depends(_require_admin),
 ) -> dict:
     if not _valid_module(module):
         raise HTTPException(status_code=400, detail=f"unknown module: {module}")
     import marketplace_store as store
 
-    if await store.is_populated():
-        # store 即真相源：管理视图保留 hidden（隐藏可逆），只剔 deleted（行已物理删，
-        # 这里天然不存在）。响应附带发布队列计数，前端据此显示「发布中/发布失败」徽标。
-        items = [it for it in await store.list_summaries(module) if it.get("status") != "deleted"]
-        if kind:
-            items = [it for it in items if it.get("kind") == kind]
-        if q:
-            needle = q.lower()
-            items = [it for it in items if needle in str(it).lower()]
-        return {
-            "schema": MARKET_INDEX_SCHEMA, "module": module, "items": items,
-            "updated_at": _now(), "publish": await store.publish_counts(),
-        }
-    data, _sha = await _read_index(_client(), module, use_cache=not fresh)
-    items = data.get("items") if isinstance(data.get("items"), list) else []
-    # 管理视图保留 hidden：隐藏是可逆操作，管理员要能看到并改回 published。
-    # 消费侧（前端直读 raw）自己过滤 hidden/deleted，与这里无关。
-    items = [it for it in items if it.get("status") != "deleted"]
+    # 管理视图只读本地 store（PG 真相源）。store 尚未 bootstrap 完成时返回空目录，
+    # 绝不在请求线程出网拉 GitHub——远程由后台 bootstrap/sync 负责，管理员可点
+    # 「刷新」或显式 resync。保留 hidden（隐藏可逆），只剔 deleted（行已物理删）。
+    items = [it for it in await store.list_summaries(module) if it.get("status") != "deleted"]
     if kind:
         items = [it for it in items if it.get("kind") == kind]
     if q:
         needle = q.lower()
         items = [it for it in items if needle in str(it).lower()]
-    return {**data, "module": module, "items": items}
+    return {
+        "schema": MARKET_INDEX_SCHEMA, "module": module, "items": items,
+        "updated_at": _now(), "publish": await store.publish_counts(),
+    }
 
 
 @admin_router.get("/admin/items/{module}/{item}")
@@ -758,56 +743,33 @@ async def get_item(module: str, item: str, _: User = Depends(_require_admin)) ->
         raise HTTPException(status_code=400, detail="invalid item id")
     import marketplace_store as store
 
-    if await store.is_populated():
-        alt = item.replace(".", "/")
-        row = await store.get_item(module, item) or await store.get_item(module, alt)
-        if row is None:
-            raise HTTPException(status_code=404, detail="item not found")
-        return row["manifest"]
-    try:
-        data, _sha = await _client().read_json(item_path(module, safe))
-    except GitClientError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    return data
+    # 单条 manifest 只读本地 store；未同步/缺失直接 404，不现拉 GitHub。
+    alt = item.replace(".", "/")
+    row = await store.get_item(module, item) or await store.get_item(module, alt)
+    if row is None:
+        raise HTTPException(status_code=404, detail="item not found")
+    return row["manifest"]
 
 
 @admin_router.get("/admin/export")
 async def export(
     module: str | None = None,
-    fresh: bool = Query(False, description="是否绕过服务端 GitHub 读缓存（store 路径下无操作）"),
+    fresh: bool = Query(False, description="保留参数：读取恒为本地 store，不再绕过出网缓存"),
     _: User = Depends(_require_admin),
 ) -> dict:
     import marketplace_store as store
 
-    if await store.is_populated():
-        mods = [module] if module else list(mp_config.settings.modules)
-        out: dict[str, Any] = {}
-        for mod in mods:
-            if not _valid_module(mod):
-                raise HTTPException(status_code=400, detail=f"unknown module: {mod}")
-            items = await store.list_summaries(mod)
-            out[mod] = {
-                "index": {"schema": MARKET_INDEX_SCHEMA, "module": mod, "items": items, "updated_at": _now()},
-                "manifests": {str(m.get("id")): m for m in await store.list_manifests(mod)},
-            }
-        return {"schema": MARKET_EXPORT_SCHEMA, "exported_modules": mods, "modules": out}
-    client = _client()
+    # 导出只读本地 store；store 尚未 bootstrap 完成时各模块为空，不现拉 GitHub。
     mods = [module] if module else list(mp_config.settings.modules)
     out: dict[str, Any] = {}
     for mod in mods:
         if not _valid_module(mod):
             raise HTTPException(status_code=400, detail=f"unknown module: {mod}")
-        index, _sha = await _read_index(client, mod, use_cache=not fresh)
-        manifests: dict[str, Any] = {}
-        for it in index.get("items", []) or []:
-            raw_id = str(it.get("id") or "")
-            path = it.get("item_path") or item_path(mod, raw_id.replace("/", "."))
-            try:
-                data, _s = await client.read_json(path, use_cache=not fresh)
-                manifests[raw_id] = data
-            except GitClientError:
-                pass
-        out[mod] = {"index": index, "manifests": manifests}
+        items = await store.list_summaries(mod)
+        out[mod] = {
+            "index": {"schema": MARKET_INDEX_SCHEMA, "module": mod, "items": items, "updated_at": _now()},
+            "manifests": {str(m.get("id")): m for m in await store.list_manifests(mod)},
+        }
     return {"schema": MARKET_EXPORT_SCHEMA, "exported_modules": mods, "modules": out}
 
 
@@ -866,11 +828,9 @@ async def list_exportable_channels(_: User = Depends(_require_admin)) -> dict:
     from .channel_template_export import build_manifest
 
     import marketplace_store as store
-    if await store.is_populated():
-        published = {str(item.get("id") or "") for item in await store.list_summaries("channels")}
-    else:
-        index, _sha = await _read_index(_client(), "channels")
-        published = {str(item.get("id") or "") for item in (index.get("items") or []) if isinstance(item, dict)}
+    # 只读本地 store 判断已发布模板集合；未填充时为空集合（弹框全显示「未发布」），
+    # 绝不在请求线程出网拉 GitHub。
+    published = {str(item.get("id") or "") for item in await store.list_summaries("channels")}
 
     items: list[dict] = []
     for name in sorted(await config.Config.get_providers()):
@@ -2331,7 +2291,11 @@ async def sync_agency_agents_route(
            or agency_agents_convert.DEFAULT_REF)
     flush = bool(body.get("flush"))
     dry = bool(body.get("dry_run"))
-    asyncio.create_task(agency_agents_convert.sync_agency_agents(ref=ref, flush=flush, dry_run=dry))
+    asyncio.create_task(agency_agents_convert.sync_agency_agents(
+        ref=ref, flush=flush, dry_run=dry,
+        overwrite_draft=bool(body.get("overwrite_draft")),
+        overwrite_published=bool(body.get("overwrite_published")),
+    ))
     return {"started": True, "detail": "同步已启动，轮询 last-sync 看进度"}
 
 
@@ -2388,7 +2352,11 @@ async def sync_agency_agents_zh_route(
            or agency_agents_convert.DEFAULT_ZH_REF)
     flush = bool(body.get("flush"))
     dry = bool(body.get("dry_run"))
-    asyncio.create_task(agency_agents_convert.sync_agency_agents(ref=ref, flush=flush, dry_run=dry, repo="jnMetaCode/agency-agents-zh"))
+    asyncio.create_task(agency_agents_convert.sync_agency_agents(
+        ref=ref, flush=flush, dry_run=dry, repo="jnMetaCode/agency-agents-zh",
+        overwrite_draft=bool(body.get("overwrite_draft")),
+        overwrite_published=bool(body.get("overwrite_published")),
+    ))
     return {"started": True, "detail": "同步已启动，轮询 last-sync 看进度"}
 
 
@@ -2405,16 +2373,23 @@ async def agency_agents_zh_last_sync_route(_: User = Depends(_require_admin)) ->
 # ── agentscope（公开 API 技能源）──
 
 @admin_router.post("/admin/marketplace/agentscope/sync")
-async def sync_agentscope_route(_: User = Depends(_require_admin)) -> dict:
+async def sync_agentscope_route(
+    body: dict = Body(default={}), _: User = Depends(_require_admin)
+) -> dict:
     """手动同步 agentscope 技能源（后台异步执行，立即返回）。
 
     前端轮询 ``GET /admin/marketplace/agentscope/last-sync`` 看实时进度+日志。
+    body 可带 overwrite_draft / overwrite_published（弹框勾选；缺省=不覆盖，
+    已存在行只刷上游元数据，资源字段保留管理员手改）。
     """
     from . import agentscope_convert
 
     if agentscope_convert._progress.get("running"):
         raise HTTPException(status_code=409, detail="已有同步在运行中，请等当前任务完成")
-    asyncio.create_task(agentscope_convert.sync_agentscope())
+    asyncio.create_task(agentscope_convert.sync_agentscope(
+        overwrite_draft=bool(body.get("overwrite_draft")),
+        overwrite_published=bool(body.get("overwrite_published")),
+    ))
     return {"started": True, "detail": "同步已启动，轮询 last-sync 看进度"}
 
 
@@ -2426,6 +2401,38 @@ async def agentscope_last_sync_route(_: User = Depends(_require_admin)) -> dict:
     if memory.get("ran_at"):
         return memory
     return await _sync_run_fallback("agentscope", memory)
+
+
+# ── skillhub（公开 API 技能源，skillhub.cn）──
+
+@admin_router.post("/admin/marketplace/skillhub/sync")
+async def sync_skillhub_route(
+    body: dict = Body(default={}), _: User = Depends(_require_admin)
+) -> dict:
+    """手动同步 skillhub 技能源（后台异步执行，立即返回）。
+
+    前端轮询 ``GET /admin/marketplace/skillhub/last-sync`` 看实时进度+日志。
+    body 可带 overwrite_draft / overwrite_published（弹框勾选；缺省=不覆盖）。
+    """
+    from . import skillhub_convert
+
+    if skillhub_convert._progress.get("running"):
+        raise HTTPException(status_code=409, detail="已有同步在运行中，请等当前任务完成")
+    asyncio.create_task(skillhub_convert.sync_skillhub(
+        overwrite_draft=bool(body.get("overwrite_draft")),
+        overwrite_published=bool(body.get("overwrite_published")),
+    ))
+    return {"started": True, "detail": "同步已启动，轮询 last-sync 看进度"}
+
+
+@admin_router.get("/admin/marketplace/skillhub/last-sync")
+async def skillhub_last_sync_route(_: User = Depends(_require_admin)) -> dict:
+    """上次同步结果 + 实时进度。内存为空回落 DB 执行记录。"""
+    from . import skillhub_convert
+    memory = skillhub_convert.last_result()
+    if memory.get("ran_at"):
+        return memory
+    return await _sync_run_fallback("skillhub", memory)
 
 
 # ── consumer: 外部榜单发现视图 ──────────────────────────────────────────────
@@ -2571,11 +2578,17 @@ async def create_leaderboard_item(
 
 
 @admin_router.post("/admin/leaderboard/sync", status_code=202)
-async def trigger_leaderboard_sync(_: User = Depends(_require_admin)) -> dict:
+async def trigger_leaderboard_sync(
+    body: dict = Body(default={}), _: User = Depends(_require_admin)
+) -> dict:
     """手动触发一次同步（后台异步执行，立即返回）。仍然只写草稿，不发布任何条目。
 
     前端轮询 ``GET /admin/leaderboard/status`` 的 ``last_sync.progress`` 看实时进度；
     执行中重复点击 → 409（执行状态在内存 `_progress.running`，重启即失）。
+
+    Body（可选，均默认 false = 不覆盖）：``overwrite_published`` / ``overwrite_draft``
+    控制已存在行的资源字段是否被上游+探针最新值覆盖（详见 ``sync_once``）。定时
+    循环不走本端点，恒为不覆盖。**覆盖只刷新数据，永不翻状态**（不隐式发布/撤回）。
     """
     from . import leaderboard_sync
 
@@ -2583,7 +2596,14 @@ async def trigger_leaderboard_sync(_: User = Depends(_require_admin)) -> dict:
         raise HTTPException(status_code=409, detail="外部榜单同步未启用，请先在市场管理的外部榜单配置里打开")
     if leaderboard_sync._progress.get("running"):
         raise HTTPException(status_code=409, detail="已有同步在运行中，请等当前任务完成")
-    asyncio.create_task(leaderboard_sync.sync_once(run_by="manual"))
+    body = body if isinstance(body, dict) else {}
+    overwrite_published = bool(body.get("overwrite_published"))
+    overwrite_draft = bool(body.get("overwrite_draft"))
+    asyncio.create_task(leaderboard_sync.sync_once(
+        run_by="manual",
+        overwrite_published=overwrite_published,
+        overwrite_draft=overwrite_draft,
+    ))
     return {"started": True, "detail": "同步已启动，轮询 status 端点看进度"}
 
 
@@ -2613,10 +2633,10 @@ async def reprobe_leaderboard_item(
 ) -> dict:
     """按所选类型重跑探针并重派生安装配置（编辑弹框「重新识别」按钮）。
 
-    Body: ``{"type": "skills|skill|plugin|mcp|prompt"}``（空=自动判定）。重探
-    仓库 → 按该类型重派生 resource_type/resource_data(entries/install_spec 等价
-    形态) → 写回该条目；名称/描述/排序等管理员编辑过的资源字段**不动**。分类为
-    仅浏览(空 type)时只刷新探针证据不重派生形态。
+    Body: ``{"type": "plugin|skill|mcp|prompt"}``（空=自动判定，legacy skills→plugin
+    容器）。重探仓库 → 按该类型重派生 resource_type/resource_data(entries/install_spec
+    等价形态) → 写回该条目；名称/描述/排序等管理员编辑过的资源字段**不动**。
+    分类为仅浏览(空 type)时只刷新探针证据不重派生形态。
     """
     import marketplace_leaderboard_store as store
     from .. import github_recognize
@@ -2629,7 +2649,10 @@ async def reprobe_leaderboard_item(
         raise HTTPException(status_code=422, detail="条目缺少仓库坐标，无法重识别")
 
     force_type = str((body or {}).get("type") or "").strip().lower()
-    if force_type and force_type not in ("skills", "skill", "plugin", "mcp", "prompt"):
+    # legacy 'skills' → plugin 容器（recognize_repo 内部也做同样归一）。
+    if force_type == "skills":
+        force_type = "plugin"
+    if force_type and force_type not in ("plugin", "skill", "mcp", "prompt"):
         raise HTTPException(status_code=400, detail=f"未知类型 {force_type}")
 
     # 与识别导入器同一链路：重探 + 按所选类型重派生（证据不足时明确报错）。
@@ -2643,7 +2666,9 @@ async def reprobe_leaderboard_item(
     resource_type = recognized.get("type") or ""
 
     patch: dict = {"target_modules": [resource_type] if resource_type else []}
-    if force_type in ("skills", "skill") or resource_type in ("skills", "skill"):
+    # 多技能插件容器（marketplace.json 或 ≥2 技能条目）→ install_spec.skill.entries
+    # 走容器分支（_resource_data_for_item 在 plugin 类型下会吸收 entries + download_url）。
+    if force_type == "skill" or resource_type == "skill":
         patch["install_spec"] = {
             "skill": {
                 "install_method": "github_clone",
@@ -2653,15 +2678,34 @@ async def reprobe_leaderboard_item(
         }
     elif force_type == "plugin" or resource_type == "plugin":
         plugin_spec = install_spec.get("plugin") or {}
-        patch["install_spec"] = {
-            "plugin": {
-                "download_url": str(
-                    plugin_spec.get("download_url")
-                    or f"https://github.com/{repo_full_name}/archive/refs/heads/{recognized.get('ref') or 'main'}.zip"
-                ),
-                "provider": str(plugin_spec.get("provider") or "claude"),
+        ref = recognized.get("ref") or "main"
+        if skill_entries:
+            # 多技能插件容器：entries + download_url 合并进 install_spec.plugin，
+            # _resource_data_for_item 在 plugin 类型 + skill.entries 在场时按容器存。
+            patch["install_spec"] = {
+                "skill": {
+                    "install_method": "github_clone",
+                    "ref": ref,
+                    "entries": skill_entries,
+                },
+                "plugin": {
+                    "download_url": str(
+                        plugin_spec.get("download_url")
+                        or f"https://github.com/{repo_full_name}/archive/refs/heads/{ref}.zip"
+                    ),
+                    "provider": str(plugin_spec.get("provider") or "claude"),
+                },
             }
-        }
+        else:
+            patch["install_spec"] = {
+                "plugin": {
+                    "download_url": str(
+                        plugin_spec.get("download_url")
+                        or f"https://github.com/{repo_full_name}/archive/refs/heads/{ref}.zip"
+                    ),
+                    "provider": str(plugin_spec.get("provider") or "claude"),
+                }
+            }
     elif resource_type == "mcp" and launch_spec.get("kind"):
         patch["launch_spec"] = launch_spec
 
@@ -2804,6 +2848,96 @@ async def verify_leaderboard_item(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@admin_router.get("/admin/leaderboard/items/{item_id}/download")
+async def download_leaderboard_item_route(item_id: int, _: User = Depends(_require_admin)):
+    """下载候选条目的安装数据——给管理员实测下载地址是否有效。
+
+    - skill 直接下载（direct_url，如 skillhub/agentscope zip）：服务端经
+      proxy_manager 拉上游回传（与同步同一出网链路），上游文件名优先；
+    - plugin 容器：取第一个带 download_url 的子技能；
+    - prompt：回传正文为 .md；
+    - 其余（仅浏览 / github_clone 无直链 / mcp 仓库）→ 404 说明没有可下载数据。
+    失败（上游 4xx/5xx、超时）→ 502 带上游状态，前端 toast 显示具体原因。
+    """
+    import re as _re
+    from urllib.parse import unquote as _unquote
+
+    import aiohttp as _aiohttp
+    from fastapi.responses import Response as _Response
+
+    import marketplace_leaderboard_store as store
+    from providers.proxy_manager import get_proxy_manager
+
+    item = await store.get_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="条目不存在")
+    spec = item.get("install_spec") if isinstance(item.get("install_spec"), dict) else {}
+    skill = spec.get("skill") if isinstance(spec.get("skill"), dict) else None
+    plugin = spec.get("plugin") if isinstance(spec.get("plugin"), dict) else None
+    prompt = spec.get("prompt") if isinstance(spec.get("prompt"), dict) else None
+
+    download_url = ""
+    if skill:
+        download_url = str(skill.get("download_url") or "").strip()
+    if not download_url and plugin:
+        # 容器：取第一个带 download_url 的子技能（验证链路可用即可）
+        for entry in (plugin.get("entries") or []):
+            if isinstance(entry, dict) and str(entry.get("download_url") or "").strip():
+                download_url = str(entry["download_url"]).strip()
+                break
+
+    display = str(item.get("display_name") or item.get("name") or item.get("repo_full_name") or "item").strip()
+    safe_name = _re.sub(r'[\\/:*?"<>|\r\n]', "_", display)[:80] or "item"
+
+    if download_url:
+        manager = get_proxy_manager()
+        try:
+            resp = await manager.request(
+                url=download_url, method="GET",
+                headers={"Accept": "application/zip, application/octet-stream, */*"},
+                timeout=_aiohttp.ClientTimeout(total=180),
+                proxy_config_id=mp_config.settings.proxy_id or None,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=f"下载上游失败：{str(exc)[:200]}") from exc
+        if resp.status >= 400:
+            snippet = (await resp.read())[:300].decode("utf-8", "replace").strip()
+            raise HTTPException(
+                status_code=502,
+                detail=f"上游 HTTP {resp.status}（下载地址不可用）" + (f"：{snippet[:150]}" if snippet else ""),
+            )
+        data = await resp.read()
+        # 文件名：上游 Content-Disposition 优先，回落展示名
+        fname = safe_name + ".zip"
+        cd = resp.headers.get("Content-Disposition") or ""
+        m = _re.search(r"filename\*?=(?:UTF-8'')?\"?([^\";]+)\"?", cd)
+        if m:
+            try:
+                candidate = _unquote(m.group(1)).strip()
+                if candidate:
+                    fname = _re.sub(r'[\\/:*?"<>|\r\n]', "_", candidate)[:120]
+            except Exception:  # noqa: BLE001 — 文件名解析失败回落展示名
+                pass
+        return _Response(
+            content=data,
+            media_type="application/octet-stream",
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
+
+    if prompt is not None:
+        content = str(prompt.get("content") or "")
+        return _Response(
+            content=content.encode("utf-8"),
+            media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{safe_name}.md"'},
+        )
+
+    raise HTTPException(
+        status_code=404,
+        detail="该条目没有可直接下载的安装数据（仅浏览 / git 克隆类 / 无直链）",
+    )
 
 
 def _parse_recognize_body(body: dict) -> tuple[list[int], int | None, str]:

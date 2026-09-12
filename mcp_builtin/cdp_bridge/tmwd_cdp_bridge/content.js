@@ -282,6 +282,47 @@ async function handle(el) {
     });
   }
 
+  // --- 等桥接连上（重试按钮在桥接断开时的体验）---
+  // 点「重试」时若桥接未连上（SW 刚被这次点击唤醒、connectWS 还在握手，或服务端
+  // 还没回来），立刻发请求只会被「连接未就绪」吃掉——用户看到的就是「点了没反应」。
+  // waitForBridgeReady 让这次点击变成「等重连，连上自动续跑」；轮询为主，
+  // bridge_status_push 的 connected 广播到达时立即唤醒，避免干等下一个轮询点。
+  const _bridgeReadyWaiters = [];
+  function notifyBridgeReady() {
+    const waiters = _bridgeReadyWaiters.splice(0);
+    for (const fn of waiters) { try { fn(); } catch (_) { /* ignore */ } }
+  }
+  function bridgeConnected() {
+    return getBridgeStatus().then((status) => !!(status && status.connected)).catch(() => false);
+  }
+  function waitForBridgeReady(timeoutMs = 30000) {
+    return new Promise((resolve) => {
+      let settled = false;
+      let timer = null;
+      const started = Date.now();
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        if (timer !== null) clearTimeout(timer);
+        // 无论以何种方式结束都摘掉广播唤醒钩子，防泄漏。
+        const i = _bridgeReadyWaiters.indexOf(onReady);
+        if (i >= 0) _bridgeReadyWaiters.splice(i, 1);
+        resolve(value);
+      };
+      const onReady = () => finish(true);
+      const stopWaiting = () => finish(false);
+      const poll = async () => {
+        if (!state.open || state.sending) { stopWaiting(); return; }
+        if (await bridgeConnected()) { onReady(); return; }
+        if (Date.now() - started >= timeoutMs) { stopWaiting(); return; }
+        timer = setTimeout(poll, 2000);
+      };
+      _bridgeReadyWaiters.push(onReady);
+      // 先给 SW 半秒（这次点击本身可能就是唤醒源，连接刚起）；之后 2s 一查。
+      timer = setTimeout(poll, 500);
+    });
+  }
+
   // 接收 background 转发的对话回帧。
   chrome.runtime.onMessage.addListener((msg) => {
     if (!msg || msg.cmd !== 'chat_frame' || !msg.data) return;
@@ -296,6 +337,8 @@ async function handle(el) {
   chrome.runtime.onMessage.addListener((msg) => {
     if (!msg || msg.cmd !== 'bridge_status_push' || !msg.status) return;
     updateBridgeIndicator(msg.status);
+    // 连上：先唤醒所有「等桥接」的等待者（重试按钮的自动续跑），再走面板恢复。
+    if (msg.status.connected) notifyBridgeReady();
     // SW 刚连上：若面板开着但还没会话内容，触发 openFlow 重拉 agents 并恢复
     // 上次会话。若此刻已有一个 openFlow 在跑（_resuming=true），挂起 _pendingResume，
     // 那个 openFlow 跑完的 finally 会据此再跑一次——避免"加载时 SW 没连→空
@@ -376,8 +419,14 @@ async function handle(el) {
       // 不带 tabId：background 用 sender.tab.id 即当前标签页。
       chrome.runtime.sendMessage({ cmd, reqId, ...payload }, (resp) => {
         if (!resp || !resp.ok) {
-          onEvent({ type: 'error', message: (resp && resp.error) || '连接未就绪，请检查 Ai Lubricant 服务与客户端 Token' });
-          done({ type: 'error', message: (resp && resp.error) || 'channel unavailable' });
+          // background 的内部错误原文是英文（'bridge websocket is not authenticated'），
+          // 直接透传进气泡对用户不可读——统一翻成面板口径的中文。
+          const raw = (resp && resp.error) || '';
+          const text = raw === 'bridge websocket is not authenticated'
+            ? '桥接连接已断开，请稍后重试'
+            : (raw || '连接未就绪，请检查 Ai Lubricant 服务与客户端 Token');
+          onEvent({ type: 'error', message: text });
+          done({ type: 'error', message: text });
         }
       });
     });
@@ -439,6 +488,31 @@ async function handle(el) {
 
   function rememberAgentId(id) {
     try { chrome.storage.local.set({ [AGENT_STORAGE_KEY]: Number(id) || null }); } catch (_) { /* ignore */ }
+  }
+
+  // --- ask_user 附件直链的绝对化 ---
+  // 服务端给的附件签名直链是相对路径（/agent/attachments/...），挂在本页面里会被
+  // 解析成当前网站的地址。主服务与桥接 WS 同源（同 host:port），从 background 的
+  // 桥接配置里取 ws 地址换算成 http origin 即可。面板打开时预热一次。
+  let _serverOrigin = null; // null=未取过；''=取过但没有
+  function primeServerOrigin() {
+    if (_serverOrigin !== null) return;
+    try {
+      chrome.runtime.sendMessage({ cmd: 'bridge_config_get' }, (resp) => {
+        const bridgeUrl = resp && resp.data && resp.data.bridgeUrl;
+        try {
+          _serverOrigin = new URL(String(bridgeUrl || '').replace(/^ws:/i, 'http:').replace(/^wss:/i, 'https:')).origin;
+        } catch (_) { _serverOrigin = ''; }
+      });
+    } catch (_) { _serverOrigin = ''; }
+  }
+  function absolutizeMediaUrl(src) {
+    if (!src) return '';
+    if (/^(https?:)?\/\//i.test(src)) return src;
+    // origin 还没取到（极早期事件）：返回空，渲染端降级为文件名 chip；done 后
+    // 的下一次 renderMessages 会带上已缓存的 origin 补齐图片。
+    if (!_serverOrigin) return '';
+    return _serverOrigin + src;
   }
 
   // --- 按 tabId 的会话级持久化（整页导航后面板/会话恢复用）---
@@ -503,6 +577,7 @@ async function handle(el) {
     shadow = host.attachShadow({ mode: 'open' });
     const ICON = {
       send: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22 11 13 2 9 22 2Z"/></svg>',
+      stop: '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><rect x="6.5" y="6.5" width="11" height="11" rx="2"/></svg>',
       plus: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>',
       list: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>',
       close: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
@@ -573,6 +648,15 @@ async function handle(el) {
         .retry-hint{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--tmwd-muted);padding:3px 0}
         .msg-retry{margin-top:6px;align-self:flex-start;padding:3px 10px;font-size:12px;line-height:1.6;border:1px solid var(--tmwd-border);border-radius:6px;background:rgba(148,163,184,.1);color:var(--tmwd-fg);cursor:pointer}
         .msg-retry:hover{color:var(--tmwd-primary);border-color:var(--tmwd-primary);background:var(--tmwd-primary-soft)}
+        /* ask_user 候选答案快捷回复：一行可换行的 chip 按钮，点击即作为下一条消息发送 */
+        .q-cands{display:flex;flex-wrap:wrap;gap:6px}
+        .q-cand{padding:4px 10px;font-size:12px;line-height:1.5;border:1px solid var(--tmwd-border-strong);border-radius:999px;background:var(--tmwd-bg);color:var(--tmwd-fg);cursor:pointer;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transition:all .14s ease}
+        .q-cand:hover{border-color:var(--tmwd-primary);color:var(--tmwd-primary);background:var(--tmwd-primary-soft)}
+        /* ask_user 附件：图片内联大图（点击新标签页看原图），非图片/无法直链的降级为文件名 chip */
+        .q-media{display:flex;flex-direction:column;gap:6px}
+        .q-media img{max-width:100%;max-height:240px;border:1px solid var(--tmwd-border);border-radius:9px;display:block;cursor:pointer;background:var(--tmwd-body)}
+        .q-media .qm-chip{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;max-width:100%;padding:4px 10px;font-size:11.5px;border:1px solid var(--tmwd-border);border-radius:8px;background:var(--tmwd-body);color:var(--tmwd-muted);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .q-media .qm-chip:hover{border-color:var(--tmwd-primary);color:var(--tmwd-primary)}
         .spinner{width:12px;height:12px;border:2px solid rgba(148,163,184,.35);border-top-color:#64748b;border-radius:50%;animation:tmwd-spin .7s linear infinite;flex:0 0 auto}
         @keyframes tmwd-spin{to{transform:rotate(360deg)}}
         .empty{align-self:center;margin:auto;display:flex;flex-direction:column;align-items:center;gap:12px;color:var(--tmwd-muted);text-align:center;font-size:12.5px;max-width:250px}
@@ -1069,6 +1153,7 @@ async function handle(el) {
   // 面板打开流程：拉可选 agent → 有记忆且仍可用则直接进聊天，否则进首屏选择。
   // 若本 tab 存过进行中的会话（导航重注入场景），直接恢复该会话历史。
   async function openFlow() {
+    primeServerOrigin(); // ask_user 附件直链绝对化要用主服务 origin，先预热缓存
     await refreshAgents();
     if (!state.agents.length) { showPicker(); return; }
     if (!state.selectedAgent) {
@@ -1260,6 +1345,12 @@ async function handle(el) {
           } else if (p.type === 'approval' && p.approval) {
             bubble.appendChild(renderApprovalCard(p.approval));
             if (isLastMsg) lastStreamingTextEl = null;
+          } else if (p.type === 'candidates' && Array.isArray(p.candidates)) {
+            bubble.appendChild(renderCandidates(p.candidates));
+            if (isLastMsg) lastStreamingTextEl = null;
+          } else if (p.type === 'media' && p.media) {
+            bubble.appendChild(renderMedia(p.media));
+            if (isLastMsg) lastStreamingTextEl = null;
           }
         }
       } else if (!isUser && Array.isArray(m.toolCalls) && m.toolCalls.length) {
@@ -1307,6 +1398,8 @@ async function handle(el) {
 
       // 重载后接管的进行中回复（本地无事件流，state.sending=false）：给一个手动
       // 拉取按钮。自动轮询已在跑，但用户想立刻看进度时不必等下一个周期。
+      // 停止按钮与发送中同源：服务端任务仍在跑（_CONV_TASKS 有值），此刻直接
+      // 发新消息只会吃 409；要停必须走 chat_abort。
       if (!isUser && streaming && isLastMsg && !state.sending && state.conversationId) {
         const refresh = document.createElement('button');
         refresh.type = 'button';
@@ -1314,6 +1407,28 @@ async function handle(el) {
         refresh.textContent = '刷新进度';
         refresh.addEventListener('click', () => { void refreshCurrentSession(); });
         bubble.appendChild(refresh);
+        const stopBtn = document.createElement('button');
+        stopBtn.type = 'button';
+        stopBtn.className = 'msg-retry';
+        stopBtn.textContent = '停止';
+        stopBtn.title = '中止服务端仍在执行的这一轮';
+        stopBtn.addEventListener('click', () => {
+          stopBtn.disabled = true;
+          stopBtn.textContent = '停止中…';
+          // 复用 onAbort 的收尾轮询：abort 后服务端把消息落成 error「已中止」，
+          // 下一拍轮询/刷新会把终态拉回来。这里不占 state.sending（本来就 false），
+          // 所以只发 abort + 静等服务端收尾，超时后恢复按钮。
+          // 同样加 2s race：sendChat 只在回帧到达时 resolve，桥接半死时会永久挂起。
+          Promise.race([
+            sendChat('chat_abort', { conversationId: state.conversationId }, () => {}),
+            new Promise((r) => setTimeout(r, 2000)),
+          ]).catch(() => {}).then(() => {
+            stopBtn.disabled = false;
+            stopBtn.textContent = '停止';
+            void refreshCurrentSession();
+          });
+        });
+        bubble.appendChild(stopBtn);
       }
 
       row.appendChild(bubble);
@@ -1451,6 +1566,56 @@ async function handle(el) {
     return card;
   }
 
+  // ask_user 候选答案：点击直接作为下一条用户消息发送（onSend 自带 sending/
+  // agent 选择守卫；question 事件后必跟 done，sending 已复位）。
+  function renderCandidates(candidates) {
+    const wrap = document.createElement('div');
+    wrap.className = 'q-cands';
+    for (const text of candidates) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'q-cand';
+      btn.textContent = text;
+      btn.title = text;
+      btn.addEventListener('click', () => {
+        if (state.sending) return;
+        els.input.value = text;
+        onSend();
+      });
+      wrap.appendChild(btn);
+    }
+    return wrap;
+  }
+
+  // ask_user 附件：图片内联（点击新标签页看原图；页面 CSP 拦不掉顶级导航），
+  // 加载失败或无直链时降级为文件名 chip，绝不显示破图。
+  function renderMedia(m) {
+    const wrap = document.createElement('div');
+    wrap.className = 'q-media';
+    const isImg = /^image\//i.test(m.mime || '') || (!m.mime && /\.(png|jpe?g|gif|webp|avif|svg)$/i.test(m.name || ''));
+    const abs = absolutizeMediaUrl(m.src || '');
+    const chip = () => {
+      const c = document.createElement('button');
+      c.type = 'button';
+      c.className = 'qm-chip';
+      c.textContent = m.name || '附件';
+      if (abs) c.addEventListener('click', () => { try { window.open(abs, '_blank', 'noopener'); } catch (_) { /* ignore */ } });
+      wrap.appendChild(c);
+    };
+    if (isImg && abs) {
+      const img = document.createElement('img');
+      img.alt = m.name || '附件图片';
+      img.loading = 'lazy';
+      img.addEventListener('click', () => { try { window.open(abs, '_blank', 'noopener'); } catch (_) { /* ignore */ } });
+      img.addEventListener('error', () => { wrap.innerHTML = ''; chip(); });
+      img.src = abs;
+      wrap.appendChild(img);
+    } else {
+      chip();
+    }
+    return wrap;
+  }
+
   function resolveApproval(approval, result) {
     approval.state = 'resolving';
     renderMessages();
@@ -1560,7 +1725,10 @@ async function handle(el) {
         // id = agent_loop 的 tool_call_id；tool_result 回帧带同一个 id，跨轮用它精确匹配。
         const call = { id: ev.id, name: ev.name, args: typeof ev.args === 'string' ? ev.args : JSON.stringify(ev.args), status: 'running', result: undefined, index: ev.index };
         assistant.toolCalls.push(call);
-        assistant.parts.push({ type: 'tool', call });
+        // ask_user 不渲染成工具卡：它的输出（问题正文/候选/附件）由紧随其后的
+        // question 事件以「向用户提问」的形态呈现，再挂一张 ask_user JSON 工具卡
+        // 只会把同一个问题重复显示一遍。仍进 toolCalls 供 tool_result 按 id 配对。
+        if (call.name !== 'ask_user') assistant.parts.push({ type: 'tool', call });
         renderMessages();
       } else if (ev.type === 'tool_result') {
         // agent_loop 的 index 是「本轮第几个 tool_call」，跨轮会重置成 0，不能当
@@ -1580,6 +1748,37 @@ async function handle(el) {
           call = assistant.toolCalls.find((c) => c.status === 'running') || null;
         }
         if (call) { call.status = 'done'; call.result = ev.data; }
+        renderMessages();
+      } else if (ev.type === 'question') {
+        // ask_user 的提问不是普通工具调用：问题正文 + 候选答案 + 附件都要按
+        // 「Agent 向用户提问」呈现，而不是只留一张 ask_user 工具卡（历史缺陷：
+        // question 事件被完全忽略，问题正文一个字都不显示）。
+        const data = (ev.data && typeof ev.data === 'object') ? ev.data : {};
+        const q = String(data.question || ev.message || '');
+        if (q) {
+          // 正文并入消息与末段 text part（与 content 增量同型）；流式期间保持
+          // textContent，done 后由重渲染切 markdown。
+          assistant.content = (assistant.content || '') + (assistant.content ? '\n\n' : '') + q;
+          const last = assistant.parts[assistant.parts.length - 1];
+          if (last && last.type === 'text') last.text += (last.text ? '\n\n' : '') + q;
+          else assistant.parts.push({ type: 'text', text: q });
+        }
+        const cands = Array.isArray(data.candidates)
+          ? data.candidates.filter((c) => typeof c === 'string' && c.trim()) : [];
+        if (cands.length) assistant.parts.push({ type: 'candidates', candidates: cands });
+        const media = Array.isArray(data.media) ? data.media : [];
+        for (const item of media) {
+          if (!item || typeof item !== 'object') continue;
+          const src = item.kind === 'url'
+            ? String(item.url || '')
+            : absolutizeMediaUrl(String(item.content_url || ''));
+          assistant.parts.push({
+            type: 'media',
+            media: { src, name: String(item.name || ''), mime: String(item.mime_type || '') },
+          });
+        }
+        // 问题后不再有正文流式增量：末段 text 直写引用交给本次整树渲染重建。
+        assistant._lastTextEl = null;
         renderMessages();
       } else if (ev.type === 'retry') {
         assistant.retryHint = retryHintText(ev);
@@ -1637,6 +1836,8 @@ async function handle(el) {
   }
 
   async function onSend() {
+    // 执行中按钮已是「停止」：本轮点按 = 中止服务端 agent 任务，不发新消息。
+    if (state.sending) { void onAbort(); return; }
     const text = els.input.value.trim();
     if (!text || state.sending || !state.selectedAgent) return;
     // 本地即将接管活跃事件流：停掉重载后可能残留的续看轮询，避免与 live 增量打架。
@@ -1677,6 +1878,48 @@ async function handle(el) {
     }, makeStreamHandler(assistant));
   }
 
+  // 停止按钮：取消正在跑的一轮。服务端链路是 chat_abort → sse_gateway
+  // （取消本 runtime 的转发任务 + 通知主服务取消 run_agent）→ 给原流 reqId 补发
+  // chat_aborted。终止帧到达时 makeStreamHandler 的 aborted 分支负责收尾；
+  // 这里在 abort 请求回来后给流 3s 收尾窗口，没等到（SSE 已死等）就地解锁兜底，
+  // 绝不把面板卡死在 sending。
+  let _stopPending = false;
+  async function onAbort() {
+    if (!state.sending || _stopPending) return;
+    const convAtClick = state.conversationId;
+    if (!convAtClick) { els.hint.textContent = '尚未建立会话，无可停止的任务'; return; }
+    _stopPending = true;
+    els.hint.textContent = '正在停止…';
+    try {
+      // sendChat 只在回帧到达时 resolve；桥接半死不活时回帧永远不来，
+      // 不加超时这里会无限挂起（sending 卡死、按钮永远是停止态）。2s 后
+      // 无论结果如何都进入本地收尾轮询。
+      await Promise.race([
+        sendChat('chat_abort', { conversationId: convAtClick }, () => {}),
+        new Promise((r) => setTimeout(r, 2000)),
+      ]).catch(() => { /* 连接可能已断：走下面的兜底解锁 */ });
+      const deadline = Date.now() + 3000;
+      while (state.sending && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 150));
+        if (state.conversationId !== convAtClick) break; // 期间切了会话，交还新会话
+      }
+      if (state.sending && state.conversationId === convAtClick) {
+        const m = state.messages[state.messages.length - 1];
+        if (m && m.role === 'assistant' && m.status === 'streaming') {
+          finalizeAssistant(m, 'error');
+          m.status = 'error';
+          m.parts.push({ type: 'text', text: '（已中止）' });
+          renderMessages();
+        }
+        setSending(false);
+      }
+    } finally {
+      // 任何异常路径都保证解锁，否则按钮永远卡在「停止」且再也点不动。
+      _stopPending = false;
+      if (els.hint.textContent === '正在停止…') els.hint.textContent = '';
+    }
+  }
+
   // 把一条失败的 assistant 消息复位成「正在流」，供两条重试路径共用。
   function resetForRetry(message) {
     message.status = 'streaming';
@@ -1690,14 +1933,36 @@ async function handle(el) {
 
   // 重试最后一条失败的 assistant 消息。
   //
-  // 两条路径，取决于服务端到底有没有这轮对话：
+  // 三条路径，取决于服务端到底有没有这轮对话：
   // - 有 conversationId → chat_retry，服务端复用同一条消息、用上一条 user 消息重跑。
   // - 没有 → 这轮在建连阶段就失败了（连接超时那类），服务端既没有会话也没有消息行，
   //   chat_retry 无从下手；此时按首发重发原来那句 user 文本。之前这里直接 return，
   //   于是按钮点了没有任何请求发出。
+  // - 桥接断开/SW 刚被唤醒：先等重连再继续（waitForBridgeReady），否则这次点击会被
+  //   「连接未就绪」吃掉——面板上表现为「点了重试没反应」，只能再点一次碰运气。
+  let _bridgeRetryWaiting = false;
   async function onRetry(message) {
-    if (state.sending || !message) return;
+    if (state.sending || !message || _bridgeRetryWaiting) return;
     if (message.role !== 'assistant' || message.status !== 'error') return;
+    const convAtClick = state.conversationId;
+
+    // 桥接未连上：等重连后续跑这次重试，等待期间 hint 提示；面板关闭/用户先发了
+    // 新消息/切了会话则放弃（waitForBridgeReady 内部按 state.open/sending 判定）。
+    // 60s 上限：Chrome ≥120 把 chrome.alarms 最小间隔钳到 30s，SW 挂起后的
+    // probe 重连一个周期就要 ~30s，30s 上限会在重连前一瞬超时。
+    if (!(await bridgeConnected())) {
+      if (_bridgeRetryWaiting) return;
+      _bridgeRetryWaiting = true;
+      els.hint.textContent = '桥接连接断开，等待重连后自动重试…';
+      const ready = await waitForBridgeReady(60000);
+      _bridgeRetryWaiting = false;
+      if (!state.open || state.sending || state.conversationId !== convAtClick) { els.hint.textContent = ''; return; }
+      if (!ready) {
+        els.hint.textContent = '桥接连接未恢复，请稍后再点重试';
+        return;
+      }
+      els.hint.textContent = '';
+    }
 
     if (!state.conversationId) {
       // 原始 user 文本取该 assistant 之前最近的一条 user 消息。
@@ -1716,6 +1981,12 @@ async function handle(el) {
     let messageId = message.id;
     if (messageId == null) {
       const data = await sendChat('chat_load_conversation', { conversationId: state.conversationId }, () => {});
+      // 回查失败（桥接抖动/服务端 5xx）与「确实没有可重试的消息」要分开：
+      // 前者把原因写进 hint，别再误导成「找不到可重试的消息」。
+      if (data && data.type === 'error') {
+        els.hint.textContent = data.message || '会话回查失败，请稍后重试';
+        return;
+      }
       const rows = (data && data.messages) || [];
       for (let i = rows.length - 1; i >= 0; i -= 1) {
         if (rows[i].role === 'assistant' && rows[i].status === 'error') { messageId = rows[i].id; break; }
@@ -1763,7 +2034,24 @@ async function handle(el) {
   // --- 会话管理：新建 / 列表 / 载入 ---
   function setSending(sending) {
     state.sending = sending;
-    if (els.send) els.send.disabled = sending || !state.selectedAgent;
+    if (els.send) {
+      if (sending) {
+        // 执行中：发送按钮变身「停止」按钮（红底方块）。模型可能长时间自主跑
+        // 工具，必须给用户随时中止的出口——服务端 abort 链路（chat_abort →
+        // gateway → agent 任务 cancel）一直都在，此前只是面板没入口。
+        els.send.disabled = false;
+        els.send.classList.add('stop');
+        els.send.innerHTML = els.ICON.stop;
+        els.send.title = '停止执行';
+        els.send.setAttribute('aria-label', '停止执行');
+      } else {
+        els.send.classList.remove('stop');
+        els.send.innerHTML = els.ICON.send;
+        els.send.title = '发送';
+        els.send.setAttribute('aria-label', '发送');
+        els.send.disabled = !state.selectedAgent;
+      }
+    }
     // 流式提示放在模型 pill 右侧（不再占用 hint 行），发送中显示、结束即隐。
     if (els.streamTip) els.streamTip.classList.toggle('show', !!sending);
   }
@@ -1859,13 +2147,24 @@ async function handle(el) {
       if (m.role === 'assistant' && Array.isArray(m.tool_calls)) {
         m.tool_calls.forEach((tc, i) => {
           const result = Array.isArray(m.tool_results) ? m.tool_results[i] : undefined;
+          const resultData = result && result.data !== undefined ? result.data : result;
           const call = {
             name: tc.name || '',
             args: typeof tc.args === 'string' ? tc.args : JSON.stringify(tc.args || {}),
             status: tc.status || 'done',
-            result: result && result.data !== undefined ? result.data : result,
+            result: resultData,
             index: i,
           };
+          if (call.name === 'ask_user') {
+            // ask_user 不回放成普通工具卡（与实时流同口径）：问题正文已在 m.content
+            // （服务端 question 事件并入正文落库），这里只补候选快捷回复与附件。
+            const q = resultData && typeof resultData === 'object' ? resultData : {};
+            const candidates = Array.isArray(q.candidates)
+              ? q.candidates.filter((c) => typeof c === 'string' && c.trim()) : [];
+            if (candidates.length) parts.push({ type: 'candidates', candidates });
+            toolCalls.push(call);
+            return;
+          }
           toolCalls.push(call);
           // 历史回放没有逐段顺序信息：工具在前、正文在后（保持旧观感）。
           parts.push({ type: 'tool', call });
@@ -1875,6 +2174,17 @@ async function handle(el) {
       // assistant 的 parts，用户正文走 m.content 兜底路径。给用户消息塞 text part 会让
       // hasTextInParts 判真却又不渲染，导致重载后用户气泡只剩「你」头、正文消失。
       if (m.content && m.role === 'assistant') parts.push({ type: 'text', text: m.content });
+      // ask_user 附件的回放载体：media 列的 attachment part 由服务端现签直链
+      // （content_url，相对路径需绝对化），url part 直接透传公网地址。
+      if (m.role === 'assistant' && Array.isArray(m.media)) {
+        for (const item of m.media) {
+          if (!item || typeof item !== 'object') continue;
+          const src = item.kind === 'url'
+            ? String(item.url || '')
+            : absolutizeMediaUrl(String(item.content_url || item.url || ''));
+          parts.push({ type: 'media', media: { src, name: String(item.name || ''), mime: String(item.mime_type || '') } });
+        }
+      }
       out.push({
         id: m.id,
         role: m.role,

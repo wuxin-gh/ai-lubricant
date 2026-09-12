@@ -1545,6 +1545,67 @@ async def can_use_service(*, user_id: str | None, service_id: int, groups: list[
     return bool(granted)
 
 
+async def usable_service_ids(
+    *, user_id: str | None, services: list[dict], groups: list[str] | None = None
+) -> set[int]:
+    """一次批量算出 ``services`` 里调用者可用的 service id 集合（消除 N+1）。
+
+    与 :func:`can_use_service` 同语义：user_id 为 None（管理员）全量；否则
+    builtin / 自己 / 分组授权在内存判定，剩下的「显式 principal grant」只发一条
+    ``mcp_grants JOIN mcp_users`` 查询一次性取回。供 authorization/options 这类
+    需要过滤整个服务列表的端点使用，避免逐条 ``can_use_service`` 打库。
+    """
+    if user_id is None:
+        return {int(s["id"]) for s in services}
+    gid_list = [str(g) for g in (groups if groups is not None else await _user_group_ids(user_id))]
+    gid_set = set(gid_list)
+    usable: set[int] = set()
+    grant_candidates: list[int] = []
+    for s in services:
+        sid = int(s["id"])
+        if bool(s.get("builtin")):
+            usable.add(sid)
+            continue
+        svc_owner = s.get("user_id")
+        if svc_owner is not None and str(svc_owner) == str(user_id):
+            usable.add(sid)
+            continue
+        svc_groups = [str(g) for g in (s.get("group_ids") or [])]
+        if gid_set and any(g in gid_set for g in svc_groups):
+            usable.add(sid)
+            continue
+        grant_candidates.append(sid)
+    if grant_candidates:
+        usable |= await _granted_service_ids(user_id, grant_candidates)
+    return usable
+
+
+async def _granted_service_ids(user_id: str, service_ids: list[int]) -> set[int]:
+    """显式 principal grant 命中集合（一条查询）。service_ids 为空时直接返回空集。"""
+    from db import PostgresClient
+
+    if not PostgresClient.pool or not service_ids:
+        return set()
+    async with PostgresClient.pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT DISTINCT g.grant_value FROM mcp_grants g
+            JOIN mcp_users u ON u.id = g.principal_id
+            WHERE g.grant_key=$1
+              AND g.grant_value = ANY($2::text[])
+              AND u.owner_user_id=$3 AND u.enabled=TRUE
+            """,
+            GRANT_SERVICE_KEY, [str(int(s)) for s in service_ids], str(user_id),
+        )
+    out: set[int] = set()
+    for row in rows:
+        try:
+            out.add(int(row["grant_value"]))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 async def can_use_principal(*, user_id: str | None, principal_id: int) -> bool:
     """调用者能否绑定某 principal：
     - user_id 为 None（管理员）→ 放行

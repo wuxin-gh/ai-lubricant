@@ -143,6 +143,9 @@ async def get_raw(path: str, *, fresh: bool = False) -> tuple[Any | None, bool]:
       （消费侧降级显示而不是空白），完全没有快照则向上抛 GitClientError（调用方
       按既有语义降级成空索引/404/502）。
     - data 为 None 表示「确认不存在」（缓存的 404），不视为失败。
+
+    **仅后台同步任务调用**——它会在 miss 时同步出网。HTTP 读路径必须用
+    :func:`peek`，绝不在请求线程里触发远程拉取（那是市场列表慢的根因）。
     """
     if fresh:
         _cache.pop(path, None)
@@ -159,6 +162,22 @@ async def get_raw(path: str, *, fresh: bool = False) -> tuple[Any | None, bool]:
             logger.warning("[consumer-cache] refresh {} failed; serving last snapshot", path)
             return copy.deepcopy(entry["data"]), True
         raise
+
+
+async def peek(path: str) -> tuple[Any | None, bool]:
+    """只读缓存、**绝不触发网络拉取**。返回 ``(data, stale)``。
+
+    供 HTTP 读路径（``/consumer/*``）使用：缓存未命中/过期返回 ``(None, False)``，
+    过期但有旧值返回 ``(旧值, True)``——由后台 ``sync_loop`` 预热，请求线程永远
+    不等待远程。远端故障时消费侧照旧降级显示旧快照或空态，而不是卡在代理/GitHub。
+    """
+    hit, data = _get_entry(path)
+    if hit:
+        return data, False
+    entry = _cache.get(path)
+    if entry is not None and entry["data"] is not None:
+        return copy.deepcopy(entry["data"]), True
+    return None, False
 
 
 def invalidate(module: str | None = None) -> None:
@@ -182,19 +201,24 @@ def invalidate_marker() -> None:
 
 
 async def refresh_all() -> dict[str, Any]:
-    """后台刷新热路径：各模块 index + 根 marker。逐文件容错，失败保留旧快照。"""
-    from .validator import index_path
+    """后台刷新热路径：各模块 index + 已发布条目的 manifest + 根 marker。
+
+    逐文件容错，失败保留旧快照。既然 HTTP 读路径已改为 ``peek``（绝不出网），
+    这里必须把单条 manifest 也一起预热——否则只读部署的 ``/consumer/item`` 永远
+    404（后台不 warm、请求又不拉）。
+    """
+    from .validator import index_path, item_path, safe_item_id
 
     async with _lock:
         settings = mp_config.settings
         if not settings.enabled:
             return {"ok": False, "error": "marketplace disabled"}
         modules = [*settings.modules, "node-versions", "mobile-versions"]
-        paths = [index_path(m, mp_config.consumer_settings.index_name) for m in dict.fromkeys(modules)]
-        paths.append(_MARKER_PATH)
         ok = 0
         failed = 0
-        for path in paths:
+
+        async def _warm(path: str) -> None:
+            nonlocal ok, failed
             try:
                 await _fetch_and_store(path)
                 ok += 1
@@ -204,6 +228,22 @@ async def refresh_all() -> dict[str, Any]:
             except Exception as exc:  # 刷新失败绝不打断循环
                 failed += 1
                 logger.warning("[consumer-cache] refresh {} failed: {}", path, exc)
+
+        for module in dict.fromkeys(modules):
+            index_file = index_path(module, mp_config.consumer_settings.index_name)
+            await _warm(index_file)
+            # 预热该模块已发布条目的 manifest，供 /consumer/item 的 peek 命中。
+            entry = _cache.get(index_file)
+            data = entry.get("data") if entry else None
+            for row in (data.get("items") or []) if isinstance(data, dict) else []:
+                if not isinstance(row, dict) or row.get("status") != "published":
+                    continue
+                raw_id = str(row.get("id") or "")
+                safe = safe_item_id(raw_id.replace("/", "."))
+                if not safe:
+                    continue
+                await _warm(row.get("item_path") or item_path(module, safe))
+        await _warm(_MARKER_PATH)
         return {"ok": True, "refreshed": ok, "failed": failed}
 
 

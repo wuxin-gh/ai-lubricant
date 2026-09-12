@@ -42,7 +42,7 @@
         <h2 id="quickstart">三步跑起来</h2>
         <p>生产部署一条命令（Docker Compose 自带 PostgreSQL/Redis）。本地源码开发请走 <a href="local-debug.html">本地调试</a>。</p>
         <div class="chain">
-          <div class="chain-step"><span class="num">1</span><div class="body"><h4>拉代码 + 子模块</h4><p><code>git clone --recurse-submodules https://gitee.com/xiongrun/ai-lubricant.git</code><br>五个子模块随克隆一并拉取。</p></div></div>
+          <div class="chain-step"><span class="num">1</span><div class="body"><h4>拉代码 + 子模块</h4><p><code>git clone --recurse-submodules https://github.com/wuxin-gh/ai-lubricant.git</code><br>五个子模块随克隆一并拉取。</p></div></div>
           <div class="chain-step"><span class="num">2</span><div class="body"><h4>配 .env</h4><p><code>cp .env.example .env</code>，必改：<code>POSTGRES_PASSWORD</code>、<code>AI_LUBRICANT_COMPAT_ENABLED=true</code>、<code>AI_LUBRICANT_BOOTSTRAP_ADMIN_EMAIL</code> / <code>_PASSWORD</code>。</p></div></div>
           <div class="chain-step"><span class="num">3</span><div class="body"><h4>docker compose up</h4><p><code>docker compose up -d --build</code>，访问 <code>http://127.0.0.1:3006</code>，管理端 <code>/manager</code>，用户门户 <code>/console</code>。</p></div></div>
         </div>

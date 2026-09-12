@@ -436,10 +436,21 @@ def manual_item(full_name: str, meta: dict) -> dict | None:
     return _assemble_item("manual", "manual", repo, None, classify("manual", repo))
 
 
-async def sync_once(run_by: str = "schedule") -> dict[str, Any]:
+async def sync_once(
+    run_by: str = "schedule",
+    *,
+    overwrite_published: bool = False,
+    overwrite_draft: bool = False,
+) -> dict[str, Any]:
     """跑一次全量同步。关闭时直接返回，不建连接、不写库。
 
     ``run_by``：schedule=定时循环触发；manual=管理端「立即同步」。只进执行记录，不影响行为。
+
+    覆盖模式（manual 弹框勾选，默认全不勾=不覆盖；定时循环不传恒为不覆盖）：
+    - ``overwrite_draft`` / ``overwrite_published``：已存在行的资源字段（名称/
+      描述/版本，带新鲜探针时含分类/安装配置）按上游+探针最新值重写，管理员手改
+      让位；详见 ``store.upsert_item`` 的覆盖语义。状态不翻——覆盖是刷新数据，
+      不是隐式发布/撤回。
     """
     global _last_result
 
@@ -453,6 +464,8 @@ async def sync_once(run_by: str = "schedule") -> dict[str, Any]:
         return {"ok": False, "skipped": True, "detail": "已有同步在运行中"}
 
     import marketplace_leaderboard_store as store
+
+    overwrite_on = overwrite_published or overwrite_draft
 
     source = await _settings()
     repo = _repo(source)
@@ -554,7 +567,15 @@ async def sync_once(run_by: str = "schedule") -> dict[str, Any]:
                                     item["external_data"].pop("probe", None)
                                     item["stack"] = prev_stack
                                     item["stack_tags"] = prev_tags
-                            await store.upsert_item(item)
+                            if overwrite_on:
+                                await store.upsert_item(
+                                    item,
+                                    overwrite_published=overwrite_published,
+                                    overwrite_draft=overwrite_draft,
+                                )
+                            else:
+                                # 默认路径保持旧调用形态，兼容同步相关的轻量测试/适配器。
+                                await store.upsert_item(item)
                             count += 1
                         except Exception as exc:  # noqa: BLE001
                             errors.append(f"{board}/{item['repo_full_name']}: {exc}")
@@ -584,6 +605,12 @@ async def sync_once(run_by: str = "schedule") -> dict[str, Any]:
             if budget_skipped:
                 probe_stat += f"、配额不足跳过 {budget_skipped}"
             detail += f"；{probe_stat}"
+            if overwrite_on:
+                mode = "、".join(filter(None, [
+                    "已发布" if overwrite_published else "",
+                    "草稿" if overwrite_draft else "",
+                ]))
+                detail += f"；覆盖模式（{mode}）"
             if errors:
                 detail += f"；{len(errors)} 项失败"
             if rate_limited_msg:

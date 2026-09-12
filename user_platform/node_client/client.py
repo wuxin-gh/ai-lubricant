@@ -233,6 +233,19 @@ class NodeClient:
             timeout=NODE_LONG_RPC_TIMEOUT,
         )
 
+    async def refresh_node_labels(self, node_id: str) -> dict[str, Any]:
+        """RefreshNodeLabels：让在线节点重新探测全部能力标签并回传快照。
+
+        节点侧重跑注册时同一套探测（编辑器/host tool 版本、机器信息、
+        运维者标签），控制面 ack 窗口 45s（探测预算 30s + 往返余量）；
+        这里用长超时覆盖，避免全局 30s 先掐断报假 503。
+        """
+        return await self._rpc(
+            "RefreshNodeLabels",
+            {"nodeId": node_id},
+            timeout=NODE_LONG_RPC_TIMEOUT,
+        )
+
     async def install_host_tool(
         self, node_id: str, tool: str, *, target: dict | None = None
     ) -> dict[str, Any]:
@@ -247,6 +260,57 @@ class NodeClient:
             "InstallHostTool",
             {"nodeId": node_id, "tool": tool, "target": target},
             timeout=NODE_LONG_RPC_TIMEOUT,
+        )
+
+    async def start_host_tool_job(
+        self,
+        node_id: str,
+        job_id: str,
+        *,
+        tool: str = "xcode",
+        target_version: str = "",
+        download_url: str = "",
+        download_size_bytes: int = 0,
+        sha256: str = "",
+        proxy_mode: str = "",
+        proxy_url: str = "",
+        proxy_url_prefix: str = "",
+        timeout_seconds: int = 0,
+    ) -> dict[str, Any]:
+        """StartHostToolJob：启动异步宿主工具安装任务（当前仅 Xcode）。
+
+        与 InstallHostTool 的同步 ack 不同，这里节点只回「受理」ack（30s
+        窗口），下载/解压/激活以事件帧流回、以恰好一个 result 帧收尾——
+        .xip 安装动辄数小时，同步窗口必然超时。job_id 由数据侧铸造，用于
+        轮询与取消。
+        """
+        return await self._rpc(
+            "StartHostToolJob",
+            {
+                "nodeId": node_id,
+                "jobId": job_id,
+                "tool": tool,
+                "targetVersion": target_version,
+                "downloadUrl": download_url,
+                "downloadSizeBytes": download_size_bytes,
+                "sha256": sha256,
+                "proxyMode": proxy_mode,
+                "proxyUrl": proxy_url,
+                "proxyUrlPrefix": proxy_url_prefix,
+                "timeoutSeconds": timeout_seconds,
+            },
+        )
+
+    async def get_host_tool_job_status(self, node_id: str, job_id: str) -> dict[str, Any]:
+        """GetHostToolJobStatus：轮询异步宿主工具安装任务的进度快照。"""
+        return await self._rpc(
+            "GetHostToolJobStatus", {"nodeId": node_id, "jobId": job_id}
+        )
+
+    async def cancel_host_tool_job(self, node_id: str, job_id: str) -> dict[str, Any]:
+        """CancelHostToolJob：请求取消运行中的宿主工具安装任务（阶段边界协作取消）。"""
+        return await self._rpc(
+            "CancelHostToolJob", {"nodeId": node_id, "jobId": job_id}
         )
 
     async def list_node_environments(self, node_id: str) -> list[dict[str, Any]]:

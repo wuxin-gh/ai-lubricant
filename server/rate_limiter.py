@@ -2111,13 +2111,20 @@ class ModelClientPool:
 
     @classmethod
     def _is_regex_hit(cls, provider_name: str, raw_model_id: str) -> bool:
-        """规则是否改了这个模型的名字——命中即 is_regex=True，导入时被过滤丢弃。
+        """规则是否命中了这个模型——命中即 is_regex=True，导入/自动更新时保留。
 
-        只切 owner/ 前缀不算命中：那是无配置时的默认形态，不是规则。前端「模拟过滤
-        及改写规则」开关只是预览这个标记；数据层过滤（手动导入、自动更新）都用它，
-        两处不能各写各的判定。
+        两种命中：改写规则改了名字（只切 owner/ 前缀不算，那是无配置时的默认
+        形态），或「只搜索」规则命中了全量名。前端「预览过滤结果」开关只是预览
+        这个标记；数据层过滤（手动导入、自动更新）都用它，两处不能各写各的判定。
         """
-        return cls._public_model_id(provider_name, raw_model_id) != strip_model_owner_prefix(raw_model_id)
+        pool = cls.get_provider_pool(provider_name)
+        channel = getattr(pool, "channel", None) if pool else None
+        if channel is None:
+            # 拿不到渠道对象时无规则可判，按「没命中」处理（与旧口径一致）。
+            return False
+        if channel.public_model_id(raw_model_id) != strip_model_owner_prefix(raw_model_id):
+            return True
+        return channel.matches_search_rules(raw_model_id)
 
     @classmethod
     def _resolve_target_model_id(
@@ -3274,6 +3281,8 @@ class ModelClientPool:
             if channel is None:
                 continue
             for row in channel.models:
+                if row.get("enabled") is False:
+                    continue
                 model_id = row.get("model_id")
                 if model_id:
                     snapshot[model_id].append(dict(row))
@@ -3295,7 +3304,7 @@ class ModelClientPool:
         channel = getattr(pool, "channel", None) if pool else None
         if channel is None:
             return []
-        return [dict(row) for row in channel.models]
+        return [dict(row) for row in channel.models if row.get("enabled") is not False]
 
     @classmethod
     def all_model_ids(cls) -> set[str]:
@@ -3304,7 +3313,10 @@ class ModelClientPool:
         for pool in cls._provider_pools.values():
             channel = getattr(pool, "channel", None)
             if channel is not None:
-                ids.update(row.get("model_id") for row in channel.models if row.get("model_id"))
+                ids.update(
+                    row.get("model_id") for row in channel.models
+                    if row.get("model_id") and row.get("enabled") is not False
+                )
         return ids
 
     @classmethod
@@ -3337,7 +3349,10 @@ class ModelClientPool:
             channel = getattr(pool, "channel", None)
             if channel is None or not cls._pool_can_serve(pool):
                 continue
-            ids.update(row.get("model_id") for row in channel.models if row.get("model_id"))
+            ids.update(
+                row.get("model_id") for row in channel.models
+                if row.get("model_id") and row.get("enabled") is not False
+            )
         return ids
 
     @classmethod
@@ -3345,6 +3360,7 @@ class ModelClientPool:
         """任一渠道是否具备该模型（替代旧 _model_routes.get(m) 真值门）。
 
         available_only=True 时只认未禁用渠道的未禁用账号，供对外模型列表使用。
+        行级停用（enabled=False）的行不算具备——停用即不再对外供给。
         """
         for pool in cls._provider_pools.values():
             channel = getattr(pool, "channel", None)
@@ -3352,7 +3368,10 @@ class ModelClientPool:
                 continue
             if available_only and not cls._pool_can_serve(pool):
                 continue
-            if any(row.get("model_id") == model_id for row in channel.models):
+            if any(
+                row.get("model_id") == model_id and row.get("enabled") is not False
+                for row in channel.models
+            ):
                 return True
         return False
 
@@ -3473,6 +3492,9 @@ class ModelClientPool:
                 existing = await PostgresClient.list_provider_models(provider_name)
                 existing_map = {r["upstream_model_id"]: r["model_id"] for r in existing}
                 existing_ids = set(existing_map)
+                # 行内 extra_config（max_tokens / thinking / client_preset / 行级 enabled 开关）
+                # 改名时原样保留——upsert 的 ON CONFLICT 会用传入值整覆盖，不传就清空。
+                existing_extra = {r["upstream_model_id"]: (r.get("extra_config") or {}) for r in existing}
                 # 与管理端「获取上游模型」同一份整形结果（_build_upstream_model_rows）：
                 # is_regex 是规则命中标记，regex_model_id 是替换后的名字。同步就是消费
                 # 这两个字段，不再自己重算一遍判定——预览看到的过滤与改名就是真正落库的。
@@ -3513,7 +3535,10 @@ class ModelClientPool:
                 for uid in to_add:
                     await PostgresClient.upsert_provider_model(provider_name, uid, targets[uid])
                 for uid in to_update:
-                    await PostgresClient.upsert_provider_model(provider_name, uid, targets[uid])
+                    # 改名沿用原行 extra_config（含行级 enabled 开关），不传会被 ON CONFLICT 清空。
+                    await PostgresClient.upsert_provider_model(
+                        provider_name, uid, targets[uid], extra_config=existing_extra.get(uid) or {}
+                    )
                 for uid in to_remove:
                     await PostgresClient.delete_provider_model(provider_name, uid)
 
@@ -3573,7 +3598,11 @@ class ModelClientPool:
 
     @staticmethod
     def _route_row_from_db(r: dict) -> dict:
-        """把 provider_models 单行 DB 记录转成 Channel.models 的运行时 row。"""
+        """把 provider_models 单行 DB 记录转成 Channel.models 的运行时 row。
+
+        停用行（enabled=False）照常带 enabled 字段灌进表——Channel.models 是渠道
+        模型全量真相源；各扫描方（iter_model_candidates 等）按 enabled 过滤。
+        """
         extra = r.get("extra_config")
         if isinstance(extra, str):
             try:
@@ -3589,6 +3618,7 @@ class ModelClientPool:
             "extra_config": extra,
             "client_preset": extra.get("client_preset"),
             "enable_1m_context": bool(extra.get("enable_1m_context")),
+            "enabled": r.get("enabled") is not False,
         }
 
     @classmethod
@@ -3644,14 +3674,21 @@ class ModelClientPool:
                     )
 
     @classmethod
-    def iter_model_candidates(cls, model_id: str):
-        """遍历所有渠道，产出能跑该 model_id 的 (provider_name, pool, row)。纯内存扫描，零查库。"""
+    def iter_model_candidates(cls, model_id: str, include_disabled: bool = False):
+        """遍历所有渠道，产出能跑该 model_id 的 (provider_name, pool, row)。纯内存扫描，零查库。
+
+        行级停用（enabled=False）默认跳过——停用即「不再使用」：不路由、不进
+        对外模型列表。include_disabled=True 供测试/探测路径（is_test/is_probe），
+        与渠道级 enabled 开关的旁路先例对齐（见 _collect_candidates 内注释）。
+        """
         for provider_name, pool in cls._provider_pools.items():
             channel = getattr(pool, "channel", None)
             if channel is None:
                 continue
             for row in channel.models:
                 if row.get("model_id") == model_id:
+                    if row.get("enabled") is False and not include_disabled:
+                        continue
                     yield provider_name, pool, row
 
     @classmethod
@@ -5209,7 +5246,8 @@ class ModelClientPool:
 
         for routed_model in candidate_models:
             # 扫各渠道 Channel.models 现找（内存，零查库）；替代旧全局 _model_routes 索引。
-            model_candidates = list(cls.iter_model_candidates(routed_model))
+            # 测试/探测可测停用行（行级 enabled 开关旁路，对齐渠道级 enabled 的先例）。
+            model_candidates = list(cls.iter_model_candidates(routed_model, include_disabled=bool(is_test or is_probe)))
             if not model_candidates:
                 skip_reasons["no_model_route"] += 1
                 continue

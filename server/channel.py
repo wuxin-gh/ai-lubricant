@@ -69,7 +69,12 @@ def resolve_upstream_stream(value, client_stream: bool) -> bool:
 #
 # 作用域仅限「本次新获取到的模型」——已跟踪模型沿用库里既有 model_id，加规则
 # 不会追溯改名。切 "/" 前缀由 apply 内部先做，规则跑在切完之后。
-MODEL_ID_RULE_FIELDS = ("name", "enabled", "pattern", "replacement")
+#
+# 规则可勾「只搜索」（search_only=True）：变成纯过滤条件——按**全量名**（含
+# owner/ 前缀，未切）re.search，命中即该模型保留，不参与改名。普通规则永远看
+# 不到前缀（先切再跑），所以「按 deepseek-ai/deepseek-v4 这种带前缀的全名精确
+# 过滤」的需求只能靠只搜索规则表达。
+MODEL_ID_RULE_FIELDS = ("name", "enabled", "pattern", "replacement", "search_only")
 MODEL_ID_TEMPLATE_FIELDS = ("kind", "template_id", "enabled")
 
 MODEL_ID_ENTRY_RULE = "rule"
@@ -126,7 +131,8 @@ def normalize_model_id_rewrite_rules(raw) -> list[dict]:
     编译正则、也不校验模版是否存在（校验由保存侧负责，见 admin 的写入路径），
     因为运行时读配置不该因为一条坏规则或一个后建的模版整体失败。
 
-    返回的规则条目不带 kind 键，与改动前逐字节一致；模版条目带 kind。
+    返回的规则条目不带 kind 键；search_only 一律补齐成布尔（默认 False），存量
+    数据只是多一个明确字段，语义不变。模版条目带 kind。
     """
     if not isinstance(raw, list):
         return []
@@ -153,6 +159,7 @@ def normalize_model_id_rewrite_rules(raw) -> list[dict]:
             "enabled": item.get("enabled", True) is not False,
             "pattern": pattern,
             "replacement": replacement if isinstance(replacement, str) else "",
+            "search_only": bool(item.get("search_only", False)),
         })
     return entries
 
@@ -213,6 +220,8 @@ def apply_model_id_rewrite_rules(model_id: str, rules, *, strip_prefix: bool = T
 
     这是所有改写判定的唯一入口——不要在调用点自己切前缀、展开模版或跑 re.sub。
     模版引用在这里展开（活引用，取当前模版内容）。
+    只搜索规则（search_only）不参与改名，整条跳过——它只做过滤，判定在
+    model_id_matches_search_rules。
     单条规则抛异常时跳过该条并记日志，不让一个坏规则打断整轮模型同步。
     结果为空则回退到改写前的值，避免把模型名抹成空串。
     """
@@ -220,7 +229,7 @@ def apply_model_id_rewrite_rules(model_id: str, rules, *, strip_prefix: bool = T
     if not result:
         return result
     for rule in expand_model_id_rewrite_rules(rules):
-        if not rule["enabled"]:
+        if not rule["enabled"] or rule.get("search_only"):
             continue
         try:
             rewritten = re.sub(rule["pattern"], rule["replacement"], result)
@@ -233,6 +242,32 @@ def apply_model_id_rewrite_rules(model_id: str, rules, *, strip_prefix: bool = T
         if rewritten.strip():
             result = rewritten.strip()
     return result or strip_model_owner_prefix(model_id)
+
+
+def model_id_matches_search_rules(model_id: str, rules) -> bool:
+    """「只搜索」规则是否命中**全量**模型名（含 owner/ 前缀，未切）。
+
+    只搜索规则是纯过滤条件：命中即该模型保留，不参与改名。匹配对象是原始全量
+    名——普通规则跑在切完 "owner/" 前缀的结果上，带前缀的 pattern（如
+    deepseek-ai/deepseek-v4）在那里永远搜不到，这类按全名精确过滤的需求只有
+    只搜索规则能表达。命中口径与 re.sub 一致：pattern 在名字里出现即命中。
+    单条规则抛异常时跳过该条并记日志，不让一个坏规则打断整轮模型同步。
+    """
+    if not model_id:
+        return False
+    for rule in expand_model_id_rewrite_rules(rules):
+        if not rule["enabled"] or not rule.get("search_only"):
+            continue
+        try:
+            if re.search(rule["pattern"], model_id):
+                return True
+        except re.error as exc:
+            logger.warning(
+                f"model_id 只搜索规则跳过（正则错误）name={rule['name'] or '-'} "
+                f"pattern={rule['pattern']!r}: {exc}"
+            )
+            continue
+    return False
 
 
 def normalize_chat_protocols(raw) -> list[dict]:
@@ -768,19 +803,24 @@ class Channel:
         return apply_model_id_rewrite_rules(model_id, self.model_id_rewrite_rules)
 
     def has_model_id_rewrite_rules(self) -> bool:
-        """本渠道是否配了生效中的 model_id 改写规则。
+        """本渠道是否配了生效中的 model_id 改写/过滤规则。
 
         用来区分两种"改名"：切 owner/ 前缀是无配置时的默认形态，而改写规则是管理员
         的显式意图。只有配了规则时才允许重算已入库的行——否则一轮定时同步就会把
         管理端里的手工改名冲回默认形态。
 
         看的是**展开后**的结果：模版引用展开为空（模版被删、或整条停用）等于没规则，
-        全部规则都 enabled=False 也等于没规则。
+        全部规则都 enabled=False 也等于没规则。只搜索规则也算「配了规则」——
+        自动更新要按它过滤，不能视同没配置。
         """
         return any(
             rule["enabled"]
             for rule in expand_model_id_rewrite_rules(self.model_id_rewrite_rules)
         )
+
+    def matches_search_rules(self, model_id: str) -> bool:
+        """「只搜索」规则是否命中全量模型名——命中的行在自动更新/导入预览时保留。"""
+        return model_id_matches_search_rules(model_id, self.model_id_rewrite_rules)
 
     # ── 渠道级 TTFT/响应时间统计 ──
     def record_ttft(self, ttft_ms: int | float | None) -> None:
